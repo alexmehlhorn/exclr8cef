@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Exclr8Cef\Exclr8Cef.csproj" />
+    <ProjectReference Include="..\..\src\Exclr8Cef\Exclr8Cef.csproj" />
   </ItemGroup>
 
 </Project>

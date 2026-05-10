@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Regenerate C# P/Invoke bindings from the shim's C ABI header
-# (native/shim/exclr8cef.h) into managed/Exclr8Cef.WebView/Generated/.
+# (native/shim/exclr8cef.h) into src/Exclr8Cef/Generated/.
 #
 # Run this after changing the C ABI surface or when bumping CEF.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJ_DIR="${REPO_ROOT}/managed/Exclr8Cef"
+PROJ_DIR="${REPO_ROOT}/src/Exclr8Cef"
 
 cd "${PROJ_DIR}"
 mkdir -p Generated
@@ -35,14 +35,14 @@ if [ -n "${RID}" ]; then
   fi
 fi
 
-# ClangSharpPInvokeGenerator is installed as a local tool in managed/.
+# ClangSharpPInvokeGenerator is installed as a local tool via .config/dotnet-tools.json.
 # Absolute paths are appended here so generate-bindings.rsp stays portable.
-cd "${REPO_ROOT}/managed"
+cd "${REPO_ROOT}"
 dotnet ClangSharpPInvokeGenerator @"${PROJ_DIR}/generate-bindings.rsp" \
     --file "${REPO_ROOT}/native/shim/exclr8cef.h" \
     --include-directory "${REPO_ROOT}/native/shim" \
     --output "${PROJ_DIR}/Generated"
 
 echo
-echo "Bindings regenerated at: managed/Exclr8Cef/Generated/"
+echo "Bindings regenerated at: src/Exclr8Cef/Generated/"
 ls -l "${PROJ_DIR}/Generated/"

@@ -14,8 +14,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Exclr8Cef\Exclr8Cef.csproj" />
-    <ProjectReference Include="..\Exclr8Cef.WebView\Exclr8Cef.WebView.csproj" />
+    <ProjectReference Include="..\..\src\Exclr8Cef\Exclr8Cef.csproj" />
+    <ProjectReference Include="..\..\src\Exclr8Cef.WebView\Exclr8Cef.WebView.csproj" />
     <PackageReference Include="Avalonia" Version="11.2.4" />
     <PackageReference Include="Avalonia.Desktop" Version="11.2.4" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.4" />

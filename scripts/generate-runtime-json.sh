@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate managed/Exclr8Cef/runtime.json so that NuGet auto-resolves the
+# Generate src/Exclr8Cef/runtime.json so that NuGet auto-resolves the
 # correct runtime.<rid>.Exclr8Cef package per consumer RID. Run as part
 # of the release workflow after the version is known.
 #
@@ -14,7 +14,7 @@ fi
 
 VERSION="$1"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${REPO_ROOT}/managed/Exclr8Cef/runtime.json"
+OUT="${REPO_ROOT}/src/Exclr8Cef/runtime.json"
 
 cat > "${OUT}" <<JSON
 {

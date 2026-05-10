@@ -99,15 +99,15 @@ jobs:
 
       - name: Build managed (.NET)
         shell: bash
-        run: dotnet build managed/Exclr8Cef.SmokeTest -c Release
+        run: dotnet build tests/Exclr8Cef.SmokeTest -c Release
 
       - name: Run managed smoke test
         shell: bash
-        run: dotnet run --no-build -c Release --project managed/Exclr8Cef.SmokeTest
+        run: dotnet run --no-build -c Release --project tests/Exclr8Cef.SmokeTest
 
       - name: Build Avalonia demo
         shell: bash
-        run: dotnet publish managed/Exclr8Cef.WebView.Demo -c Release -r ${{ matrix.rid }} --self-contained true /nologo
+        run: dotnet publish samples/Exclr8Cef.WebView.Demo -c Release -r ${{ matrix.rid }} --self-contained true /nologo
 
       - name: Stage native files for runtime package
         shell: bash
@@ -126,5 +126,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: demo-${{ matrix.rid }}
-          path: managed/Exclr8Cef.WebView.Demo/bin/Release/net10.0/${{ matrix.rid }}/publish
+          path: samples/Exclr8Cef.WebView.Demo/bin/Release/net10.0/${{ matrix.rid }}/publish
           retention-days: 7

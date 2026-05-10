@@ -102,7 +102,7 @@ jobs:
       - name: Pack runtime NuGet
         shell: bash
         run: |
-          dotnet pack managed/runtime/runtime.csproj \
+          dotnet pack src/runtime/runtime.csproj \
             -c Release \
             -p:Exclr8CefRid=${{ matrix.rid }} \
             -p:Exclr8CefStagingDir="$(pwd)/artifacts/staging-${{ matrix.rid }}" \
@@ -143,10 +143,10 @@ jobs:
 
       - name: Pack managed NuGets
         run: |
-          dotnet pack managed/Exclr8Cef -c Release \
+          dotnet pack src/Exclr8Cef -c Release \
             -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
-          dotnet pack managed/Exclr8Cef.WebView -c Release \
+          dotnet pack src/Exclr8Cef.WebView -c Release \
             -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
 

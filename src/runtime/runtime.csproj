@@ -3,7 +3,7 @@
   <!--
     Per-RID native runtime package builder. Invoked by CI per platform:
 
-      dotnet pack managed/runtime/runtime.csproj \
+      dotnet pack src/runtime/runtime.csproj \
         -p:Exclr8CefRid=osx-arm64 \
         -p:Exclr8CefStagingDir=/abs/path/to/staging \
         -p:Exclr8CefVersion=0.5.0-stage5
@@ -32,8 +32,8 @@
     <Authors>Exclr8</Authors>
     <Description>Exclr8CEF native runtime files for $(Exclr8CefRid). Auto-resolved at restore time via runtime.json in the Exclr8Cef package.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/exclr8/exclr8cef</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/exclr8/exclr8cef</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/alexmehlhorn/exclr8cef</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/alexmehlhorn/exclr8cef</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>chromium;cef;native;runtime</PackageTags>
   </PropertyGroup>

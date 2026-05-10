@@ -7,7 +7,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJ="${REPO_ROOT}/managed/Exclr8Cef.WebView.Demo"
+PROJ="${REPO_ROOT}/samples/Exclr8Cef.WebView.Demo"
 NATIVE_DEMO="${REPO_ROOT}/native/build/demo/Release/exclr8cef_demo.app"
 SHIM_DYLIB="${REPO_ROOT}/native/build/shim/libexclr8cef.dylib"
 

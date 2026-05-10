@@ -5,7 +5,7 @@
 #
 # After CI builds native/ for a platform, this script copies the right
 # files into <staging-dir>/runtimes/<rid>/native/ for `dotnet pack` of
-# managed/runtime/runtime.csproj.
+# src/runtime/runtime.csproj.
 #
 # RID -> CEF platform mapping:
 #   osx-arm64    macosarm64

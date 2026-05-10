@@ -83,7 +83,10 @@ Demo (`Exclr8Cef.WebView.Demo.app`) has a full browser-style toolbar (◀ ▶ �
 ```
 exclr8cef/
 ├── README.md                        # this file
+├── LICENSE                          # MIT
 ├── .gitignore
+├── .config/
+│   └── dotnet-tools.json            # local tool manifest (ClangSharpPInvokeGenerator)
 ├── scripts/
 │   ├── download-cef.sh              # pulls pinned CEF binaries from cef-builds.spotifycdn.com
 │   └── regenerate-bindings.sh       # runs ClangSharp on exclr8cef.h
@@ -98,8 +101,7 @@ exclr8cef/
 │   │   └── version_probe.c          # native smoke test
 │   ├── helper/                      # Subprocess helper exe (macOS Helper.app)
 │   └── demo/                        # Visual demo: opens chrome://version
-├── managed/                         # .NET side
-│   ├── dotnet-tools.json            # local tool manifest (ClangSharpPInvokeGenerator)
+├── src/                             # shipping .NET projects
 │   ├── Exclr8Cef/                   # framework-agnostic NuGet package
 │   │   ├── Exclr8Cef.csproj
 │   │   ├── Cef.cs                   # public static facade
@@ -109,7 +111,12 @@ exclr8cef/
 │   │       ├── Excef.cs             # internal static class with [DllImport]s
 │   │       ├── excef_versions.cs    # internal struct with [InlineArray(64)] buffers
 │   │       └── *.cs                 # helper attributes
-│   ├── Exclr8Cef.WebView/           # Avalonia integration package (Stage 4)
+│   ├── Exclr8Cef.WebView/           # Avalonia integration package
+│   └── runtime/                     # per-RID native runtime package template
+├── samples/                         # example apps, not packed
+│   ├── Exclr8Cef.ConsoleDemo/       # .NET-driven CEF window
+│   └── Exclr8Cef.WebView.Demo/      # Avalonia + embedded WebView
+├── tests/
 │   └── Exclr8Cef.SmokeTest/         # managed equivalent of version_probe
 ├── third_party/cef/<platform>/      # extracted CEF (gitignored, ~150 MB)
 ```
@@ -132,15 +139,15 @@ open native/build/demo/Release/exclr8cef_demo.app
 
 # 5. Stage 3: regenerate C# bindings, run the managed smoke test
 ./scripts/regenerate-bindings.sh
-dotnet run --project managed/Exclr8Cef.SmokeTest
+dotnet run --project tests/Exclr8Cef.SmokeTest
 
 # 6. Stage 4a: build and launch the .NET-driven demo (.app bundle)
 ./scripts/build-console-demo.sh
-open managed/Exclr8Cef.ConsoleDemo/bin/Release/Exclr8Cef.ConsoleDemo.app
+open samples/Exclr8Cef.ConsoleDemo/bin/Release/Exclr8Cef.ConsoleDemo.app
 
 # 7. Stage 4c: build and launch the Avalonia + embedded WebView demo
 ./scripts/build-avalonia-demo.sh
-open managed/Exclr8Cef.WebView.Demo/bin/Release/Exclr8Cef.WebView.Demo.app
+open samples/Exclr8Cef.WebView.Demo/bin/Release/Exclr8Cef.WebView.Demo.app
 ```
 
 Expected probe output (identical from native and .NET):
@@ -187,7 +194,7 @@ rm -rf third_party/cef/                   # force re-download
 ./scripts/download-cef.sh
 cmake --build native/build --parallel
 ./scripts/regenerate-bindings.sh          # if API changed
-dotnet build managed/Exclr8Cef.SmokeTest
+dotnet build tests/Exclr8Cef.SmokeTest
 ```
 
 ### Automatic bump (on GitHub)
@@ -228,4 +235,4 @@ After `git push` to GitHub:
 
 ## License
 
-TBD — likely MIT or Apache 2.0. CEF itself is BSD; libcef binaries from Spotify CDN are redistributable under CEF's license.
+MIT — see [LICENSE](LICENSE). CEF itself is BSD; libcef binaries from Spotify CDN are redistributable under CEF's license.
