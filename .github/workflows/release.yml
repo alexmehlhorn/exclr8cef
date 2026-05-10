@@ -178,6 +178,9 @@ jobs:
           dotnet pack src/Exclr8Cef.WebView -c Release \
             -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
+          dotnet pack src/Exclr8Cef.Print -c Release \
+            -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
+            -o artifacts/nupkgs
 
       - name: Push to nuget.org
         if: github.event_name == 'push'
