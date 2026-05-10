@@ -49,6 +49,13 @@ if(OS_MAC)
     )
 endif()
 
+# GCC 11+ on Linux promotes strncpy "output may be truncated" to an error
+# under CEF's -Werror, but our copy_to() helper null-terminates explicitly.
+# Suppress narrowly on the shim target.
+if(UNIX AND NOT APPLE)
+    target_compile_options(${SHIM_LIB} PRIVATE -Wno-stringop-truncation)
+endif()
+
 # On macOS the CEF framework is loaded at runtime via CefScopedLibraryLoader,
 # so we link only libcef_dll_wrapper — NOT libcef_lib.
 if(OS_MAC)

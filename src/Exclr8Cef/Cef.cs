@@ -51,7 +51,14 @@ public static class Cef
         unsafe
         {
             sbyte** argv = AllocArgv(args, out int argc);
-            return Excef.excef_execute_process(argc, argv);
+            try
+            {
+                return Excef.excef_execute_process(argc, argv);
+            }
+            finally
+            {
+                FreeArgv(argv, argc);
+            }
         }
     }
 
@@ -80,6 +87,7 @@ public static class Cef
             finally
             {
                 FreeUtf8(subprocPtr);
+                FreeArgv(argv, argc);
             }
         }
     }
@@ -119,6 +127,7 @@ public static class Cef
             finally
             {
                 FreeUtf8(subprocPtr);
+                FreeArgv(argv, argc);
             }
         }
     }
@@ -214,6 +223,7 @@ public static class Cef
             finally
             {
                 FreeUtf8(subprocPtr);
+                FreeArgv(argv, argc);
             }
         }
     }
@@ -379,17 +389,38 @@ public static class Cef
         public required bool CanGoForward { get; init; }
     }
 
+    private static EventHandler<BrowserStringEventArgs>? s_addressChanged;
+    private static EventHandler<BrowserStringEventArgs>? s_titleChanged;
+    private static EventHandler<LoadingStateEventArgs>? s_loadingStateChanged;
+    private static EventHandler<int>? s_browserClosed;
+
     /// <summary>Fires when a browser's main-frame URL changes.</summary>
-    public static event EventHandler<BrowserStringEventArgs>? AddressChanged;
+    public static event EventHandler<BrowserStringEventArgs>? AddressChanged
+    {
+        add { RegisterEventCallbacks(); s_addressChanged += value; }
+        remove { s_addressChanged -= value; }
+    }
 
     /// <summary>Fires when a browser's page title changes.</summary>
-    public static event EventHandler<BrowserStringEventArgs>? TitleChanged;
+    public static event EventHandler<BrowserStringEventArgs>? TitleChanged
+    {
+        add { RegisterEventCallbacks(); s_titleChanged += value; }
+        remove { s_titleChanged -= value; }
+    }
 
     /// <summary>Fires when loading state (isLoading / canGoBack / canGoForward) changes.</summary>
-    public static event EventHandler<LoadingStateEventArgs>? LoadingStateChanged;
+    public static event EventHandler<LoadingStateEventArgs>? LoadingStateChanged
+    {
+        add { RegisterEventCallbacks(); s_loadingStateChanged += value; }
+        remove { s_loadingStateChanged -= value; }
+    }
 
     /// <summary>Fires after a browser has fully closed (CefLifeSpanHandler::OnBeforeClose).</summary>
-    public static event EventHandler<int>? BrowserClosed;
+    public static event EventHandler<int>? BrowserClosed
+    {
+        add { RegisterEventCallbacks(); s_browserClosed += value; }
+        remove { s_browserClosed -= value; }
+    }
 
     // ---- JavaScript with result -------------------------------------------
 
@@ -559,8 +590,10 @@ public static class Cef
 
     /// <summary>
     /// Register the native event callbacks. Idempotent. Called automatically
-    /// the first time any event is subscribed, but exposed for hosts that
-    /// want to opt in eagerly.
+    /// on first subscription to <see cref="AddressChanged"/>, <see cref="TitleChanged"/>,
+    /// <see cref="LoadingStateChanged"/>, or <see cref="BrowserClosed"/>, and
+    /// also from <see cref="InitializeForOsr"/>. Exposed for hosts that want
+    /// to opt in eagerly before any subscription happens.
     /// </summary>
     public static void RegisterEventCallbacks()
     {
@@ -584,20 +617,20 @@ public static class Cef
     private static unsafe void AddressChangeTrampoline(int browserId, sbyte* url)
     {
         var s = Marshal.PtrToStringUTF8((IntPtr)url) ?? "";
-        AddressChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
+        s_addressChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void TitleChangeTrampoline(int browserId, sbyte* title)
     {
         var s = Marshal.PtrToStringUTF8((IntPtr)title) ?? "";
-        TitleChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
+        s_titleChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void LoadingStateTrampoline(int browserId, int isLoading, int canGoBack, int canGoForward)
     {
-        LoadingStateChanged?.Invoke(null, new LoadingStateEventArgs
+        s_loadingStateChanged?.Invoke(null, new LoadingStateEventArgs
         {
             BrowserId = browserId,
             IsLoading = isLoading != 0,
@@ -610,7 +643,14 @@ public static class Cef
     private static void BrowserClosedTrampoline(int browserId)
     {
         s_paintHandlers.TryRemove(browserId, out _);
-        BrowserClosed?.Invoke(null, browserId);
+        if (s_pdfCallbacks.TryRemove(browserId, out var pdfQueue))
+        {
+            // Fail any pending PDF callbacks so callers' Tasks complete instead of hanging.
+            Action<int, int>[] pending;
+            lock (pdfQueue) { pending = pdfQueue.ToArray(); pdfQueue.Clear(); }
+            foreach (var cb in pending) cb(browserId, 0);
+        }
+        s_browserClosed?.Invoke(null, browserId);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -655,7 +695,8 @@ public static class Cef
     {
         ArgumentNullException.ThrowIfNull(path);
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        s_pdfCallbacks[browserId] = (id, ok) => tcs.TrySetResult(ok != 0);
+        Action<int, int> cb = (_, ok) => tcs.TrySetResult(ok != 0);
+        var queue = s_pdfCallbacks.GetOrAdd(browserId, _ => new List<Action<int, int>>());
 
         unsafe
         {
@@ -663,11 +704,17 @@ public static class Cef
             try
             {
                 delegate* unmanaged[Cdecl]<int, int, void> trampoline = &PdfDoneTrampoline;
-                int scheduled = Excef.excef_print_to_pdf(browserId, pathPtr, trampoline);
-                if (scheduled == 0)
+                lock (queue)
                 {
-                    s_pdfCallbacks.TryRemove(browserId, out _);
-                    tcs.TrySetResult(false);
+                    queue.Add(cb);
+                    int scheduled = Excef.excef_print_to_pdf(browserId, pathPtr, trampoline);
+                    if (scheduled == 0)
+                    {
+                        // Roll back the just-added callback so it doesn't poison FIFO order
+                        // for subsequent successful prints.
+                        queue.RemoveAt(queue.Count - 1);
+                        tcs.TrySetResult(false);
+                    }
                 }
             }
             finally
@@ -701,7 +748,11 @@ public static class Cef
 
     private static Action<long>? s_scheduleCallback;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, PaintHandler> s_paintHandlers = new();
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, Action<int, int>> s_pdfCallbacks = new();
+    // PDF callbacks are stored as a per-browser list (locked) because the native
+    // shim's done-callback only carries (browserId, success) — there's no request
+    // id to disambiguate concurrent prints. CEF processes prints per-browser in
+    // submission order, so FIFO dequeue matches CEF's callback order.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, List<Action<int, int>>> s_pdfCallbacks = new();
     private static int s_nextEvalRequestId;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> s_evalRequests = new();
     private static int s_nextCookieRequestId;
@@ -725,10 +776,17 @@ public static class Cef
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void PdfDoneTrampoline(int browserId, int success)
     {
-        if (s_pdfCallbacks.TryRemove(browserId, out var cb))
+        if (!s_pdfCallbacks.TryGetValue(browserId, out var queue)) return;
+        Action<int, int>? cb = null;
+        lock (queue)
         {
-            cb(browserId, success);
+            if (queue.Count > 0)
+            {
+                cb = queue[0];
+                queue.RemoveAt(0);
+            }
         }
+        cb?.Invoke(browserId, success);
     }
 
     private static unsafe sbyte** AllocArgv(string[] args, out int argc)
@@ -741,6 +799,18 @@ public static class Cef
             argv[i] = (sbyte*)Marshal.StringToCoTaskMemUTF8(args[i]);
         }
         return argv;
+    }
+
+    // CEF copies argv contents during init/exec (Chromium base::CommandLine
+    // uses its own storage), so freeing after the native call returns is safe.
+    private static unsafe void FreeArgv(sbyte** argv, int argc)
+    {
+        if (argv == null) return;
+        for (int i = 0; i < argc; i++)
+        {
+            if (argv[i] is not null) Marshal.FreeCoTaskMem((IntPtr)argv[i]);
+        }
+        NativeMemory.Free(argv);
     }
 
     private static unsafe sbyte* MarshalUtf8(string? s)

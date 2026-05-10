@@ -31,4 +31,8 @@
     <PackageReference Include="Avalonia" Version="11.2.4" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Exclr8Cef.WebView.Tests" />
+  </ItemGroup>
+
 </Project>

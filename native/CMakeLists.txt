@@ -46,6 +46,13 @@ find_package(CEF REQUIRED)
 
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
 
+# Define the imported `libcef_lib` target on platforms that link libcef
+# directly (Windows / Linux). On macOS the shim doesn't reference this
+# target — libcef.framework is loaded at runtime via CefScopedLibraryLoader.
+if(NOT APPLE)
+    ADD_LOGICAL_TARGET(libcef_lib "${CEF_LIB_DEBUG}" "${CEF_LIB_RELEASE}")
+endif()
+
 # ---- Subprojects ----------------------------------------------------------
 add_subdirectory(shim)
 add_subdirectory(demo)

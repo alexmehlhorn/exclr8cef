@@ -105,6 +105,10 @@ jobs:
         shell: bash
         run: dotnet run --no-build -c Release --project tests/Exclr8Cef.SmokeTest
 
+      - name: Run unit tests
+        shell: bash
+        run: dotnet test tests/Exclr8Cef.WebView.Tests -c Release --nologo
+
       - name: Build Avalonia demo
         shell: bash
         run: dotnet publish samples/Exclr8Cef.WebView.Demo -c Release -r ${{ matrix.rid }} --self-contained true /nologo

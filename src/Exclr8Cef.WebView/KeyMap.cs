@@ -114,6 +114,9 @@ internal static class KeyMap
         Key.OemQuotes => 0xDE,       // '\'"'
         Key.OemBackslash => 0xE2,    // ISO physical backslash
 
-        _ => (int)key,  // Fallback: Avalonia's Key enum mostly aligns with VK codes for unknowns.
+        // Unmapped keys: Avalonia's Key enum is its own numbering and does NOT
+        // align with Windows VK codes outside the explicit cases above. Return
+        // 0 so unrecognized keys are inert rather than spurious VKs.
+        _ => 0,
     };
 }

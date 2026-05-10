@@ -7,6 +7,12 @@ namespace Exclr8Cef.WebView;
 /// Bridges Avalonia's IME (composition / preedit) into CEF's IME entry
 /// points. Attached to the platform's TextInputMethod when the WebView
 /// gains focus.
+///
+/// Limitation: Avalonia's <see cref="TextInputMethodClient.SetPreeditText"/>
+/// does not expose the cursor position within the preedit string, so this
+/// client always selects the entire preedit. For multi-clause CJK input
+/// the candidate-window cursor may show in the wrong place inside the
+/// preedit. Single-clause input is unaffected.
 /// </summary>
 internal sealed class WebViewTextInputMethodClient : TextInputMethodClient
 {
