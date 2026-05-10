@@ -93,12 +93,21 @@ case "${RID}" in
     rm -f "${DEST}/libvk_swiftshader.so" \
           "${DEST}/libvulkan.so" \
           "${DEST}/chrome_200_percent.pak"
+    # CEF's Linux distribution ships libcef.so / libGLESv2.so / libEGL.so with
+    # debug symbols; stripping cuts ~70–80% off libcef.so (1.3 GB → ~200 MB).
+    # Required to fit nuget.org's 250 MB per-package cap.
+    if command -v strip >/dev/null 2>&1; then
+      for so in "${DEST}"/*.so; do
+        [ -f "$so" ] || continue
+        strip --strip-unneeded "$so" 2>/dev/null || true
+      done
+    fi
     ;;
 esac
 
-echo "Staged files:"
-# `head` exits early which sends SIGPIPE to find; under `pipefail` that
-# becomes a non-zero pipeline exit. The `|| true` keeps the script alive.
-find "${DEST}" -maxdepth 2 -type f | head -20 || true
+echo "Staged files (top 10 by size):"
+# Per-file sizes help diagnose nuget.org 250 MB cap issues fast.
+# `sort -h` exits early; `|| true` swallows the resulting SIGPIPE under pipefail.
+du -h "${DEST}"/* "${DEST}"/locales/* 2>/dev/null | sort -hr | head -10 || true
 echo
 echo "Total staged size: $(du -sh "${DEST}" | cut -f1)"
