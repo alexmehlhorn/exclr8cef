@@ -104,9 +104,9 @@ jobs:
         run: |
           dotnet pack managed/runtime/runtime.csproj \
             -c Release \
-            -p:BrowserwarRid=${{ matrix.rid }} \
-            -p:BrowserwarStagingDir="$(pwd)/artifacts/staging-${{ matrix.rid }}" \
-            -p:BrowserwarVersion=${{ steps.ver.outputs.version }} \
+            -p:Exclr8CefRid=${{ matrix.rid }} \
+            -p:Exclr8CefStagingDir="$(pwd)/artifacts/staging-${{ matrix.rid }}" \
+            -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
 
       - name: Upload runtime NuGet
@@ -144,10 +144,10 @@ jobs:
       - name: Pack managed NuGets
         run: |
           dotnet pack managed/Exclr8Cef -c Release \
-            -p:BrowserwarVersion=${{ steps.ver.outputs.version }} \
+            -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
           dotnet pack managed/Exclr8Cef.WebView -c Release \
-            -p:BrowserwarVersion=${{ steps.ver.outputs.version }} \
+            -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
 
       - name: Upload managed NuGets

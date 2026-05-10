@@ -81,7 +81,7 @@ Demo (`Exclr8Cef.WebView.Demo.app`) has a full browser-style toolbar (◀ ▶ �
 ## Layout
 
 ```
-exclr8cef/  (currently dir name: browserwar)
+exclr8cef/
 ├── README.md                        # this file
 ├── .gitignore
 ├── scripts/

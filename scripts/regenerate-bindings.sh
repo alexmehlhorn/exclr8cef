@@ -36,8 +36,12 @@ if [ -n "${RID}" ]; then
 fi
 
 # ClangSharpPInvokeGenerator is installed as a local tool in managed/.
+# Absolute paths are appended here so generate-bindings.rsp stays portable.
 cd "${REPO_ROOT}/managed"
-dotnet ClangSharpPInvokeGenerator @"${PROJ_DIR}/generate-bindings.rsp"
+dotnet ClangSharpPInvokeGenerator @"${PROJ_DIR}/generate-bindings.rsp" \
+    --file "${REPO_ROOT}/native/shim/exclr8cef.h" \
+    --include-directory "${REPO_ROOT}/native/shim" \
+    --output "${PROJ_DIR}/Generated"
 
 echo
 echo "Bindings regenerated at: managed/Exclr8Cef/Generated/"

@@ -1,8 +1,7 @@
-# ClangSharpPInvokeGenerator response file.
-# Run via: scripts/regenerate-bindings.sh
-# Treats the shim's C ABI header as the source of truth and emits P/Invoke
-# bindings under namespace Exclr8Cef.Native (internal — public API surface
-# lives in Cef.cs / CefVersions.cs / etc.).
+# ClangSharpPInvokeGenerator response file — options only.
+# Absolute paths (--file, --include-directory, --output) are added by
+# scripts/regenerate-bindings.sh at runtime so this file is portable
+# across machines.
 
 --language
 c
@@ -31,13 +30,6 @@ multi-file
 --config
 log-exclusions
 
-# Source headers to parse.
---file
-/Users/ahm/Repos/browserwar/native/shim/exclr8cef.h
-
---include-directory
-/Users/ahm/Repos/browserwar/native/shim
-
 # Hide the generated raw types — public surface is in Cef / CefVersions.
 --with-access-specifier
 *=Internal
@@ -54,7 +46,3 @@ Excef
 # Namespace for the generated types.
 --namespace
 Exclr8Cef.Native
-
-# Output directory (multi-file mode emits one file per type).
---output
-/Users/ahm/Repos/browserwar/managed/Exclr8Cef/Generated

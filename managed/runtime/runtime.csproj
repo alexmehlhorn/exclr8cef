@@ -4,11 +4,11 @@
     Per-RID native runtime package builder. Invoked by CI per platform:
 
       dotnet pack managed/runtime/runtime.csproj \
-        -p:BrowserwarRid=osx-arm64 \
-        -p:BrowserwarStagingDir=/abs/path/to/staging \
-        -p:BrowserwarVersion=0.5.0-stage5
+        -p:Exclr8CefRid=osx-arm64 \
+        -p:Exclr8CefStagingDir=/abs/path/to/staging \
+        -p:Exclr8CefVersion=0.5.0-stage5
 
-    Where BrowserwarStagingDir contains a `runtimes/<rid>/native/` tree
+    Where Exclr8CefStagingDir contains a `runtimes/<rid>/native/` tree
     populated by scripts/stage-native-files.sh with libexclr8cef.{dylib,dll,so}
     + the CEF framework / DLLs / .so files for that RID.
 
@@ -26,20 +26,20 @@
   </PropertyGroup>
 
   <PropertyGroup Label="Packaging">
-    <PackageId>runtime.$(BrowserwarRid).Exclr8Cef</PackageId>
-    <Version Condition="'$(BrowserwarVersion)' != ''">$(BrowserwarVersion)</Version>
-    <Version Condition="'$(BrowserwarVersion)' == ''">0.5.0-stage5</Version>
+    <PackageId>runtime.$(Exclr8CefRid).Exclr8Cef</PackageId>
+    <Version Condition="'$(Exclr8CefVersion)' != ''">$(Exclr8CefVersion)</Version>
+    <Version Condition="'$(Exclr8CefVersion)' == ''">0.5.0-stage5</Version>
     <Authors>Exclr8</Authors>
-    <Description>Exclr8CEF native runtime files for $(BrowserwarRid). Auto-resolved at restore time via runtime.json in the Exclr8Cef package.</Description>
+    <Description>Exclr8CEF native runtime files for $(Exclr8CefRid). Auto-resolved at restore time via runtime.json in the Exclr8Cef package.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/exclr8/browserwar</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/exclr8/browserwar</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/exclr8/exclr8cef</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/exclr8/exclr8cef</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>chromium;cef;native;runtime</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="$(BrowserwarStagingDir)\runtimes\**\*"
+    <None Include="$(Exclr8CefStagingDir)\runtimes\**\*"
           Pack="true"
           PackagePath="runtimes\" />
   </ItemGroup>
