@@ -83,4 +83,6 @@ case "${RID}" in
 esac
 
 echo "Staged files:"
-find "${DEST}" -maxdepth 2 -type f | head -20
+# `head` exits early which sends SIGPIPE to find; under `pipefail` that
+# becomes a non-zero pipeline exit. The `|| true` keeps the script alive.
+find "${DEST}" -maxdepth 2 -type f | head -20 || true

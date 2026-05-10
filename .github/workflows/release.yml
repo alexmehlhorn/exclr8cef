@@ -1,9 +1,14 @@
-# On a v* tag: build native + managed across all RIDs, pack per-RID
-# runtime NuGets, pack the managed Exclr8Cef + Exclr8Cef.WebView NuGets,
-# and publish to nuget.org.
+# On a v* tag: build native + managed across all RIDs and push every nupkg
+# directly to nuget.org from the job that produced it. No intermediate
+# upload-artifact / download-artifact hops — that route hits the GitHub
+# Actions artifact-storage quota with CEF binaries (~150 MB per RID).
 #
 # Required secrets:
 #   NUGET_API_KEY  — push key for nuget.org
+#
+# Trade-off: there is no manual approval gate before publish. Tagging v*
+# publishes immediately. Add review at the tag-creation level (e.g. a PR
+# that bumps the version + a tag from main) rather than in this workflow.
 
 name: Release
 
@@ -24,8 +29,8 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
 jobs:
-  build-runtime:
-    name: Build runtime (${{ matrix.rid }})
+  publish-runtime:
+    name: Publish runtime (${{ matrix.rid }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -109,17 +114,27 @@ jobs:
             -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
 
-      - name: Upload runtime NuGet
-        uses: actions/upload-artifact@v4
-        with:
-          name: nupkg-runtime-${{ matrix.rid }}
-          path: artifacts/nupkgs/runtime.${{ matrix.rid }}.Exclr8Cef.*.nupkg
-          retention-days: 30
+      - name: Push to nuget.org
+        # Tag-driven publishes only; workflow_dispatch builds + packs but doesn't push.
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          for pkg in artifacts/nupkgs/runtime.${{ matrix.rid }}.Exclr8Cef.*.nupkg; do
+            echo "Pushing $pkg"
+            dotnet nuget push "$pkg" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
 
-  build-managed:
-    name: Build managed packages
+  publish-managed:
+    name: Publish managed packages
     runs-on: ubuntu-22.04
-    needs: build-runtime
+    # Wait until every per-RID runtime package is on nuget.org before publishing
+    # the consumer-facing Exclr8Cef package (whose runtime.json references them).
+    needs: publish-runtime
     steps:
       - uses: actions/checkout@v4
 
@@ -150,39 +165,12 @@ jobs:
             -p:Exclr8CefVersion=${{ steps.ver.outputs.version }} \
             -o artifacts/nupkgs
 
-      - name: Upload managed NuGets
-        uses: actions/upload-artifact@v4
-        with:
-          name: nupkg-managed
-          path: artifacts/nupkgs/*.nupkg
-          retention-days: 30
-
-  publish:
-    name: Publish to nuget.org
-    runs-on: ubuntu-22.04
-    needs: [build-runtime, build-managed]
-    environment: nuget-publish
-    if: github.event_name == 'push'   # tag-driven only; manual dispatch stops at packaging
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Download all NuGet artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: nupkg-*
-          merge-multiple: true
-
       - name: Push to nuget.org
+        if: github.event_name == 'push'
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          for pkg in artifacts/*.nupkg; do
+          for pkg in artifacts/nupkgs/*.nupkg; do
             echo "Pushing $pkg"
             dotnet nuget push "$pkg" \
               --api-key "$NUGET_API_KEY" \
