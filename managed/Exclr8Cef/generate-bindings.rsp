@@ -1,0 +1,60 @@
+# ClangSharpPInvokeGenerator response file.
+# Run via: scripts/regenerate-bindings.sh
+# Treats the shim's C ABI header as the source of truth and emits P/Invoke
+# bindings under namespace Exclr8Cef.Native (internal — public API surface
+# lives in Cef.cs / CefVersions.cs / etc.).
+
+--language
+c
+
+# Pass through to clang.
+--additional
+-Wno-pragma-once-outside-header
+--additional
+-fparse-all-comments
+
+# Codegen options (latest .NET, idiomatic C#).
+--config
+latest-codegen
+--config
+generate-file-scoped-namespaces
+--config
+generate-helper-types
+--config
+generate-disable-runtime-marshalling
+--config
+generate-aggressive-inlining
+--config
+exclude-funcs-with-body
+--config
+multi-file
+--config
+log-exclusions
+
+# Source headers to parse.
+--file
+/Users/ahm/Repos/browserwar/native/shim/exclr8cef.h
+
+--include-directory
+/Users/ahm/Repos/browserwar/native/shim
+
+# Hide the generated raw types — public surface is in Cef / CefVersions.
+--with-access-specifier
+*=Internal
+
+# DllImport target — matches the shim's library output name across platforms
+# (libexclr8cef.dylib on macOS, libexclr8cef.so on Linux, exclr8cef.dll on Windows).
+--libraryPath
+exclr8cef
+
+# Static class containing the [DllImport] declarations.
+--methodClassName
+Excef
+
+# Namespace for the generated types.
+--namespace
+Exclr8Cef.Native
+
+# Output directory (multi-file mode emits one file per type).
+--output
+/Users/ahm/Repos/browserwar/managed/Exclr8Cef/Generated

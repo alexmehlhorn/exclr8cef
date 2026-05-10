@@ -1,0 +1,130 @@
+# Build matrix: every PR and every push to main runs the native shim +
+# managed bindings on macOS arm64, macOS x64, Windows x64, and Linux x64.
+# Each job uploads its build artifact for downstream debugging.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  build:
+    name: ${{ matrix.os }} (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            rid: osx-arm64
+            cef_platform: macosarm64
+          - os: macos-13
+            rid: osx-x64
+            cef_platform: macosx64
+          - os: windows-latest
+            rid: win-x64
+            cef_platform: windows64
+          - os: ubuntu-22.04
+            rid: linux-x64
+            cef_platform: linux64
+          - os: ubuntu-22.04-arm
+            rid: linux-arm64
+            cef_platform: linuxarm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup CMake / Ninja (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install cmake ninja
+          else
+            sudo apt-get update
+            sudo apt-get install -y cmake ninja-build build-essential libgtk-3-dev libnss3-dev
+          fi
+
+      - name: Setup CMake / Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install -y ninja
+          # cmake is preinstalled on windows-latest
+
+      - name: Setup MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache CEF binary distribution
+        uses: actions/cache@v4
+        with:
+          path: third_party/cef/${{ matrix.cef_platform }}
+          key: cef-${{ matrix.cef_platform }}-${{ hashFiles('cef.json') }}
+
+      - name: Download CEF
+        shell: bash
+        run: ./scripts/download-cef.sh
+
+      - name: Configure (CMake)
+        shell: bash
+        run: |
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build native shim
+        shell: bash
+        run: cmake --build native/build --parallel
+
+      - name: Run native version probe
+        shell: bash
+        run: |
+          # The probe links the shim and prints CEF version + Chromium version.
+          ./native/build/shim/exclr8cef_version_probe || ./native/build/shim/Release/exclr8cef_version_probe.exe
+
+      - name: Build managed (.NET)
+        shell: bash
+        run: dotnet build managed/Exclr8Cef.SmokeTest -c Release
+
+      - name: Run managed smoke test
+        shell: bash
+        run: dotnet run --no-build -c Release --project managed/Exclr8Cef.SmokeTest
+
+      - name: Build Avalonia demo
+        shell: bash
+        run: dotnet publish managed/Exclr8Cef.WebView.Demo -c Release -r ${{ matrix.rid }} --self-contained true /nologo
+
+      - name: Stage native files for runtime package
+        shell: bash
+        run: |
+          mkdir -p artifacts/staging-${{ matrix.rid }}
+          ./scripts/stage-native-files.sh ${{ matrix.rid }} artifacts/staging-${{ matrix.rid }}
+
+      - name: Upload runtime staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.rid }}
+          path: artifacts/staging-${{ matrix.rid }}
+          retention-days: 7
+
+      - name: Upload demo publish output
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-${{ matrix.rid }}
+          path: managed/Exclr8Cef.WebView.Demo/bin/Release/net10.0/${{ matrix.rid }}/publish
+          retention-days: 7
