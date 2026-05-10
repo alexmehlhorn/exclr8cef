@@ -99,10 +99,14 @@ jobs:
 
       - name: Download CEF
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.cef_platform }}
         run: ./scripts/download-cef.sh
 
       - name: Build native shim
         shell: bash
+        env:
+          EXCLR8CEF_PLATFORM: ${{ matrix.cef_platform }}
         run: |
           cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_arch }}
           cmake --build native/build --parallel
@@ -131,6 +135,7 @@ jobs:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           for pkg in artifacts/nupkgs/runtime.${{ matrix.rid }}.Exclr8Cef.*.nupkg; do
+            ls -lh "$pkg"
             echo "Pushing $pkg"
             dotnet nuget push "$pkg" \
               --api-key "$NUGET_API_KEY" \

@@ -12,8 +12,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---- Detect platform suffix used by download-cef.sh -----------------------
-if(APPLE)
-    if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+# EXCLR8CEF_PLATFORM env override wins so cross-compile (e.g. osx-x64 from an
+# arm64 host with -DCMAKE_OSX_ARCHITECTURES=x86_64) picks up the right CEF
+# binary distribution. Falls through to host detection otherwise.
+if(DEFINED ENV{EXCLR8CEF_PLATFORM})
+    set(_EX_PLATFORM "$ENV{EXCLR8CEF_PLATFORM}")
+elseif(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(_EX_PLATFORM "macosx64")
+    elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        set(_EX_PLATFORM "macosarm64")
+    elseif(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
         set(_EX_PLATFORM "macosarm64")
     else()
         set(_EX_PLATFORM "macosx64")

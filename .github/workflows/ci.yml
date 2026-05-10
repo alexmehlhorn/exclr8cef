@@ -92,10 +92,14 @@ jobs:
 
       - name: Download CEF
         shell: bash
+        env:
+          PLATFORM: ${{ matrix.cef_platform }}
         run: ./scripts/download-cef.sh
 
       - name: Configure (CMake)
         shell: bash
+        env:
+          EXCLR8CEF_PLATFORM: ${{ matrix.cef_platform }}
         run: |
           cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_arch }}
 
