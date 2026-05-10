@@ -44,6 +44,22 @@ list(APPEND CMAKE_MODULE_PATH "${EXCLR8CEF_CEF_ROOT}/cmake")
 set(CEF_ROOT "${EXCLR8CEF_CEF_ROOT}")
 find_package(CEF REQUIRED)
 
+# CEF's Linux ARM64 binary distribution leaks x86-only compile/link flags
+# (-m64, -march=x86-64) into the shared CEF_*_COMPILER_FLAGS variables, which
+# the libcef_dll_wrapper subdir picks up via CEF's macros. GCC on aarch64
+# rejects them with "unrecognized command-line option '-m64'". Strip them.
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    foreach(_flag_var
+            CEF_COMPILER_FLAGS
+            CEF_C_COMPILER_FLAGS
+            CEF_CXX_COMPILER_FLAGS
+            CEF_LINKER_FLAGS
+            CEF_C_LINKER_FLAGS
+            CEF_CXX_LINKER_FLAGS)
+        list(REMOVE_ITEM ${_flag_var} -m64 -march=x86-64)
+    endforeach()
+endif()
+
 add_subdirectory("${CEF_LIBCEF_DLL_WRAPPER_PATH}" libcef_dll_wrapper)
 
 # Define the imported `libcef_lib` target on platforms that link libcef

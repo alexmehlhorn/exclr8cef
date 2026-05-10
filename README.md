@@ -1,6 +1,6 @@
 # Exclr8CEF
 
-A custom .NET/Avalonia binding to Chromium. Provides an HTML rendering control for VibeCoder and other Exclr8 internal tools, with a Chromium update cadence we control.
+A custom .NET/Avalonia binding to Chromium. Provides an HTML rendering control with a Chromium update cadence you control.
 
 ## Why this exists
 
@@ -13,7 +13,7 @@ Existing options for embedding HTML in .NET cross-platform:
 | DotNetBrowser | Chromium | Commercial, proprietary |
 | CefSharp | Chromium | Tracks upstream within weeks, but Windows-only (C++/CLI) |
 
-For VibeCoder, where rendering quality *is* the product, none of these fit. Exclr8CEF is built fresh to give us:
+For applications where rendering quality *is* the product, none of these fit. Exclr8CEF is built fresh to give:
 
 - Same Chromium engine and pixels on every platform (Win/macOS/Linux)
 - Update cadence we control — target tracking upstream within weeks

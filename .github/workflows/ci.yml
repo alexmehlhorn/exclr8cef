@@ -13,10 +13,15 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 env:
   DOTNET_NOLOGO: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  # CI builds publish a pre-release version per push, e.g. 0.5.0-ci.42, to
+  # GitHub Packages (nuget.pkg.github.com). Tag-driven proper releases on
+  # nuget.org are handled by release.yml.
+  CI_VERSION: 0.5.0-ci.${{ github.run_number }}
 
 jobs:
   build:
@@ -119,16 +124,22 @@ jobs:
           mkdir -p artifacts/staging-${{ matrix.rid }}
           ./scripts/stage-native-files.sh ${{ matrix.rid }} artifacts/staging-${{ matrix.rid }}
 
-      - name: Upload runtime staging
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-${{ matrix.rid }}
-          path: artifacts/staging-${{ matrix.rid }}
-          retention-days: 7
+      - name: Pack runtime NuGet
+        shell: bash
+        run: |
+          dotnet pack src/runtime/runtime.csproj \
+            -c Release \
+            -p:Exclr8CefRid=${{ matrix.rid }} \
+            -p:Exclr8CefStagingDir="$(pwd)/artifacts/staging-${{ matrix.rid }}" \
+            -p:Exclr8CefVersion=${{ env.CI_VERSION }} \
+            -o artifacts/nupkgs
 
-      - name: Upload demo publish output
-        uses: actions/upload-artifact@v4
-        with:
-          name: demo-${{ matrix.rid }}
-          path: samples/Exclr8Cef.WebView.Demo/bin/Release/net10.0/${{ matrix.rid }}/publish
-          retention-days: 7
+      - name: Publish runtime NuGet to GitHub Packages
+        # Skip on pull requests — the GITHUB_TOKEN from a fork PR cannot push.
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          dotnet nuget push "artifacts/nupkgs/runtime.${{ matrix.rid }}.Exclr8Cef.*.nupkg" \
+            --source https://nuget.pkg.github.com/alexmehlhorn/index.json \
+            --api-key ${{ secrets.GITHUB_TOKEN }} \
+            --skip-duplicate
