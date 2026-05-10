@@ -27,8 +27,7 @@
             </DockPanel>
         </Border>
 
-        <cef:WebView Grid.Row="2" Name="Browser"
-                     Url="data:text/html;charset=utf-8,&lt;!doctype html&gt;&lt;html&gt;&lt;head&gt;&lt;title&gt;Exclr8Cef demo&lt;/title&gt;&lt;style&gt;html,body{overflow-x:hidden}body{font-family:-apple-system,sans-serif;background:%23282a36;color:%23f8f8f2;padding:32px;margin:0}h1{margin:0 0 8px 0}h2{color:%2350fa7b;margin-top:24px}button{background:%23ff79c6;border:0;color:%23282a36;padding:10px 18px;font-size:16px;font-weight:600;border-radius:6px;cursor:pointer}input{background:%23383a4a;border:1px solid %23555;color:%23f8f8f2;padding:8px 10px;font-size:14px;border-radius:4px;width:300px;margin-top:8px}a{color:%238be9fd}.scroll{height:1500px;background:linear-gradient(180deg,%23bd93f9,%2350fa7b,%23ff79c6,%238be9fd);color:%23282a36;font-weight:bold}&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;h1&gt;Exclr8Cef.WebView demo&lt;/h1&gt;&lt;p&gt;Try the address bar above. &lt;a href='https://example.com'&gt;example.com&lt;/a&gt; · &lt;a href='chrome://version'&gt;chrome://version&lt;/a&gt; · &lt;a href='https://duckduckgo.com'&gt;duckduckgo.com&lt;/a&gt;&lt;/p&gt;&lt;h2&gt;1. Click&lt;/h2&gt;&lt;button id=b onclick='this.innerText=`Clicks: ${++c}`'&gt;Clicks: 0&lt;/button&gt;&lt;script&gt;let c=0&lt;/script&gt;&lt;h2&gt;2. Type&lt;/h2&gt;&lt;input placeholder='Type here…' /&gt;&lt;h2&gt;3. Scroll&lt;/h2&gt;&lt;div class=scroll&gt;&lt;p style='padding:20px'&gt;⬇ Scroll down through the gradient&lt;/p&gt;&lt;/div&gt;&lt;/body&gt;&lt;/html&gt;" />
+        <cef:WebView Grid.Row="2" Name="Browser" />
 
         <Border Grid.Row="3" Background="#181825" Padding="12,4">
             <TextBlock Name="StatusText" Foreground="#A6E3A1" FontSize="11" />

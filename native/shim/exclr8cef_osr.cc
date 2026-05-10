@@ -21,12 +21,16 @@ excef_loading_state_cb_t g_loading_state_cb = nullptr;
 excef_eval_result_cb_t g_eval_result_cb = nullptr;
 excef_cookie_visit_cb_t g_cookie_visit_cb = nullptr;
 excef_browser_closed_cb_t g_browser_closed_cb = nullptr;
+excef_cursor_change_cb_t g_cursor_change_cb = nullptr;
 
 }  // namespace
 
 Exclr8CefOsrHandler::Exclr8CefOsrHandler(int id, int width, int height,
+                                          float device_scale_factor,
                                           excef_paint_callback_t paint_cb)
-    : id_(id), width_(width), height_(height), paint_cb_(paint_cb) {}
+    : id_(id), width_(width), height_(height),
+      device_scale_factor_(device_scale_factor > 0.0f ? device_scale_factor : 1.0f),
+      paint_cb_(paint_cb) {}
 
 bool Exclr8CefOsrHandler::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> /*browser*/,
@@ -49,10 +53,22 @@ bool Exclr8CefOsrHandler::OnProcessMessageReceived(
 
 void Exclr8CefOsrHandler::GetViewRect(CefRefPtr<CefBrowser> /*browser*/,
                                       CefRect& rect) {
+    // View rect is in DIPs / CSS pixels; CEF multiplies by device_scale_factor
+    // (returned from GetScreenInfo) to size the paint buffer.
     rect.x = 0;
     rect.y = 0;
     rect.width = width_;
     rect.height = height_;
+}
+
+bool Exclr8CefOsrHandler::GetScreenInfo(CefRefPtr<CefBrowser> /*browser*/,
+                                        CefScreenInfo& info) {
+    info.device_scale_factor = device_scale_factor_;
+    // Treat the entire view as the available screen — host doesn't carry
+    // monitor-extent info across the C ABI in this version.
+    info.rect = CefRect(0, 0, width_, height_);
+    info.available_rect = info.rect;
+    return true;
 }
 
 void Exclr8CefOsrHandler::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
@@ -62,6 +78,17 @@ void Exclr8CefOsrHandler::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
                                   int width, int height) {
     if (type != PET_VIEW) return;
     if (paint_cb_) paint_cb_(id_, buffer, width, height);
+}
+
+bool Exclr8CefOsrHandler::OnCursorChange(CefRefPtr<CefBrowser> /*browser*/,
+                                         CefCursorHandle /*cursor*/,
+                                         cef_cursor_type_t type,
+                                         const CefCursorInfo& /*custom_cursor_info*/) {
+    if (g_cursor_change_cb) {
+        g_cursor_change_cb(id_, static_cast<int>(type));
+    }
+    // Return true: host (Avalonia) is responsible for setting the platform cursor.
+    return true;
 }
 
 void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -114,18 +141,57 @@ void Exclr8CefOsrHandler::SetSize(int width, int height) {
     if (browser_) browser_->GetHost()->WasResized();
 }
 
+void Exclr8CefOsrHandler::SetDeviceScaleFactor(float scale) {
+    if (scale <= 0.0f) return;
+    if (scale == device_scale_factor_) return;
+    device_scale_factor_ = scale;
+    if (browser_) browser_->GetHost()->NotifyScreenInfoChanged();
+}
+
+bool Exclr8CefOsrHandler::StartDragging(CefRefPtr<CefBrowser> browser,
+                                         CefRefPtr<CefDragData> drag_data,
+                                         DragOperationsMask allowed_ops,
+                                         int x, int y) {
+    drag_data_ = drag_data;
+    drag_allowed_ops_ = allowed_ops;
+    drag_current_op_ = DRAG_OPERATION_NONE;
+    in_drag_ = true;
+
+    // Self-target: tell CEF the drag has entered THIS view as a drop target.
+    // For internal-only DnD this is the same browser; full OS-level DnD
+    // would route through the host's window system instead.
+    CefMouseEvent ev;
+    ev.x = x;
+    ev.y = y;
+    browser->GetHost()->DragTargetDragEnter(drag_data, ev, allowed_ops);
+    return true;
+}
+
+void Exclr8CefOsrHandler::UpdateDragCursor(CefRefPtr<CefBrowser> /*browser*/,
+                                            DragOperation operation) {
+    drag_current_op_ = operation;
+}
+
+CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id) {
+    auto it = g_osr_browsers.find(browser_id);
+    if (it == g_osr_browsers.end()) return nullptr;
+    return it->second->browser();
+}
+
 }  // namespace exclr8cef
 
 // ---- C ABI implementations ------------------------------------------------
 
 extern "C" int excef_create_offscreen_browser(int width, int height,
+                                              float device_scale_factor,
                                               const char* url,
                                               excef_paint_callback_t paint) {
     if (!url || width <= 0 || height <= 0) return 0;
 
     int id = exclr8cef::g_next_id++;
     auto handler = CefRefPtr<exclr8cef::Exclr8CefOsrHandler>(
-        new exclr8cef::Exclr8CefOsrHandler(id, width, height, paint));
+        new exclr8cef::Exclr8CefOsrHandler(id, width, height,
+                                            device_scale_factor, paint));
     exclr8cef::g_osr_browsers[id] = handler;
 
     CefWindowInfo window_info;
@@ -150,6 +216,69 @@ extern "C" void excef_resize_offscreen_browser(int browser_id,
     it->second->SetSize(width, height);
 }
 
+extern "C" void excef_set_device_scale_factor(int browser_id, float scale) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    it->second->SetDeviceScaleFactor(scale);
+}
+
+extern "C" void excef_set_zoom_level(int browser_id, double level) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto browser = it->second->browser();
+    if (browser) browser->GetHost()->SetZoomLevel(level);
+}
+
+extern "C" double excef_get_zoom_level(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return 0.0;
+    auto browser = it->second->browser();
+    return browser ? browser->GetHost()->GetZoomLevel() : 0.0;
+}
+
+namespace {
+
+CefRefPtr<CefFrame> get_focused_frame(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return nullptr;
+    auto browser = it->second->browser();
+    if (!browser) return nullptr;
+    auto frame = browser->GetFocusedFrame();
+    return frame ? frame : browser->GetMainFrame();
+}
+
+}  // namespace
+
+extern "C" void excef_copy(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->Copy();
+}
+
+extern "C" void excef_paste(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->Paste();
+}
+
+extern "C" void excef_cut(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->Cut();
+}
+
+extern "C" void excef_select_all(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->SelectAll();
+}
+
+extern "C" void excef_undo(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->Undo();
+}
+
+extern "C" void excef_redo(int browser_id) {
+    auto f = get_focused_frame(browser_id);
+    if (f) f->Redo();
+}
+
 namespace {
 
 CefRefPtr<CefBrowser> get_browser(int browser_id) {
@@ -164,23 +293,45 @@ CefRefPtr<CefBrowser> get_browser(int browser_id) {
 
 extern "C" void excef_send_mouse_move(int browser_id, int x, int y,
                                       int modifiers, int mouse_leave) {
-    auto b = get_browser(browser_id);
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto handler = it->second;
+    auto b = handler->browser();
     if (!b) return;
     CefMouseEvent ev;
     ev.x = x; ev.y = y;
     ev.modifiers = static_cast<uint32_t>(modifiers);
+    if (handler->is_in_drag()) {
+        // While a drag started by StartDragging is in flight, every mouse
+        // move must also notify CEF as a drag-over so the renderer updates
+        // the drop indicators and computes the eventual drop op.
+        b->GetHost()->DragTargetDragOver(ev, handler->drag_allowed_ops());
+    }
     b->GetHost()->SendMouseMoveEvent(ev, mouse_leave != 0);
 }
 
 extern "C" void excef_send_mouse_click(int browser_id, int x, int y,
                                        int button, int mouse_up,
                                        int click_count, int modifiers) {
-    auto b = get_browser(browser_id);
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto handler = it->second;
+    auto b = handler->browser();
     if (!b) return;
     CefMouseEvent ev;
     ev.x = x; ev.y = y;
     ev.modifiers = static_cast<uint32_t>(modifiers);
     auto type = static_cast<cef_mouse_button_type_t>(button);
+
+    // Left-button release while a drag is in flight: complete the drop.
+    if (mouse_up != 0 && button == EXCEF_MBT_LEFT && handler->is_in_drag()) {
+        auto host = b->GetHost();
+        host->DragTargetDrop(ev);
+        host->DragSourceEndedAt(x, y, handler->drag_current_op());
+        host->DragSourceSystemDragEnded();
+        handler->clear_drag();
+    }
+
     b->GetHost()->SendMouseClickEvent(ev, type, mouse_up != 0, click_count);
 }
 
@@ -206,10 +357,19 @@ extern "C" void excef_send_key_event(int browser_id, int type,
     ev.type = static_cast<cef_key_event_type_t>(type);
     ev.modifiers = static_cast<uint32_t>(modifiers);
     ev.windows_key_code = windows_key_code;
+    // Pass native_key_code through verbatim. DO NOT fall back to
+    // windows_key_code on macOS: Carbon and Windows VK numbering disagree
+    // on common keys (VK_TAB=0x09 collides with Carbon V=0x09, VK_V=0x56
+    // collides with Carbon F5=0x60, etc.), so the fallback turns Tab
+    // presses into V keypresses in Chromium's DOM event handler.
     ev.native_key_code = native_key_code;
     ev.is_system_key = is_system_key != 0;
     ev.character = static_cast<char16_t>(character);
     ev.unmodified_character = static_cast<char16_t>(unmodified_character);
+    // CEF removed IsFocusOnEditableField in newer versions; matching
+    // cefclient's macOS sample which hardcodes false here. Tab / Enter
+    // still navigate because the renderer's focus controller detects
+    // them via the character / windows_key_code combo.
     ev.focus_on_editable_field = false;
     b->GetHost()->SendKeyEvent(ev);
 }
@@ -291,6 +451,7 @@ extern "C" void excef_set_address_change_callback(excef_address_change_cb_t cb) 
 extern "C" void excef_set_title_change_callback(excef_title_change_cb_t cb) { exclr8cef::g_title_cb = cb; }
 extern "C" void excef_set_loading_state_callback(excef_loading_state_cb_t cb) { exclr8cef::g_loading_state_cb = cb; }
 extern "C" void excef_set_browser_closed_callback(excef_browser_closed_cb_t cb) { exclr8cef::g_browser_closed_cb = cb; }
+extern "C" void excef_set_cursor_change_callback(excef_cursor_change_cb_t cb) { exclr8cef::g_cursor_change_cb = cb; }
 
 // ---- Cookies --------------------------------------------------------------
 

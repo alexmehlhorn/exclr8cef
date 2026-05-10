@@ -113,17 +113,108 @@ EXCEF_API int excef_initialize_offscreen(
     const char* subprocess_path,
     excef_schedule_pump_work_t schedule_callback);
 
-// Create an off-screen browser at width x height navigated to `url`.
-// `paint` fires whenever CEF has new pixels for the browser's view.
+// Create an off-screen browser whose view rect is `width x height` DIPs (CSS
+// pixels), navigated to `url`. `device_scale_factor` controls HiDPI rendering:
+// CEF allocates a paint buffer of (width × scale) × (height × scale) physical
+// pixels and the page is laid out at the DIP size. Pass 1.0 for non-HiDPI hosts.
+// `paint` fires whenever CEF has new pixels — the (width, height) reported to
+// `paint` are in physical pixels.
 // Returns a browser id (>= 1) on success, 0 on failure.
 EXCEF_API int excef_create_offscreen_browser(
     int width, int height,
+    float device_scale_factor,
     const char* url,
     excef_paint_callback_t paint);
 
-// Tell CEF the browser has been resized and request a fresh paint.
+// Tell CEF the browser has been resized to `width x height` DIPs and request
+// a fresh paint. The buffer size will follow the current device_scale_factor.
 EXCEF_API void excef_resize_offscreen_browser(int browser_id,
                                               int width, int height);
+
+// Update the browser's device scale factor (e.g. when the host control is
+// dragged across monitors with different DPI). CEF will re-layout and emit a
+// fresh paint at the new physical-pixel size.
+EXCEF_API void excef_set_device_scale_factor(int browser_id, float scale);
+
+// Set the zoom level. 0.0 == 100% (default). Each 1.0 step is ~120% of the
+// previous (CEF/Chromium convention: percentage = 100 * pow(1.2, level)).
+EXCEF_API void excef_set_zoom_level(int browser_id, double level);
+EXCEF_API double excef_get_zoom_level(int browser_id);
+
+// Clipboard / editing primitives. Operate on the browser's focused frame.
+// CEF in OSR mode does not auto-execute these from keyboard accelerators;
+// the host must invoke them when Cmd/Ctrl + C / V / X / A / Z / Y is pressed.
+EXCEF_API void excef_copy(int browser_id);
+EXCEF_API void excef_paste(int browser_id);
+EXCEF_API void excef_cut(int browser_id);
+EXCEF_API void excef_select_all(int browser_id);
+EXCEF_API void excef_undo(int browser_id);
+EXCEF_API void excef_redo(int browser_id);
+
+// ---- Drag and drop -------------------------------------------------------
+//
+// CEF in OSR mode does not interact with the platform's native drag-and-drop
+// system. The host has to bridge: forward incoming OS drags to CEF as
+// drag-target events, and forward CEF-initiated page drags out to the OS
+// (or accept them internally) via the start-drag callback.
+//
+// DragOperationsMask values (subset of cef_drag_operations_mask_t):
+#define EXCEF_DRAG_OP_NONE   0
+#define EXCEF_DRAG_OP_COPY   1
+#define EXCEF_DRAG_OP_LINK   2
+#define EXCEF_DRAG_OP_GENERIC 4
+#define EXCEF_DRAG_OP_PRIVATE 8
+#define EXCEF_DRAG_OP_MOVE   16
+#define EXCEF_DRAG_OP_DELETE 32
+#define EXCEF_DRAG_OP_EVERY  0xFFFFFFFF
+
+// Drag-target side: host calls these as the OS reports an external drag
+// hovering / dropping over the WebView.
+//
+// `text`, `html`, `url`, and the `file_paths` array may be NULL or empty.
+// `file_path_count` is the length of `file_paths`.
+EXCEF_API void excef_drag_target_drag_enter(int browser_id,
+                                            int x, int y,
+                                            int modifiers,
+                                            int allowed_ops,
+                                            const char* text,
+                                            const char* html,
+                                            const char* url,
+                                            const char** file_paths,
+                                            int file_path_count);
+EXCEF_API void excef_drag_target_drag_over(int browser_id,
+                                            int x, int y,
+                                            int modifiers,
+                                            int allowed_ops);
+EXCEF_API void excef_drag_target_drop(int browser_id,
+                                      int x, int y,
+                                      int modifiers);
+EXCEF_API void excef_drag_target_drag_leave(int browser_id);
+
+// Drag-source side: when the page initiates a drag, CEF calls this callback
+// (set via excef_set_start_drag_callback) so the host can start an OS-level
+// drag. Return 1 to indicate the host is handling it (host MUST eventually
+// call excef_drag_source_ended_at + excef_drag_source_system_drag_ended);
+// return 0 to fall back to internal-only DnD (the shim self-targets).
+//
+// The drag data is decomposed into individual fields. `link_url` / `text` /
+// `html` / `file_names` are NULL/empty when not applicable. Do not retain
+// the pointers past callback return — copy out anything you need.
+typedef int (*excef_start_drag_cb_t)(int browser_id,
+                                      int allowed_ops,
+                                      int x, int y,
+                                      const char* text,
+                                      const char* html,
+                                      const char* link_url,
+                                      const char* link_title,
+                                      const char** file_names,
+                                      int file_name_count);
+EXCEF_API void excef_set_start_drag_callback(excef_start_drag_cb_t cb);
+
+// Host calls these once the OS-level drag finishes:
+//   `op` is the operation that completed (EXCEF_DRAG_OP_*).
+EXCEF_API void excef_drag_source_ended_at(int browser_id, int x, int y, int op);
+EXCEF_API void excef_drag_source_system_drag_ended(int browser_id);
 
 // ---- Input forwarding (OSR browsers) -------------------------------------
 //
@@ -260,6 +351,18 @@ EXCEF_API void excef_delete_cookies(const char* url, const char* name);
 typedef void (*excef_browser_closed_cb_t)(int browser_id);
 EXCEF_API void excef_set_browser_closed_callback(excef_browser_closed_cb_t cb);
 
+// ---- Cursor change event -------------------------------------------------
+//
+// `cursor_type` is a value from cef_cursor_type_t (CT_POINTER=0, CT_CROSS=1,
+// CT_HAND=2, CT_IBEAM=3, CT_WAIT=4, CT_HELP=5, CT_EAST/NORTH/...RESIZE,
+// CT_MOVE=29, CT_NOTALLOWED=38, CT_GRAB=41, CT_GRABBING=42, etc.). See
+// CEF's include/internal/cef_types.h for the full list. Custom cursors
+// (CSS `cursor: url(...)`) report CT_CUSTOM=45; the bitmap is not
+// forwarded across the C ABI in this version.
+
+typedef void (*excef_cursor_change_cb_t)(int browser_id, int cursor_type);
+EXCEF_API void excef_set_cursor_change_callback(excef_cursor_change_cb_t cb);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these
@@ -285,6 +388,11 @@ EXCEF_API void excef_ime_cancel(int browser_id);
 //
 // Render the browser's current page as a PDF at `path`. Async — `callback`
 // fires when complete with success=1 on success, 0 on failure.
+//
+// Advanced print settings (header/footer templates, margins, paper size)
+// live in the optional extension header `exclr8cef_print.h`. Apps that
+// don't need PDF customization can ignore that header and bind only to
+// `excef_print_to_pdf` here.
 
 typedef void (*excef_pdf_done_callback_t)(int browser_id, int success);
 

@@ -236,11 +236,17 @@ public static class Cef
     public delegate void PaintHandler(int browserId, IntPtr buffer, int width, int height);
 
     /// <summary>
-    /// Create an off-screen browser. Returns a browser id (>= 1) on success,
-    /// 0 on failure. The <paramref name="onPaint"/> handler is invoked
-    /// whenever CEF has new pixels for the browser's view.
+    /// Create an off-screen browser whose view rect is <paramref name="width"/> ×
+    /// <paramref name="height"/> DIPs. <paramref name="deviceScaleFactor"/> controls
+    /// HiDPI rendering: CEF allocates a paint buffer of (width × scale) ×
+    /// (height × scale) physical pixels, while the page is laid out at the DIP
+    /// size. Pass <c>1.0f</c> for non-HiDPI hosts.
+    ///
+    /// Returns a browser id (≥ 1) on success, 0 on failure. The
+    /// <paramref name="onPaint"/> handler is invoked whenever CEF has new pixels;
+    /// the (width, height) reported there are in physical pixels.
     /// </summary>
-    public static int CreateOffscreenBrowser(int width, int height, string url, PaintHandler onPaint)
+    public static int CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url, PaintHandler onPaint)
     {
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(onPaint);
@@ -251,7 +257,7 @@ public static class Cef
             try
             {
                 delegate* unmanaged[Cdecl]<int, void*, int, int, void> trampoline = &PaintTrampoline;
-                int id = Excef.excef_create_offscreen_browser(width, height, urlPtr, trampoline);
+                int id = Excef.excef_create_offscreen_browser(width, height, deviceScaleFactor, urlPtr, trampoline);
                 if (id > 0) s_paintHandlers[id] = onPaint;
                 return id;
             }
@@ -262,9 +268,41 @@ public static class Cef
         }
     }
 
-    /// <summary>Notify CEF that an off-screen browser was resized.</summary>
+    /// <summary>Notify CEF that an off-screen browser was resized (DIP size).</summary>
     public static void ResizeOffscreenBrowser(int browserId, int width, int height)
         => Excef.excef_resize_offscreen_browser(browserId, width, height);
+
+    /// <summary>
+    /// Update the device scale factor for an off-screen browser, e.g. when the
+    /// host control is dragged across monitors with different DPI. CEF will
+    /// re-layout and emit a fresh paint at the new physical-pixel size.
+    /// </summary>
+    public static void SetDeviceScaleFactor(int browserId, float scale)
+        => Excef.excef_set_device_scale_factor(browserId, scale);
+
+    /// <summary>
+    /// Set the page zoom level. <c>0.0</c> = 100% (default). Each <c>+1.0</c>
+    /// step is ~120% of the previous (CEF/Chromium convention:
+    /// <c>percentage = 100 × pow(1.2, level)</c>).
+    /// </summary>
+    public static void SetZoomLevel(int browserId, double level)
+        => Excef.excef_set_zoom_level(browserId, level);
+
+    /// <summary>Get the current zoom level. <c>0.0</c> = 100%.</summary>
+    public static double GetZoomLevel(int browserId)
+        => Excef.excef_get_zoom_level(browserId);
+
+    // ---- Clipboard / editing primitives -----------------------------------
+    // Operate on the browser's focused frame. CEF in OSR mode does not
+    // auto-execute these from keyboard accelerators — the host calls them
+    // when Cmd/Ctrl + C / V / X / A / Z / Y is pressed.
+
+    public static void Copy(int browserId)      => Excef.excef_copy(browserId);
+    public static void Paste(int browserId)     => Excef.excef_paste(browserId);
+    public static void Cut(int browserId)       => Excef.excef_cut(browserId);
+    public static void SelectAll(int browserId) => Excef.excef_select_all(browserId);
+    public static void Undo(int browserId)      => Excef.excef_undo(browserId);
+    public static void Redo(int browserId)      => Excef.excef_redo(browserId);
 
     // ---- Input forwarding -------------------------------------------------
 
@@ -393,6 +431,71 @@ public static class Cef
     private static EventHandler<BrowserStringEventArgs>? s_titleChanged;
     private static EventHandler<LoadingStateEventArgs>? s_loadingStateChanged;
     private static EventHandler<int>? s_browserClosed;
+    private static EventHandler<CursorChangedEventArgs>? s_cursorChanged;
+
+    /// <summary>
+    /// CEF's <c>cef_cursor_type_t</c>. Maps directly to the values reported by
+    /// CefDisplayHandler::OnCursorChange.
+    /// </summary>
+    public enum CefCursorType
+    {
+        Pointer = 0,
+        Cross = 1,
+        Hand = 2,
+        IBeam = 3,
+        Wait = 4,
+        Help = 5,
+        EastResize = 6,
+        NorthResize = 7,
+        NorthEastResize = 8,
+        NorthWestResize = 9,
+        SouthResize = 10,
+        SouthEastResize = 11,
+        SouthWestResize = 12,
+        WestResize = 13,
+        NorthSouthResize = 14,
+        EastWestResize = 15,
+        NorthEastSouthWestResize = 16,
+        NorthWestSouthEastResize = 17,
+        ColumnResize = 18,
+        RowResize = 19,
+        MiddlePanning = 20,
+        EastPanning = 21,
+        NorthPanning = 22,
+        NorthEastPanning = 23,
+        NorthWestPanning = 24,
+        SouthPanning = 25,
+        SouthEastPanning = 26,
+        SouthWestPanning = 27,
+        WestPanning = 28,
+        Move = 29,
+        VerticalText = 30,
+        Cell = 31,
+        ContextMenu = 32,
+        Alias = 33,
+        Progress = 34,
+        NoDrop = 35,
+        Copy = 36,
+        None = 37,
+        NotAllowed = 38,
+        ZoomIn = 39,
+        ZoomOut = 40,
+        Grab = 41,
+        Grabbing = 42,
+        MiddlePanningVertical = 43,
+        MiddlePanningHorizontal = 44,
+        Custom = 45,
+        DndNone = 46,
+        DndMove = 47,
+        DndCopy = 48,
+        DndLink = 49,
+    }
+
+    public sealed class CursorChangedEventArgs : EventArgs
+    {
+        public required int BrowserId { get; init; }
+        public required CefCursorType Type { get; init; }
+    }
 
     /// <summary>Fires when a browser's main-frame URL changes.</summary>
     public static event EventHandler<BrowserStringEventArgs>? AddressChanged
@@ -420,6 +523,13 @@ public static class Cef
     {
         add { RegisterEventCallbacks(); s_browserClosed += value; }
         remove { s_browserClosed -= value; }
+    }
+
+    /// <summary>Fires when the page requests a different cursor type (CSS <c>cursor:</c>).</summary>
+    public static event EventHandler<CursorChangedEventArgs>? CursorChanged
+    {
+        add { RegisterEventCallbacks(); s_cursorChanged += value; }
+        remove { s_cursorChanged -= value; }
     }
 
     // ---- JavaScript with result -------------------------------------------
@@ -608,6 +718,7 @@ public static class Cef
                 Excef.excef_set_browser_closed_callback(&BrowserClosedTrampoline);
                 Excef.excef_set_eval_result_callback(&EvalResultTrampoline);
                 Excef.excef_set_cookie_visit_callback(&CookieVisitTrampoline);
+                Excef.excef_set_cursor_change_callback(&CursorChangeTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -636,6 +747,16 @@ public static class Cef
             IsLoading = isLoading != 0,
             CanGoBack = canGoBack != 0,
             CanGoForward = canGoForward != 0,
+        });
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void CursorChangeTrampoline(int browserId, int cursorType)
+    {
+        s_cursorChanged?.Invoke(null, new CursorChangedEventArgs
+        {
+            BrowserId = browserId,
+            Type = (CefCursorType)cursorType,
         });
     }
 

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Exclr8Cef demo</title>
+<style>
+  html, body { overflow-x: hidden; }
+  body { font-family: -apple-system, sans-serif; background: #282a36; color: #f8f8f2; padding: 32px; margin: 0; }
+  h1 { margin: 0 0 8px 0; }
+  h2 { color: #50fa7b; margin-top: 24px; }
+  button { background: #ff79c6; border: 0; color: #282a36; padding: 10px 18px; font-size: 16px; font-weight: 600; border-radius: 6px; cursor: pointer; }
+  input { background: #383a4a; border: 1px solid #555; color: #f8f8f2; padding: 8px 10px; font-size: 14px; border-radius: 4px; width: 300px; margin-top: 8px; }
+  a { color: #8be9fd; }
+  .scroll { height: 1500px; background: linear-gradient(180deg, #bd93f9, #50fa7b, #ff79c6, #8be9fd); color: #282a36; font-weight: bold; }
+  .dz { flex: 1; min-height: 60px; background: #383a4a; border: 1px dashed #888; border-radius: 6px; padding: 6px; }
+  .dz.over { border-color: #50fa7b; background: #414458; }
+  .item { background: #44475a; padding: 6px 10px; margin: 3px 0; border-radius: 4px; cursor: grab; user-select: none; }
+  .item:active { cursor: grabbing; }
+  .row { display: flex; gap: 12px; margin-top: 6px; }
+  #keylog { position: fixed; top: 8px; right: 8px; background: #000; color: #50fa7b; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 12px; z-index: 9999; max-width: 60vw; max-height: 50vh; overflow: auto; cursor: copy; white-space: pre; }
+  #keylog:hover { outline: 1px solid #50fa7b; }
+  #keylog.copied { background: #50fa7b; color: #000; }
+</style>
+</head>
+<body>
+<div id="keylog" title="click to copy">press a key (click box to copy)</div>
+
+<h1>Exclr8Cef.WebView demo</h1>
+<p>Try the address bar above.
+  <a href="https://www.exclr8.com">exclr8.com</a> ·
+  <a href="https://example.com">example.com</a> ·
+  <a href="chrome://version">chrome://version</a> ·
+  <a href="https://duckduckgo.com">duckduckgo.com</a>
+</p>
+
+<h2>1. Click</h2>
+<button id="b">Clicks: 0</button>
+
+<h2>2. Type / Tab</h2>
+<input placeholder="Type here, then Tab to next field…" />
+<input placeholder="…and Tab back" style="margin-left:8px" />
+
+<h2>3. Form / Enter</h2>
+<form id="testForm">
+  <input id="formInput" type="text" placeholder="Type something then press Enter" style="width: 250px;" />
+  <button type="submit">Submit</button>
+</form>
+<div id="formResult" style="margin-top:8px; color:#50fa7b; font-family:monospace;"></div>
+
+<h2>4. Drag &amp; drop</h2>
+<p>Drag fruits between the two boxes:</p>
+<div class="row">
+  <div class="dz" id="dzA">
+    <div class="item" draggable="true">Apple 🍎</div>
+    <div class="item" draggable="true">Banana 🍌</div>
+    <div class="item" draggable="true">Cherry 🍒</div>
+  </div>
+  <div class="dz" id="dzB"></div>
+</div>
+
+<h2>5. Scroll</h2>
+<div class="scroll">
+  <p style="padding:20px">⬇ Scroll down through the gradient</p>
+</div>
+
+<script>
+  // Click counter.
+  let clicks = 0;
+  const btn = document.getElementById('b');
+  btn.addEventListener('click', function () {
+    clicks++;
+    btn.textContent = 'Clicks: ' + clicks;
+  });
+
+  // Form submit / Enter test. Logs to keylog overlay too so we can see
+  // whether the form's submit event fires at all.
+  let submitCount = 0;
+  document.getElementById('testForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    submitCount++;
+    const v = document.getElementById('formInput').value;
+    document.getElementById('formResult').textContent =
+      '#' + submitCount + ' submitted with: "' + v + '"';
+    push('SUBMIT #' + submitCount);
+  });
+  document.getElementById('testForm').querySelector('button').addEventListener('click', function () {
+    push('button CLICK');
+  });
+
+  // Drag and drop (internal, between dzA / dzB).
+  let dragSeq = 0;
+  document.querySelectorAll('.item').forEach(function (el) {
+    el.addEventListener('dragstart', function (e) {
+      const id = 'dnd_' + (++dragSeq);
+      e.target.id = id;
+      e.dataTransfer.setData('text/plain', id);
+      e.dataTransfer.effectAllowed = 'move';
+    });
+  });
+  document.querySelectorAll('.dz').forEach(function (dz) {
+    dz.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      dz.classList.add('over');
+    });
+    dz.addEventListener('dragleave', function () { dz.classList.remove('over'); });
+    dz.addEventListener('drop', function (e) {
+      e.preventDefault();
+      dz.classList.remove('over');
+      const id = e.dataTransfer.getData('text/plain');
+      const el = document.getElementById(id);
+      if (el) dz.appendChild(el);
+    });
+  });
+
+  // Event logger overlay — top-right black box. Logs keydowns and focus
+  // changes so we can tell whether Tab actually moves focus. Click the
+  // box to copy its content to the clipboard. Most-recent events are at
+  // the top.
+  const keylog = document.getElementById('keylog');
+  const lines = ['(events log — click to copy)'];
+  function describe(el) {
+    if (!el) return '?';
+    let s = el.tagName;
+    if (el.id) s += '#' + el.id;
+    if (el.placeholder) s += '["' + el.placeholder.slice(0, 16) + '"]';
+    return s;
+  }
+  function push(s) {
+    lines.unshift(s);
+    if (lines.length > 12) lines.pop();
+    keylog.textContent = lines.join('\n');
+  }
+  document.addEventListener('keydown', function (e) {
+    let t = 'down ' + e.key + ' code=' + e.code + ' kc=' + e.keyCode;
+    if (e.defaultPrevented) t += ' prevDef';
+    if (e.repeat) t += ' repeat';
+    t += ' on=' + describe(document.activeElement);
+    push(t);
+  });
+  document.addEventListener('keyup', function (e) {
+    push('up   ' + e.key + ' code=' + e.code + ' kc=' + e.keyCode + ' on=' + describe(document.activeElement));
+  });
+  document.addEventListener('keypress', function (e) {
+    push('press ' + e.key + ' code=' + e.code + ' on=' + describe(document.activeElement));
+  });
+  document.addEventListener('focus', function (e) {
+    push('focus -> ' + describe(e.target));
+  }, true);
+  document.addEventListener('blur', function (e) {
+    push('blur  <- ' + describe(e.target));
+  }, true);
+  keylog.addEventListener('click', async function () {
+    try {
+      await navigator.clipboard.writeText(keylog.textContent);
+      keylog.classList.add('copied');
+      setTimeout(function () { keylog.classList.remove('copied'); }, 600);
+    } catch (err) {
+      const r = document.createRange();
+      r.selectNode(keylog);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(r);
+    }
+  });
+  // Allow the C# host to push diagnostic lines into the same overlay.
+  window.__csLog = function (msg) { push(msg); };
+  push('ready');
+</script>
+</body>
+</html>

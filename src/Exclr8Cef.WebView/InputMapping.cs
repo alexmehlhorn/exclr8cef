@@ -19,6 +19,21 @@ internal static class InputMapping
         return flags;
     }
 
+    /// <summary>
+    /// Same as <see cref="MapModifiers(KeyModifiers)"/> but also folds in the
+    /// "button held down" flags from the pointer's current properties. CEF
+    /// uses these on move events to recognise drag-select; without them, a
+    /// mouse-drag through text never extends the selection.
+    /// </summary>
+    public static Cef.CefModifiers MapModifiers(KeyModifiers km, PointerPointProperties props)
+    {
+        var flags = MapModifiers(km);
+        if (props.IsLeftButtonPressed)   flags |= Cef.CefModifiers.LeftMouseButton;
+        if (props.IsMiddleButtonPressed) flags |= Cef.CefModifiers.MiddleMouseButton;
+        if (props.IsRightButtonPressed)  flags |= Cef.CefModifiers.RightMouseButton;
+        return flags;
+    }
+
     public static Cef.CefMouseButton MapPointerUpdateKind(PointerUpdateKind kind) => kind switch
     {
         PointerUpdateKind.MiddleButtonPressed or PointerUpdateKind.MiddleButtonReleased => Cef.CefMouseButton.Middle,

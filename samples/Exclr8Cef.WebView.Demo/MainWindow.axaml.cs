@@ -11,6 +11,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // Load the bundled test page from disk. data: URLs are too fragile
+        // for any non-trivial HTML/JS due to URI-reserved char escaping
+        // (`?`, `|`, etc. would silently break the parser).
+        var htmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, "test-page.html");
+        if (System.IO.File.Exists(htmlPath))
+        {
+            Browser.Url = "file://" + htmlPath;
+        }
+
         // Track WebView property changes to drive the address bar, title,
         // and nav-button enablement.
         Browser.PropertyChanged += OnBrowserPropertyChanged;

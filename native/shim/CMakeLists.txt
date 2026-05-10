@@ -16,6 +16,12 @@ set(SHIM_SRCS
     exclr8cef_client.cc
     exclr8cef_osr.h
     exclr8cef_osr.cc
+    # Optional PrintToPDF extension. The header (exclr8cef_print.h) is
+    # opt-in for consumers; the .cc is compiled into the same library
+    # so apps that need it just include the header + import the
+    # matching managed package.
+    exclr8cef_print.h
+    exclr8cef_print.cc
 )
 if(OS_MAC)
     list(APPEND SHIM_SRCS exclr8cef_mac.mm)
