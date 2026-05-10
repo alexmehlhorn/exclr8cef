@@ -39,18 +39,27 @@ jobs:
           - os: macos-14
             rid: osx-arm64
             cef_platform: macosarm64
-          - os: macos-13
+            cmake_arch: ""
+          # osx-x64 is cross-compiled from the macos-14 (Apple Silicon) runner
+          # because the macos-13 (Intel) runner queue is heavily backlogged
+          # ahead of GitHub deprecating it. CMAKE_OSX_ARCHITECTURES=x86_64
+          # produces an x86-64 dylib that runs natively on Intel Macs.
+          - os: macos-14
             rid: osx-x64
             cef_platform: macosx64
+            cmake_arch: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
           - os: windows-latest
             rid: win-x64
             cef_platform: windows64
+            cmake_arch: ""
           - os: ubuntu-22.04
             rid: linux-x64
             cef_platform: linux64
+            cmake_arch: ""
           - os: ubuntu-22.04-arm
             rid: linux-arm64
             cef_platform: linuxarm64
+            cmake_arch: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +104,7 @@ jobs:
       - name: Build native shim
         shell: bash
         run: |
-          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_arch }}
           cmake --build native/build --parallel
 
       - name: Stage native files

@@ -34,18 +34,25 @@ jobs:
           - os: macos-14
             rid: osx-arm64
             cef_platform: macosarm64
-          - os: macos-13
+            cmake_arch: ""
+          # osx-x64 is cross-compiled from the macos-14 (Apple Silicon) runner.
+          # See release.yml for context.
+          - os: macos-14
             rid: osx-x64
             cef_platform: macosx64
+            cmake_arch: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
           - os: windows-latest
             rid: win-x64
             cef_platform: windows64
+            cmake_arch: ""
           - os: ubuntu-22.04
             rid: linux-x64
             cef_platform: linux64
+            cmake_arch: ""
           - os: ubuntu-22.04-arm
             rid: linux-arm64
             cef_platform: linuxarm64
+            cmake_arch: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +97,7 @@ jobs:
       - name: Configure (CMake)
         shell: bash
         run: |
-          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_arch }}
 
       - name: Build native shim
         shell: bash
@@ -107,6 +114,10 @@ jobs:
         run: dotnet build tests/Exclr8Cef.SmokeTest -c Release
 
       - name: Run managed smoke test
+        # The cross-compiled osx-x64 dylib can't load into the arm64 dotnet
+        # process running on macos-14. Skipped here; coverage is provided by
+        # the osx-arm64 job, which exercises the same managed code.
+        if: matrix.rid != 'osx-x64'
         shell: bash
         run: dotnet run --no-build -c Release --project tests/Exclr8Cef.SmokeTest
 
