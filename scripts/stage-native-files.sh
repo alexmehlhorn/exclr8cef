@@ -78,6 +78,13 @@ case "${RID}" in
     cp "${CEF_RELEASE}"/*.dat "${DEST}/" 2>/dev/null || true
     if [ -d "${CEF_RESOURCES}" ]; then
       cp -R "${CEF_RESOURCES}"/* "${DEST}/"
+      # Trim non-en-US locales — the full set + libcef.so + libv8 etc. pushes
+      # the linux nupkg past nuget.org's 250 MB hard limit. Hosts that need
+      # additional locales can ship their own .pak files alongside the runtime
+      # NuGet's contents at deploy time.
+      if [ -d "${DEST}/locales" ]; then
+        find "${DEST}/locales" -type f -name '*.pak' ! -name 'en-US.pak' -delete
+      fi
     fi
     ;;
 esac
