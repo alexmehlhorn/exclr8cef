@@ -46,6 +46,10 @@ public:
         CefProcessId source_process,
         CefRefPtr<CefProcessMessage> message) override;
 
+    void OnContextCreated(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          CefRefPtr<CefV8Context> context) override;
+
 private:
     IMPLEMENT_REFCOUNTING(Exclr8CefApp);
     DISALLOW_COPY_AND_ASSIGN(Exclr8CefApp);

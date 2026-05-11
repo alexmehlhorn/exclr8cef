@@ -26,6 +26,42 @@ namespace exclr8cef {
 namespace {
 
 CefRefPtr<Exclr8CefApp> g_app;
+
+// V8 handler installed in every renderer-side V8 context as
+// `window.exclr8cef.invoke(method, argsJson)`. Forwards calls to the
+// browser process via CefProcessMessage("JsInvoke"); the OSR client
+// hooks that message and fires the host's js-invoke callback.
+class JsBridgeV8Handler : public CefV8Handler {
+public:
+    explicit JsBridgeV8Handler(CefRefPtr<CefFrame> frame) : frame_(std::move(frame)) {}
+
+    bool Execute(const CefString& name,
+                 CefRefPtr<CefV8Value> /*object*/,
+                 const CefV8ValueList& args,
+                 CefRefPtr<CefV8Value>& /*retval*/,
+                 CefString& exception) override {
+        if (name != "invoke") return false;
+        if (args.empty() || !args[0]->IsString()) {
+            exception = "exclr8cef.invoke(method[, argsJson]) — method required";
+            return true;
+        }
+        std::string method = args[0]->GetStringValue().ToString();
+        std::string argsJson;
+        if (args.size() >= 2 && args[1]->IsString()) {
+            argsJson = args[1]->GetStringValue().ToString();
+        }
+        auto msg = CefProcessMessage::Create("JsInvoke");
+        auto a = msg->GetArgumentList();
+        a->SetString(0, method);
+        a->SetString(1, argsJson);
+        if (frame_) frame_->SendProcessMessage(PID_BROWSER, msg);
+        return true;
+    }
+
+private:
+    CefRefPtr<CefFrame> frame_;
+    IMPLEMENT_REFCOUNTING(JsBridgeV8Handler);
+};
 std::vector<std::string> g_pending_urls;
 bool g_context_initialized = false;
 ScheduleMessagePumpWorkCallback g_schedule_pump_cb = nullptr;
@@ -254,6 +290,18 @@ void Exclr8CefApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
     if (g_schedule_pump_cb) {
         g_schedule_pump_cb(delay_ms);
     }
+}
+
+void Exclr8CefApp::OnContextCreated(CefRefPtr<CefBrowser> /*browser*/,
+                                     CefRefPtr<CefFrame> frame,
+                                     CefRefPtr<CefV8Context> context) {
+    // Renderer side. Install `window.exclr8cef.invoke(method, argsJson)`.
+    auto global = context->GetGlobal();
+    CefRefPtr<JsBridgeV8Handler> handler = new JsBridgeV8Handler(frame);
+    auto invokeFn = CefV8Value::CreateFunction("invoke", handler);
+    auto ns = CefV8Value::CreateObject(nullptr, nullptr);
+    ns->SetValue("invoke", invokeFn, V8_PROPERTY_ATTRIBUTE_READONLY);
+    global->SetValue("exclr8cef", ns, V8_PROPERTY_ATTRIBUTE_READONLY);
 }
 
 bool Exclr8CefApp::OnProcessMessageReceived(

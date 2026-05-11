@@ -180,6 +180,7 @@
     </div>
     <div class="group">
       <div class="group-title">Events</div>
+      <a href="#jsbridge">JS → host bridge</a>
       <a href="#console">Console messages</a>
       <a href="#load">Load events</a>
       <a href="#display">Status / tooltip / favicon</a>
@@ -391,6 +392,20 @@
     </div>
   </section>
 
+  <section id="jsbridge">
+    <h2>JS → host bridge</h2>
+    <p class="lede">Every renderer V8 context gets a
+       <code>window.exclr8cef.invoke(method, argsJson)</code> function
+       wired up automatically. Calling it sends a CefProcessMessage to
+       the browser process, which fires <code>CefBrowser.JsInvoke</code>
+       on the host. Fire-and-forget for v1 — no return value to JS yet
+       (return-values + Promise interop are v2).</p>
+    <div class="row">
+      <button id="jsBridge">invoke("greet", {name:"world"})</button>
+      <button id="jsBridge2">invoke("ping", "now")</button>
+    </div>
+  </section>
+
   <section id="console">
     <h2>Console messages</h2>
     <p class="lede">Each button calls a different <code>console.*</code> method.
@@ -414,6 +429,19 @@
   $('#clickBtn').addEventListener('click', () => {
     clicks++;
     $('#clickOut').textContent = clicks;
+  });
+
+  // JS → host bridge — sends a process message to the browser side via
+  // the auto-installed window.exclr8cef.invoke function.
+  $('#jsBridge').addEventListener('click', () => {
+    if (window.exclr8cef && window.exclr8cef.invoke) {
+      window.exclr8cef.invoke('greet', JSON.stringify({name: 'world', ts: Date.now()}));
+    } else {
+      console.error('window.exclr8cef.invoke not available');
+    }
+  });
+  $('#jsBridge2').addEventListener('click', () => {
+    window.exclr8cef?.invoke?.('ping', 'now');
   });
 
   // <select> popup — echo the chosen value so we can confirm the popup

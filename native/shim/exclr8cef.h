@@ -799,6 +799,22 @@ EXCEF_API void excef_set_popup_show_callback(excef_popup_show_cb_t cb);
 EXCEF_API void excef_set_popup_size_callback(excef_popup_size_cb_t cb);
 EXCEF_API void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb);
 
+// ---- JavaScript bridge (lite) -------------------------------------------
+//
+// Installs a global function `window.exclr8cef.invoke(method, argsJson)`
+// in every V8 context created in the renderer process. Calls from JS
+// fire a CefProcessMessage to the browser process; we surface that to
+// the host via this callback. Fire-and-forget for v1 — return values
+// to JS (Promises) are a v2 concern.
+//
+// `args_json` is whatever the JS caller passed as the second argument
+// (typically a JSON.stringify(...) of an args object). Host parses it
+// however it likes.
+typedef void (*excef_js_invoke_cb_t)(int browser_id,
+                                       const char* method,
+                                       const char* args_json);
+EXCEF_API void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb);
+
 // ---- Request context (per-browser isolation) ---------------------------
 //
 // CefRequestContext lets browsers share or partition cookies, cache,

@@ -84,12 +84,16 @@ public partial class MainWindow : Window
         b.FindResult            += OnBrowserFindResult;
         b.RenderProcessGone     += OnBrowserRenderProcessGone;
         b.ResourceRequest       += OnBrowserResourceRequest;
+        b.JsInvoke              += OnBrowserJsInvoke;
     }
 
     // Bucket request logs so the event console stays usable on busy pages —
     // log main_frame / sub_frame / xhr / fetch traffic in full, the rest as
     // a short summary per resource type per page-load batch.
     private int _resourceRequestLogged;
+    private void OnBrowserJsInvoke(object? sender, Exclr8Cef.JsInvokeEventArgs e)
+        => LogEvent("js-invoke", $"{e.Method}({e.ArgsJson})");
+
     private void OnBrowserResourceRequest(object? sender, Exclr8Cef.ResourceRequestEventArgs e)
     {
         // Demonstrate header injection: append a marker header so hosts /
@@ -712,6 +716,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["find"]            = SolidColorBrush.Parse("#94e2d5"),
         ["renderer"]        = SolidColorBrush.Parse("#f38ba8"),
         ["request"]         = SolidColorBrush.Parse("#74c7ec"),
+        ["js-invoke"]       = SolidColorBrush.Parse("#cba6f7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

@@ -735,6 +735,7 @@ public static class Cef
                 Excef.excef_set_popup_show_callback(&PopupShowTrampoline);
                 Excef.excef_set_popup_size_callback(&PopupSizeTrampoline);
                 Excef.excef_set_popup_paint_callback(&PopupPaintTrampoline);
+                Excef.excef_set_js_invoke_callback(&JsInvokeTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -934,6 +935,15 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaisePopupPainted((IntPtr)buffer, width, height);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void JsInvokeTrampoline(int browserId, sbyte* method, sbyte* argsJson)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseJsInvoke(
+            Marshal.PtrToStringUTF8((IntPtr)method) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

@@ -206,6 +206,14 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<PaintEventArgs>? PopupPainted;
 
     /// <summary>
+    /// Fires when the page calls <c>window.exclr8cef.invoke(method, argsJson)</c>.
+    /// Fire-and-forget for v1 — there's no return value back to JS yet.
+    /// The host installs this hook in every V8 context in every renderer
+    /// process automatically; no per-frame setup required.
+    /// </summary>
+    public event EventHandler<JsInvokeEventArgs>? JsInvoke;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -678,6 +686,9 @@ public sealed class CefBrowser : IDisposable
     internal void RaisePopupPainted(IntPtr buffer, int width, int height)
         => PopupPainted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
+    internal void RaiseJsInvoke(string method, string argsJson)
+        => JsInvoke?.Invoke(this, new JsInvokeEventArgs(method, argsJson));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -697,6 +708,16 @@ public sealed class CefBrowser : IDisposable
 
 /// <summary>Loading-state snapshot fired by <see cref="CefBrowser.LoadingStateChanged"/>.</summary>
 public readonly record struct LoadingState(bool IsLoading, bool CanGoBack, bool CanGoForward);
+
+/// <summary>Args for <see cref="CefBrowser.JsInvoke"/>.</summary>
+public sealed class JsInvokeEventArgs : EventArgs
+{
+    /// <summary>The method name JS passed as the first argument.</summary>
+    public string Method { get; }
+    /// <summary>The arguments JS passed as the second argument (a string — typically <c>JSON.stringify(...)</c> of the call args).</summary>
+    public string ArgsJson { get; }
+    internal JsInvokeEventArgs(string method, string argsJson) { Method = method; ArgsJson = argsJson; }
+}
 
 /// <summary>
 /// Popup geometry delivered to <see cref="CefBrowser.PopupSize"/> —

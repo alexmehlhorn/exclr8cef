@@ -66,6 +66,7 @@ excef_resource_request_cb_t g_resource_request_cb = nullptr;
 excef_popup_show_cb_t g_popup_show_cb = nullptr;
 excef_popup_size_cb_t g_popup_size_cb = nullptr;
 excef_popup_paint_cb_t g_popup_paint_cb = nullptr;
+excef_js_invoke_cb_t g_js_invoke_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -297,18 +298,30 @@ bool Exclr8CefOsrHandler::OnProcessMessageReceived(
     CefRefPtr<CefFrame> /*frame*/,
     CefProcessId /*source_process*/,
     CefRefPtr<CefProcessMessage> message) {
-    // Browser-process side: receive "EvalResult" responses from the renderer.
-    if (message->GetName() != "EvalResult") return false;
-
+    const std::string name = message->GetName().ToString();
     auto args = message->GetArgumentList();
-    int request_id = args->GetInt(0);
-    bool ok = args->GetBool(1);
-    std::string payload = args->GetString(2).ToString();
 
-    if (g_eval_result_cb) {
-        g_eval_result_cb(id_, request_id, ok ? 1 : 0, payload.c_str());
+    if (name == "EvalResult") {
+        int request_id = args->GetInt(0);
+        bool ok = args->GetBool(1);
+        std::string payload = args->GetString(2).ToString();
+        if (g_eval_result_cb) {
+            g_eval_result_cb(id_, request_id, ok ? 1 : 0, payload.c_str());
+        }
+        return true;
     }
-    return true;
+
+    if (name == "JsInvoke") {
+        // Renderer-process JS bridge: window.exclr8cef.invoke(method, argsJson).
+        if (g_js_invoke_cb) {
+            std::string method = args->GetString(0).ToString();
+            std::string argsJson = args->GetString(1).ToString();
+            g_js_invoke_cb(id_, method.c_str(), argsJson.c_str());
+        }
+        return true;
+    }
+
+    return false;
 }
 
 void Exclr8CefOsrHandler::GetViewRect(CefRefPtr<CefBrowser> /*browser*/,
@@ -1284,6 +1297,7 @@ extern "C" void excef_set_resource_request_callback(excef_resource_request_cb_t 
 extern "C" void excef_set_popup_show_callback(excef_popup_show_cb_t cb) { exclr8cef::g_popup_show_cb = cb; }
 extern "C" void excef_set_popup_size_callback(excef_popup_size_cb_t cb) { exclr8cef::g_popup_size_cb = cb; }
 extern "C" void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb) { exclr8cef::g_popup_paint_cb = cb; }
+extern "C" void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb) { exclr8cef::g_js_invoke_cb = cb; }
 
 namespace {
 class ResourceRequestResolveTask : public CefTask {

@@ -290,6 +290,9 @@ internal static unsafe partial class Excef
     public static extern void excef_set_popup_paint_callback([NativeTypeName("excef_popup_paint_cb_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_js_invoke_callback([NativeTypeName("excef_js_invoke_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_create_request_context([NativeTypeName("const char *")] sbyte* cache_path);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
