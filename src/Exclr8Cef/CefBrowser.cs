@@ -61,6 +61,18 @@ public sealed class CefBrowser : IDisposable
     /// </summary>
     public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;
 
+    /// <summary>Per-frame load started. Fires once per frame; check <c>IsMainFrame</c> for top-level.</summary>
+    public event EventHandler<LoadStartEventArgs>? LoadStart;
+
+    /// <summary>Per-frame load finished. <c>HttpStatusCode</c> is 0 for non-HTTP loads (data:/file:/about:).</summary>
+    public event EventHandler<LoadEndEventArgs>? LoadEnd;
+
+    /// <summary>Per-frame load error. ErrorCode is from <see cref="Cef.CefErrorCode"/>; ERR_ABORTED (-3) means navigation was intentionally cancelled.</summary>
+    public event EventHandler<LoadErrorEventArgs>? LoadError;
+
+    /// <summary>Main-frame loading progress as a value in [0.0, 1.0]. Fires repeatedly during a load.</summary>
+    public event EventHandler<double>? LoadingProgress;
+
     /// <summary>Fires after the underlying CEF browser has been fully closed.</summary>
     public event EventHandler? Closed;
 
@@ -366,6 +378,18 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseConsoleMessage(Cef.CefLogSeverity level, string message, string source, int line)
         => ConsoleMessage?.Invoke(this, new ConsoleMessageEventArgs(level, message, source, line));
 
+    internal void RaiseLoadStart(bool isMainFrame, string url)
+        => LoadStart?.Invoke(this, new LoadStartEventArgs(isMainFrame, url));
+
+    internal void RaiseLoadEnd(bool isMainFrame, string url, int httpStatusCode)
+        => LoadEnd?.Invoke(this, new LoadEndEventArgs(isMainFrame, url, httpStatusCode));
+
+    internal void RaiseLoadError(bool isMainFrame, Cef.CefErrorCode errorCode, string errorText, string failedUrl)
+        => LoadError?.Invoke(this, new LoadErrorEventArgs(isMainFrame, errorCode, errorText, failedUrl));
+
+    internal void RaiseLoadingProgress(double progress)
+        => LoadingProgress?.Invoke(this, progress);
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -397,6 +421,44 @@ public sealed class PaintEventArgs : EventArgs
         Buffer = buffer;
         Width = width;
         Height = height;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.LoadStart"/>.</summary>
+public sealed class LoadStartEventArgs : EventArgs
+{
+    public bool IsMainFrame { get; }
+    public string Url { get; }
+    public LoadStartEventArgs(bool isMainFrame, string url) { IsMainFrame = isMainFrame; Url = url; }
+}
+
+/// <summary>Args for <see cref="CefBrowser.LoadEnd"/>.</summary>
+public sealed class LoadEndEventArgs : EventArgs
+{
+    public bool IsMainFrame { get; }
+    public string Url { get; }
+    /// <summary>HTTP status code (200, 404, …). 0 for non-HTTP loads (data:, file:, about:).</summary>
+    public int HttpStatusCode { get; }
+    public LoadEndEventArgs(bool isMainFrame, string url, int status)
+    {
+        IsMainFrame = isMainFrame; Url = url; HttpStatusCode = status;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.LoadError"/>.</summary>
+public sealed class LoadErrorEventArgs : EventArgs
+{
+    public bool IsMainFrame { get; }
+    /// <summary>Error code from <see cref="Cef.CefErrorCode"/>. ERR_ABORTED (-3) means intentional cancel.</summary>
+    public Cef.CefErrorCode ErrorCode { get; }
+    public string ErrorText { get; }
+    public string FailedUrl { get; }
+    public LoadErrorEventArgs(bool isMainFrame, Cef.CefErrorCode code, string text, string failedUrl)
+    {
+        IsMainFrame = isMainFrame;
+        ErrorCode = code;
+        ErrorText = text;
+        FailedUrl = failedUrl;
     }
 }
 

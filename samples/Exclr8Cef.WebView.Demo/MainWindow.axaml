@@ -81,7 +81,14 @@
         </Grid>
 
         <Border Grid.Row="3" Background="#181825" Padding="12,4">
-            <TextBlock Name="StatusText" Foreground="#A6E3A1" FontSize="11" />
+            <DockPanel LastChildFill="True">
+                <ProgressBar DockPanel.Dock="Right" Name="ProgressBar"
+                             Width="120" Height="6" Minimum="0" Maximum="100"
+                             IsVisible="False" VerticalAlignment="Center"
+                             Foreground="#FAB387" Background="#313244" />
+                <TextBlock Name="StatusText" Foreground="#A6E3A1" FontSize="11"
+                           VerticalAlignment="Center" />
+            </DockPanel>
         </Border>
     </Grid>
 </Window>

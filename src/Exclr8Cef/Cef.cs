@@ -354,6 +354,62 @@ public static class Cef
         Disable = 99,
     }
 
+    /// <summary>
+    /// A useful subset of CEF's <c>cef_errorcode_t</c> (cef_errors.h). All
+    /// codes are negative; 0 = <c>None</c>. Pass unknown values through
+    /// untouched — the underlying int is preserved.
+    /// </summary>
+    public enum CefErrorCode
+    {
+        None = 0,
+        Failed = -2,
+        Aborted = -3,
+        InvalidArgument = -4,
+        InvalidHandle = -5,
+        FileNotFound = -6,
+        TimedOut = -7,
+        FileTooBig = -8,
+        Unexpected = -9,
+        AccessDenied = -10,
+        NotImplemented = -11,
+        InsufficientResources = -12,
+        OutOfMemory = -13,
+        ConnectionClosed = -100,
+        ConnectionReset = -101,
+        ConnectionRefused = -102,
+        ConnectionAborted = -103,
+        ConnectionFailed = -104,
+        NameNotResolved = -105,
+        InternetDisconnected = -106,
+        SslProtocolError = -107,
+        AddressInvalid = -108,
+        AddressUnreachable = -109,
+        SslClientAuthCertNeeded = -110,
+        TunnelConnectionFailed = -111,
+        NoSslVersionsEnabled = -112,
+        SslVersionOrCipherMismatch = -113,
+        SslRenegotiationRequested = -114,
+        CertCommonNameInvalid = -200,
+        CertDateInvalid = -201,
+        CertAuthorityInvalid = -202,
+        CertContainsErrors = -203,
+        CertNoRevocationMechanism = -204,
+        CertUnableToCheckRevocation = -205,
+        CertRevoked = -206,
+        CertInvalid = -207,
+        InvalidUrl = -300,
+        DisallowedUrlScheme = -301,
+        UnknownUrlScheme = -302,
+        UnsafeRedirect = -310,
+        UnsafePort = -311,
+        InvalidResponse = -320,
+        InvalidChunkedEncoding = -321,
+        MethodNotSupported = -322,
+        UnexpectedProxyAuth = -323,
+        EmptyResponse = -324,
+        ResponseHeadersTooBig = -325,
+    }
+
     /// <summary>CEF's <c>cef_cursor_type_t</c>. Maps to OnCursorChange values.</summary>
     public enum CefCursorType
     {
@@ -399,6 +455,10 @@ public static class Cef
                 Excef.excef_set_cookie_visit_callback(&CookieVisitTrampoline);
                 Excef.excef_set_cursor_change_callback(&CursorChangeTrampoline);
                 Excef.excef_set_console_message_callback(&ConsoleMessageTrampoline);
+                Excef.excef_set_load_start_callback(&LoadStartTrampoline);
+                Excef.excef_set_load_end_callback(&LoadEndTrampoline);
+                Excef.excef_set_load_error_callback(&LoadErrorTrampoline);
+                Excef.excef_set_loading_progress_callback(&LoadingProgressTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -443,6 +503,38 @@ public static class Cef
             Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)source) ?? "",
             line);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void LoadStartTrampoline(int browserId, int isMainFrame, sbyte* url)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseLoadStart(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void LoadEndTrampoline(int browserId, int isMainFrame, sbyte* url, int httpStatusCode)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseLoadEnd(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? "", httpStatusCode);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void LoadErrorTrampoline(int browserId, int isMainFrame, int errorCode, sbyte* errorText, sbyte* failedUrl)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseLoadError(
+            isMainFrame != 0,
+            (CefErrorCode)errorCode,
+            Marshal.PtrToStringUTF8((IntPtr)errorText) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)failedUrl) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void LoadingProgressTrampoline(int browserId, double progress)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseLoadingProgress(progress);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

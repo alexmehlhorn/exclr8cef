@@ -171,6 +171,7 @@
     <div class="group">
       <div class="group-title">Events</div>
       <a href="#console">Console messages</a>
+      <a href="#load">Load events</a>
     </div>
   </nav>
 </aside>
@@ -237,6 +238,20 @@
       <a href="https://www.exclr8.com">exclr8.com</a>
       <a href="https://example.com">example.com</a>
       <a href="https://duckduckgo.com">duckduckgo.com</a>
+    </div>
+  </section>
+
+  <section id="load">
+    <h2>Load events</h2>
+    <p class="lede">Trigger different load outcomes. Watch
+       <code>load-start</code> → <code>progress</code> → <code>load-end</code>
+       (or <code>load-err</code>) in the host event console.</p>
+    <div class="row">
+      <button onclick="location.href='https://httpstat.us/200'">200 OK</button>
+      <button onclick="location.href='https://httpstat.us/404'">404 Not Found</button>
+      <button onclick="location.href='https://httpstat.us/500'">500 Server Error</button>
+      <button onclick="location.href='https://does-not-resolve.invalid'">bad host</button>
+      <button onclick="location.href='unsafe://scheme'" class="ghost">unknown scheme</button>
     </div>
   </section>
 

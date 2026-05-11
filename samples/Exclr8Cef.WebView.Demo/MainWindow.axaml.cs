@@ -65,8 +65,46 @@ public partial class MainWindow : Window
             return;
         }
         _browserEventsHooked = true;
-        b.ConsoleMessage += OnBrowserConsoleMessage;
+        b.ConsoleMessage    += OnBrowserConsoleMessage;
+        b.LoadStart         += OnBrowserLoadStart;
+        b.LoadEnd           += OnBrowserLoadEnd;
+        b.LoadError         += OnBrowserLoadError;
+        b.LoadingProgress   += OnBrowserLoadingProgress;
     }
+
+    private static string FrameTag(bool isMainFrame) => isMainFrame ? "[main] " : "[sub]  ";
+
+    private void OnBrowserLoadStart(object? sender, Exclr8Cef.LoadStartEventArgs e)
+        => LogEvent("load-start", FrameTag(e.IsMainFrame) + e.Url);
+
+    private void OnBrowserLoadEnd(object? sender, Exclr8Cef.LoadEndEventArgs e)
+        => LogEvent("load-end", FrameTag(e.IsMainFrame) + (e.HttpStatusCode == 0 ? "" : $"HTTP {e.HttpStatusCode} · ") + e.Url);
+
+    private void OnBrowserLoadError(object? sender, Exclr8Cef.LoadErrorEventArgs e)
+    {
+        // ERR_ABORTED is fired on every intentional navigation cancel (incl.
+        // every reload-during-load) — not really an error worth surfacing as
+        // such. Tag it differently.
+        var cat = e.ErrorCode == Exclr8Cef.Cef.CefErrorCode.Aborted ? "load-abort" : "load-err";
+        LogEvent(cat, FrameTag(e.IsMainFrame) + $"{e.ErrorCode} ({(int)e.ErrorCode}): {e.ErrorText} · {e.FailedUrl}");
+    }
+
+    private void OnBrowserLoadingProgress(object? sender, double progress)
+    {
+        // Throttle: only log on visible-change boundaries (10% buckets) to
+        // avoid spamming the event console with dozens of rows per load.
+        int bucket = (int)Math.Round(progress * 10);
+        if (bucket == _lastProgressBucket) return;
+        _lastProgressBucket = bucket;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            ProgressBar.Value = progress * 100;
+            ProgressBar.IsVisible = progress > 0 && progress < 1;
+        });
+        LogEvent("progress", $"{progress:P0}");
+    }
+
+    private int _lastProgressBucket = -1;
 
     private void OnBrowserConsoleMessage(object? sender, Exclr8Cef.ConsoleMessageEventArgs e)
     {
@@ -216,6 +254,11 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["console.error"]   = SolidColorBrush.Parse("#f38ba8"),
         ["console.fatal"]   = SolidColorBrush.Parse("#f38ba8"),
         ["console.default"] = SolidColorBrush.Parse("#a6adc8"),
+        ["load-start"]      = SolidColorBrush.Parse("#74c7ec"),
+        ["load-end"]        = SolidColorBrush.Parse("#a6e3a1"),
+        ["load-err"]        = SolidColorBrush.Parse("#f38ba8"),
+        ["load-abort"]      = SolidColorBrush.Parse("#6c7086"),
+        ["progress"]        = SolidColorBrush.Parse("#fab387"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

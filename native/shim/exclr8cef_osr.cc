@@ -23,6 +23,10 @@ excef_cookie_visit_cb_t g_cookie_visit_cb = nullptr;
 excef_browser_closed_cb_t g_browser_closed_cb = nullptr;
 excef_cursor_change_cb_t g_cursor_change_cb = nullptr;
 excef_console_message_cb_t g_console_message_cb = nullptr;
+excef_load_start_cb_t g_load_start_cb = nullptr;
+excef_load_end_cb_t g_load_end_cb = nullptr;
+excef_load_error_cb_t g_load_error_cb = nullptr;
+excef_loading_progress_cb_t g_loading_progress_cb = nullptr;
 
 }  // namespace
 
@@ -148,6 +152,45 @@ void Exclr8CefOsrHandler::OnLoadingStateChange(CefRefPtr<CefBrowser> /*browser*/
                            isLoading ? 1 : 0,
                            canGoBack ? 1 : 0,
                            canGoForward ? 1 : 0);
+    }
+}
+
+void Exclr8CefOsrHandler::OnLoadStart(CefRefPtr<CefBrowser> /*browser*/,
+                                       CefRefPtr<CefFrame> frame,
+                                       TransitionType /*transition_type*/) {
+    if (g_load_start_cb) {
+        std::string url = frame->GetURL().ToString();
+        g_load_start_cb(id_, frame->IsMain() ? 1 : 0, url.c_str());
+    }
+}
+
+void Exclr8CefOsrHandler::OnLoadEnd(CefRefPtr<CefBrowser> /*browser*/,
+                                     CefRefPtr<CefFrame> frame,
+                                     int httpStatusCode) {
+    if (g_load_end_cb) {
+        std::string url = frame->GetURL().ToString();
+        g_load_end_cb(id_, frame->IsMain() ? 1 : 0, url.c_str(), httpStatusCode);
+    }
+}
+
+void Exclr8CefOsrHandler::OnLoadError(CefRefPtr<CefBrowser> /*browser*/,
+                                       CefRefPtr<CefFrame> frame,
+                                       ErrorCode errorCode,
+                                       const CefString& errorText,
+                                       const CefString& failedUrl) {
+    if (g_load_error_cb) {
+        std::string text = errorText.ToString();
+        std::string failed = failedUrl.ToString();
+        g_load_error_cb(id_, frame->IsMain() ? 1 : 0,
+                        static_cast<int>(errorCode),
+                        text.c_str(), failed.c_str());
+    }
+}
+
+void Exclr8CefOsrHandler::OnLoadingProgressChange(CefRefPtr<CefBrowser> /*browser*/,
+                                                   double progress) {
+    if (g_loading_progress_cb) {
+        g_loading_progress_cb(id_, progress);
     }
 }
 
@@ -469,6 +512,10 @@ extern "C" void excef_set_loading_state_callback(excef_loading_state_cb_t cb) { 
 extern "C" void excef_set_browser_closed_callback(excef_browser_closed_cb_t cb) { exclr8cef::g_browser_closed_cb = cb; }
 extern "C" void excef_set_cursor_change_callback(excef_cursor_change_cb_t cb) { exclr8cef::g_cursor_change_cb = cb; }
 extern "C" void excef_set_console_message_callback(excef_console_message_cb_t cb) { exclr8cef::g_console_message_cb = cb; }
+extern "C" void excef_set_load_start_callback(excef_load_start_cb_t cb) { exclr8cef::g_load_start_cb = cb; }
+extern "C" void excef_set_load_end_callback(excef_load_end_cb_t cb) { exclr8cef::g_load_end_cb = cb; }
+extern "C" void excef_set_load_error_callback(excef_load_error_cb_t cb) { exclr8cef::g_load_error_cb = cb; }
+extern "C" void excef_set_loading_progress_callback(excef_loading_progress_cb_t cb) { exclr8cef::g_loading_progress_cb = cb; }
 
 // ---- Cookies --------------------------------------------------------------
 

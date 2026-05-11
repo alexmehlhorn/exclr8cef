@@ -173,6 +173,18 @@ internal static unsafe partial class Excef
     public static extern void excef_set_console_message_callback([NativeTypeName("excef_console_message_cb_t")] delegate* unmanaged[Cdecl]<int, int, sbyte*, sbyte*, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_load_start_callback([NativeTypeName("excef_load_start_cb_t")] delegate* unmanaged[Cdecl]<int, int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_load_end_callback([NativeTypeName("excef_load_end_cb_t")] delegate* unmanaged[Cdecl]<int, int, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_load_error_callback([NativeTypeName("excef_load_error_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_loading_progress_callback([NativeTypeName("excef_loading_progress_cb_t")] delegate* unmanaged[Cdecl]<int, double, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

@@ -378,6 +378,22 @@ typedef void (*excef_console_message_cb_t)(int browser_id,
                                              int line);
 EXCEF_API void excef_set_console_message_callback(excef_console_message_cb_t cb);
 
+// ---- Per-frame Load events ----------------------------------------------
+//
+// CefLoadHandler. Fire once per frame; is_main_frame=1 lets hosts filter
+// to top-level navigations. http_status_code is the actual HTTP status
+// on LoadEnd (0 for non-HTTP loads / data: / file:). error_code on
+// LoadError is from cef_errors.h (a negative integer; 0 = ERR_NONE).
+typedef void (*excef_load_start_cb_t)(int browser_id, int is_main_frame, const char* url);
+typedef void (*excef_load_end_cb_t)(int browser_id, int is_main_frame, const char* url, int http_status_code);
+typedef void (*excef_load_error_cb_t)(int browser_id, int is_main_frame, int error_code, const char* error_text, const char* failed_url);
+typedef void (*excef_loading_progress_cb_t)(int browser_id, double progress);
+
+EXCEF_API void excef_set_load_start_callback(excef_load_start_cb_t cb);
+EXCEF_API void excef_set_load_end_callback(excef_load_end_cb_t cb);
+EXCEF_API void excef_set_load_error_callback(excef_load_error_cb_t cb);
+EXCEF_API void excef_set_loading_progress_callback(excef_loading_progress_cb_t cb);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these
