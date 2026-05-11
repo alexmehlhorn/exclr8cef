@@ -65,9 +65,13 @@ internal static class Program
         });
 
         // Register `app://` custom scheme so the demo's static assets can be
-        // served from disk via a real host/path URL (instead of file:// with
-        // its origin-isolation quirks). MUST happen before init.
-        Cef.RegisterCustomScheme("app", standard: true, secure: true, corsEnabled: true);
+        // served from disk via a real host/path URL. The CEF forum
+        // consensus is to use STANDARD alone for top-level navigation —
+        // SECURE / CORS_ENABLED add security-policy checks that can abort
+        // navigation to the custom scheme with net::ERR_ABORTED. Add them
+        // later if you actually need secure-context or cross-origin
+        // semantics for your scheme.
+        Cef.RegisterCustomScheme("app", standard: true, secure: false, corsEnabled: false);
         Cef.SchemeRequest += OnSchemeRequest;
 
         // CEF in OSR mode (windowless rendering + external pump).

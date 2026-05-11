@@ -27,17 +27,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = this;
 
-        // Load the test page from disk. We register `app://` in Program.cs
-        // and the scheme handler chain works end-to-end for resource
-        // fetches, but top-level navigation to a custom scheme in CEF 147
-        // OSR aborts the document load with net::ERR_ABORTED before the
-        // body is parsed — needs investigation. file:// works reliably for
-        // the demo's purposes.
-        var htmlPath = Path.Combine(AppContext.BaseDirectory, "test-page.html");
-        if (File.Exists(htmlPath))
-        {
-            Browser.Url = "file://" + htmlPath;
-        }
+        // Load the test page through our custom app:// scheme — proves
+        // the resource handler delivers a top-level navigation cleanly.
+        Browser.Url = "app://demo/test-page.html";
 
         Browser.PropertyChanged += OnBrowserPropertyChanged;
 

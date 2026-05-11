@@ -1,5 +1,6 @@
 #include "exclr8cef_app.h"
 
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -143,49 +144,18 @@ void Exclr8CefApp::OnBeforeCommandLineProcessing(
     const CefString& process_type,
     CefRefPtr<CefCommandLine> command_line) {
     if (process_type.empty()) {
-        // Main process. Apply default switches + serialize our custom-scheme
-        // list to a flag so child processes (renderer, GPU, utility) can
-        // re-populate their own g_custom_schemes when this method fires
-        // again over there.
+        // Main process — apply default switches. Scheme propagation to
+        // subprocesses happens via EXCLR8CEF_SCHEMES env var (set in
+        // AddCustomScheme), not via cmdline (Chromium filters custom
+        // switches before passing cmdline to children).
         command_line->AppendSwitch("use-mock-keychain");
-
-        std::vector<CustomSchemeEntry> schemes;
-        {
-            std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
-            schemes = g_custom_schemes;
-        }
-        if (!schemes.empty()) {
-            std::string serialized;
-            for (size_t i = 0; i < schemes.size(); ++i) {
-                if (i) serialized += ',';
-                serialized += schemes[i].name;
-                serialized += ':';
-                serialized += std::to_string(schemes[i].options);
-            }
-            command_line->AppendSwitchWithValue("exclr8cef-schemes", serialized);
-        }
         return;
     }
 
-    // Subprocess (renderer / GPU / utility). Decode the scheme list our main
-    // process passed via cmdline and re-populate g_custom_schemes so
-    // OnRegisterCustomSchemes (called next in the lifecycle) sees them.
-    if (command_line->HasSwitch("exclr8cef-schemes")) {
-        std::string val = command_line->GetSwitchValue("exclr8cef-schemes").ToString();
-        size_t start = 0;
-        for (size_t i = 0; i <= val.size(); ++i) {
-            if (i == val.size() || val[i] == ',') {
-                auto chunk = val.substr(start, i - start);
-                auto colon = chunk.find(':');
-                if (colon != std::string::npos) {
-                    std::string name = chunk.substr(0, colon);
-                    int opts = std::atoi(chunk.substr(colon + 1).c_str());
-                    AddCustomScheme(name, opts);
-                }
-                start = i + 1;
-            }
-        }
-    }
+    // Subprocess (renderer / GPU / utility / network). Inherit scheme
+    // registrations from the env var the browser process exported, so the
+    // OnRegisterCustomSchemes call that fires next has them.
+    LoadSchemesFromEnv();
 }
 
 void Exclr8CefApp::OnRegisterCustomSchemes(
@@ -212,11 +182,57 @@ std::vector<std::string> GetRegisteredSchemeNames() {
 }
 
 void AddCustomScheme(const std::string& name, int options) {
-    std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
-    for (auto& e : g_custom_schemes) {
-        if (e.name == name) { e.options = options; return; }
+    {
+        std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+        for (auto& e : g_custom_schemes) {
+            if (e.name == name) { e.options = options; return; }
+        }
+        g_custom_schemes.push_back({name, options});
     }
-    g_custom_schemes.push_back({name, options});
+
+    // Also export the full list via an env var so subprocesses (spawned
+    // by Chromium after init) can re-populate their own g_custom_schemes
+    // and register the schemes locally. Custom cmdline switches we
+    // AppendSwitchWithValue in the browser process do NOT auto-propagate
+    // — Chromium filters them — so env var is the portable route.
+    std::string serialized;
+    {
+        std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+        for (size_t i = 0; i < g_custom_schemes.size(); ++i) {
+            if (i) serialized += ',';
+            serialized += g_custom_schemes[i].name;
+            serialized += ':';
+            serialized += std::to_string(g_custom_schemes[i].options);
+        }
+    }
+    setenv("EXCLR8CEF_SCHEMES", serialized.c_str(), /*overwrite=*/1);
+}
+
+// Load the scheme list from the environment (used by subprocesses, which
+// don't see the host's AddCustomScheme calls but inherit the env var from
+// the browser process that spawned them).
+void LoadSchemesFromEnv() {
+    const char* env = std::getenv("EXCLR8CEF_SCHEMES");
+    if (!env || !*env) return;
+    std::string val(env);
+    size_t start = 0;
+    for (size_t i = 0; i <= val.size(); ++i) {
+        if (i == val.size() || val[i] == ',') {
+            auto chunk = val.substr(start, i - start);
+            auto colon = chunk.find(':');
+            if (colon != std::string::npos) {
+                std::string name = chunk.substr(0, colon);
+                int opts = std::atoi(chunk.substr(colon + 1).c_str());
+                std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+                bool found = false;
+                for (auto& e : g_custom_schemes) {
+                    if (e.name == name) { e.options = opts; found = true; break; }
+                }
+                if (!found) g_custom_schemes.push_back({name, opts});
+            }
+            start = i + 1;
+        }
+    }
 }
 
 void Exclr8CefApp::OnContextInitialized() {

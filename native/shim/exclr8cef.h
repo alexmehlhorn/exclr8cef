@@ -744,6 +744,7 @@ EXCEF_API void excef_resolve_scheme_request(
     const unsigned char* body,
     int body_length);
 
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

@@ -110,18 +110,6 @@ std::map<uint64_t, PendingAuth> g_auth_pending;
 std::mutex g_scheme_mu;
 std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
 
-class SchemeResourceHandler;  // forward decl for the notify task
-
-// Posted from Open() so the host event handler runs after Open returns.
-class NotifyHostSchemeTask : public CefTask {
-public:
-    explicit NotifyHostSchemeTask(CefRefPtr<SchemeResourceHandler> h) : h_(std::move(h)) {}
-    void Execute() override;  // defined out-of-line below the handler class
-private:
-    CefRefPtr<SchemeResourceHandler> h_;
-    IMPLEMENT_REFCOUNTING(NotifyHostSchemeTask);
-};
-
 // Resource handler for our custom schemes. One instance per request.
 // Open() defers via CefCallback while the host computes the response;
 // the host's resolve fills body/status/mime and Continue()s the callback,
@@ -137,42 +125,36 @@ public:
     bool Open(CefRefPtr<CefRequest> /*request*/,
               bool& handle_request,
               CefRefPtr<CefCallback> callback) override {
-        // Always defer. The host's event handler often runs synchronously
-        // (file I/O, simple lookups) and would call our resolve fn BEFORE
-        // Open() returns. CEF's state machine cancels the request if
-        // Continue() fires while still inside Open — observed as
-        // net::ERR_ABORTED. Posting the host notification ensures Open
-        // returns first; the host's Continue() lands in a fresh stack
-        // frame on the IO thread.
-        handle_request = false;
+        // Run host notification. If the host's handler resolves
+        // synchronously (returns Continue/NotFound before unwinding), the
+        // response is ready by the time we get back here — we mark
+        // handle_request=true and don't need the deferred callback. If the
+        // host is async (Resolve fires later), handle_request=false and
+        // CEF waits for callback_->Continue(), which Resolve() invokes
+        // once Open has returned.
+        in_open_ = true;
         callback_ = callback;
         if (!g_scheme_request_cb) {
             status_code_ = 404; status_text_ = "Not Found";
             mime_type_ = "text/plain";
-            // Even for 404 we have to defer — same reason.
-            CefRefPtr<SchemeResourceHandler> self(this);
-            CefPostTask(TID_IO, CefRefPtr<CefTask>(new NotifyHostSchemeTask(self)));
-            return true;
+            resolved_ = true;
+        } else {
+            {
+                std::lock_guard<std::mutex> lock(g_scheme_mu);
+                g_scheme_pending[token_] = PendingSchemeRequest{browser_id_, this};
+            }
+            g_scheme_request_cb(browser_id_, token_, url_.c_str(), method_.c_str());
         }
-        {
-            std::lock_guard<std::mutex> lock(g_scheme_mu);
-            g_scheme_pending[token_] = PendingSchemeRequest{browser_id_, this};
+        in_open_ = false;
+        if (resolved_) {
+            // Sync path: no need for the callback (we'd call it from inside
+            // Open which CEF treats as an error → net::ERR_ABORTED).
+            callback_ = nullptr;
+            handle_request = true;
+        } else {
+            handle_request = false;
         }
-        CefRefPtr<SchemeResourceHandler> self(this);
-        CefPostTask(TID_IO, CefRefPtr<CefTask>(new NotifyHostSchemeTask(self)));
         return true;
-    }
-
-    // Called from the posted task once Open has returned. Fires the host
-    // callback (which may call Resolve() synchronously — fine now, we're
-    // outside Open).
-    void NotifyHost() {
-        if (!g_scheme_request_cb) {
-            // 404 path: just unblock CEF.
-            if (callback_) { callback_->Continue(); callback_ = nullptr; }
-            return;
-        }
-        g_scheme_request_cb(browser_id_, token_, url_.c_str(), method_.c_str());
     }
 
     void GetResponseHeaders(CefRefPtr<CefResponse> response,
@@ -181,12 +163,24 @@ public:
         response->SetStatus(status_code_);
         if (!status_text_.empty())
             response->SetStatusText(status_text_);
-        if (!mime_type_.empty())
-            response->SetMimeType(mime_type_);
-        // -1 = unknown length; CEF reads until Read returns false. Setting
-        // an explicit Content-Length triggered net::ERR_ABORTED in CEF 147
-        // even though our Read returned exactly that many bytes — likely a
-        // mismatch between SetStatus/length expectations.
+        if (!mime_type_.empty()) {
+            // SetMimeType expects ONLY the type ("text/html"), not a full
+            // Content-Type value with parameters ("text/html; charset=...").
+            // CEF treats the full string as the type, fails its internal
+            // is-this-HTML check, and the renderer falls back to
+            // plain-text display. Strip everything after the semicolon
+            // and pass the charset as a separate Content-Type header.
+            auto semi = mime_type_.find(';');
+            std::string type = semi == std::string::npos ? mime_type_
+                                                          : mime_type_.substr(0, semi);
+            response->SetMimeType(type);
+            // Preserve the full Content-Type (with charset) in the header
+            // map so the renderer can still pick up character encoding.
+            CefResponse::HeaderMap headers;
+            response->GetHeaderMap(headers);
+            headers.emplace("Content-Type", mime_type_);
+            response->SetHeaderMap(headers);
+        }
         response_length = -1;
     }
 
@@ -215,7 +209,11 @@ public:
         status_text_ = std::move(status_text);
         mime_type_ = std::move(mime_type);
         body_ = std::move(body);
-        if (callback_) {
+        resolved_ = true;
+        // Only Continue() if we're truly async (Open has already returned).
+        // If we're still inside Open, the sync-path check in Open will
+        // unblock CEF by setting handle_request=true.
+        if (!in_open_ && callback_) {
             callback_->Continue();
             callback_ = nullptr;
         }
@@ -234,13 +232,11 @@ private:
     std::string mime_type_ = "text/plain";
     std::vector<uint8_t> body_;
     size_t read_pos_ = 0;
+    bool resolved_ = false;  // host called Resolve() yet?
+    bool in_open_ = false;   // are we currently inside Open()?
 
     IMPLEMENT_REFCOUNTING(SchemeResourceHandler);
 };
-
-void NotifyHostSchemeTask::Execute() {
-    if (h_) h_->NotifyHost();
-}
 
 // Factory: one per scheme registered with CEF. Creates a fresh handler
 // per request.
