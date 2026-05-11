@@ -90,6 +90,26 @@ public partial class MainWindow : Window
         b.DragStarted           += OnBrowserDragStarted;
         b.PermissionRequest     += OnBrowserPermissionRequest;
         b.MediaAccessRequest    += OnBrowserMediaAccessRequest;
+        b.BeforePopup           += OnBrowserBeforePopup;
+    }
+
+    private void OnBrowserBeforePopup(object? sender, Exclr8Cef.BeforePopupEventArgs e)
+    {
+        LogEvent("popup", $"{e.Disposition} → {e.TargetUrl} (user_gesture={e.UserGesture})");
+        // Open the URL in the system's default browser. CEF has already
+        // cancelled the popup at this point (subscriber-present → cancel).
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = e.TargetUrl,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            LogEvent("popup", $"open failed: {ex.Message}");
+        }
     }
 
     private async void OnBrowserPermissionRequest(object? sender, Exclr8Cef.PermissionRequestEventArgs e)

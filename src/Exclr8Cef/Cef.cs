@@ -577,6 +577,27 @@ public static class Cef
     }
 
     /// <summary>
+    /// How the page wanted to open the popup. Mirrors
+    /// <c>cef_window_open_disposition_t</c>. Most pages use
+    /// <see cref="NewForegroundTab"/> for <c>window.open()</c>.
+    /// </summary>
+    public enum WindowOpenDisposition
+    {
+        Unknown = 0,
+        CurrentTab = 1,
+        SingletonTab = 2,
+        NewForegroundTab = 3,
+        NewBackgroundTab = 4,
+        NewPopup = 5,
+        NewWindow = 6,
+        SaveToDisk = 7,
+        OffTheRecord = 8,
+        IgnoreAction = 9,
+        SwitchToTab = 10,
+        NewPictureInPicture = 11,
+    }
+
+    /// <summary>
     /// Args for <see cref="SchemeRequest"/>. Host MUST call exactly one of
     /// <see cref="Continue"/> / <see cref="NotFound"/>.
     /// </summary>
@@ -817,6 +838,7 @@ public static class Cef
                 Excef.excef_set_drag_image_callback(&DragImageTrampoline);
                 Excef.excef_set_permission_prompt_callback(&PermissionPromptTrampoline);
                 Excef.excef_set_media_access_callback(&MediaAccessTrampoline);
+                Excef.excef_set_before_popup_callback(&BeforePopupTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1068,6 +1090,19 @@ public static class Cef
             Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
             (PermissionRequestType)requestedPermissions);
         b.RaisePermissionRequest(args);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void BeforePopupTrampoline(
+        int browserId, sbyte* targetUrl, sbyte* targetFrameName,
+        int disposition, int userGesture)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseBeforePopup(new BeforePopupEventArgs(
+            Marshal.PtrToStringUTF8((IntPtr)targetUrl) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)targetFrameName) ?? "",
+            (WindowOpenDisposition)disposition,
+            userGesture != 0));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

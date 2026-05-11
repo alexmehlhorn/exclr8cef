@@ -277,6 +277,16 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<MediaAccessRequestEventArgs>? MediaAccessRequest;
 
     /// <summary>
+    /// The page tried to open a new browser (window.open, target=_blank).
+    /// CefLifeSpanHandler::OnBeforePopup. When subscribed, the popup is
+    /// ALWAYS cancelled at the CEF layer and the host decides what to do
+    /// with the URL — open in a real browser, load in another WebView,
+    /// suppress, etc. With no subscriber, CEF creates a popup browser
+    /// (mostly unusable in OSR).
+    /// </summary>
+    public event EventHandler<BeforePopupEventArgs>? BeforePopup;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -849,6 +859,9 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseMediaAccessRequest(MediaAccessRequestEventArgs args)
         => MediaAccessRequest?.Invoke(this, args);
 
+    internal void RaiseBeforePopup(BeforePopupEventArgs args)
+        => BeforePopup?.Invoke(this, args);
+
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
     /// default. With it enabled, <see cref="AccessibilityTreeChange"/>
@@ -1282,6 +1295,27 @@ public sealed class DragImageEventArgs : EventArgs
         Height = height;
         HotspotX = hotspotX;
         HotspotY = hotspotY;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.BeforePopup"/>.</summary>
+public sealed class BeforePopupEventArgs : EventArgs
+{
+    /// <summary>URL the page asked to open.</summary>
+    public string TargetUrl { get; }
+    /// <summary><c>window.open</c>'s second argument; empty if not provided.</summary>
+    public string TargetFrameName { get; }
+    public Cef.WindowOpenDisposition Disposition { get; }
+    /// <summary>True if a user gesture (click) initiated the open; false for scripted opens.</summary>
+    public bool UserGesture { get; }
+
+    internal BeforePopupEventArgs(string targetUrl, string targetFrameName,
+                                   Cef.WindowOpenDisposition disposition, bool userGesture)
+    {
+        TargetUrl = targetUrl;
+        TargetFrameName = targetFrameName;
+        Disposition = disposition;
+        UserGesture = userGesture;
     }
 }
 

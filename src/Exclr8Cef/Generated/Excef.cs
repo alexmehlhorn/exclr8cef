@@ -101,6 +101,9 @@ internal static unsafe partial class Excef
     public static extern void excef_resolve_media_access(ulong token, int granted_permissions);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_before_popup_callback([NativeTypeName("excef_before_popup_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_drag_source_ended_at(int browser_id, int x, int y, int op);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

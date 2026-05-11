@@ -190,6 +190,7 @@
       <a href="#download">Downloads</a>
       <a href="#auth">Auth + Find</a>
       <a href="#permissions">Permissions</a>
+      <a href="#popup">Popup intercept</a>
       <a href="#crash">Renderer crash</a>
       <a href="#config">Init settings</a>
     </div>
@@ -302,6 +303,18 @@
       <button id="pCam">Camera</button>
     </div>
     <p><small id="permOut">(no result yet)</small></p>
+  </section>
+
+  <section id="popup">
+    <h2>Popup intercept</h2>
+    <p class="lede">Each link tries to open a new browser window — the host
+       catches it via <code>CefLifeSpanHandler::OnBeforePopup</code>, cancels
+       the popup at the CEF layer, and routes the URL to the system's default
+       browser. The event console shows the disposition + URL.</p>
+    <div class="row">
+      <button id="popOpen">window.open(example.com)</button>
+      <a href="https://example.com" target="_blank">target=_blank link</a>
+    </div>
   </section>
 
   <section id="crash">
@@ -674,6 +687,11 @@
       s.getTracks().forEach(t => t.stop());
       setPermOut('Camera', true);
     } catch (e) { setPermOut('Camera', false, e.message); }
+  });
+
+  // Popup intercept
+  $('#popOpen').addEventListener('click', () => {
+    window.open('https://example.com', '_blank', 'width=400,height=300');
   });
 </script>
 </body>

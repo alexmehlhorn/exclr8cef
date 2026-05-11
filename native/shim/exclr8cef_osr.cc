@@ -74,6 +74,7 @@ excef_start_drag_cb_t g_start_drag_cb = nullptr;
 excef_drag_image_cb_t g_drag_image_cb = nullptr;
 excef_permission_prompt_cb_t g_permission_prompt_cb = nullptr;
 excef_media_access_cb_t g_media_access_cb = nullptr;
+excef_before_popup_cb_t g_before_popup_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -757,6 +758,29 @@ void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     if (g_browser_initialized_cb) {
         g_browser_initialized_cb(id_);
     }
+}
+
+bool Exclr8CefOsrHandler::OnBeforePopup(
+        CefRefPtr<CefBrowser> /*browser*/,
+        CefRefPtr<CefFrame> /*frame*/,
+        int /*popup_id*/,
+        const CefString& target_url,
+        const CefString& target_frame_name,
+        WindowOpenDisposition target_disposition,
+        bool user_gesture,
+        const CefPopupFeatures& /*popupFeatures*/,
+        CefWindowInfo& /*windowInfo*/,
+        CefRefPtr<CefClient>& /*client*/,
+        CefBrowserSettings& /*settings*/,
+        CefRefPtr<CefDictionaryValue>& /*extra_info*/,
+        bool* /*no_javascript_access*/) {
+    if (!g_before_popup_cb) return false;  // default — allow popup creation
+    std::string url = target_url.ToString();
+    std::string frame_name = target_frame_name.ToString();
+    g_before_popup_cb(id_, url.c_str(), frame_name.c_str(),
+                       static_cast<int>(target_disposition),
+                       user_gesture ? 1 : 0);
+    return true;  // cancel — host took ownership of the URL
 }
 
 void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
@@ -1650,6 +1674,10 @@ extern "C" void excef_resolve_permission_prompt(uint64_t token, int result) {
 
 extern "C" void excef_set_media_access_callback(excef_media_access_cb_t cb) {
     exclr8cef::g_media_access_cb = cb;
+}
+
+extern "C" void excef_set_before_popup_callback(excef_before_popup_cb_t cb) {
+    exclr8cef::g_before_popup_cb = cb;
 }
 
 extern "C" void excef_resolve_media_access(uint64_t token, int granted_permissions) {

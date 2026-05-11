@@ -682,6 +682,30 @@ typedef struct excef_init_settings {
 // to defaults. The struct is copied; pointers don't need to outlive the call.
 EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 
+// ---- LifeSpan: OnBeforePopup -------------------------------------------
+//
+// CefLifeSpanHandler::OnBeforePopup. Fires when the page tries to open a
+// new browser window (window.open(), target="_blank" navigations, Ctrl-click
+// link, etc.). Note: this is the *new-browser* popup path, distinct from
+// the CefRenderHandler popup paint pipeline used for `<select>` dropdowns
+// and autocomplete — those continue to work regardless of this hook.
+//
+// Without a subscriber, CEF proceeds with the default behavior (creates a
+// popup browser, which in OSR mode is mostly unusable). With a subscriber,
+// the popup is ALWAYS cancelled at the CEF layer; the host receives the
+// URL via this callback and decides what to do (open externally via
+// Process.Start, create a new WebView, suppress, …).
+//
+// `disposition` mirrors cef_window_open_disposition_t: 0=unknown, 1=current
+// tab, 5=new popup, 6=new window, etc. `user_gesture` is 1 if a user
+// interaction (click) initiated the open, 0 if scripted.
+typedef void (*excef_before_popup_cb_t)(int browser_id,
+                                          const char* target_url,
+                                          const char* target_frame_name,
+                                          int disposition,
+                                          int user_gesture);
+EXCEF_API void excef_set_before_popup_callback(excef_before_popup_cb_t cb);
+
 // ---- Permission handler ------------------------------------------------
 //
 // Two distinct hooks. Both follow the deferred-response pattern.
