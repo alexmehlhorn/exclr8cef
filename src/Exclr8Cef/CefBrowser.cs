@@ -287,6 +287,15 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<BeforePopupEventArgs>? BeforePopup;
 
     /// <summary>
+    /// TLS verification failed (self-signed, expired, hostname mismatch).
+    /// CefRequestHandler::OnCertificateError. Host MUST call
+    /// <see cref="CertErrorEventArgs.Proceed"/> or
+    /// <see cref="CertErrorEventArgs.Cancel"/>. With no subscriber the
+    /// load fails normally.
+    /// </summary>
+    public event EventHandler<CertErrorEventArgs>? CertError;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -862,6 +871,10 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseBeforePopup(BeforePopupEventArgs args)
         => BeforePopup?.Invoke(this, args);
 
+    internal bool HasCertErrorSubscriber => CertError is not null;
+    internal void RaiseCertError(CertErrorEventArgs args)
+        => CertError?.Invoke(this, args);
+
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
     /// default. With it enabled, <see cref="AccessibilityTreeChange"/>
@@ -1295,6 +1308,43 @@ public sealed class DragImageEventArgs : EventArgs
         Height = height;
         HotspotX = hotspotX;
         HotspotY = hotspotY;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.CertError"/>.</summary>
+public sealed class CertErrorEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    /// <summary>Specific cert error from <see cref="Cef.CefErrorCode"/> (e.g. CertAuthorityInvalid, CertDateInvalid).</summary>
+    public Cef.CefErrorCode ErrorCode { get; }
+    public string RequestUrl { get; }
+    public string SubjectCommonName { get; }
+    public string IssuerCommonName { get; }
+
+    internal CertErrorEventArgs(ulong token, Cef.CefErrorCode errorCode,
+                                  string requestUrl, string subjectCn, string issuerCn)
+    {
+        _token = token;
+        ErrorCode = errorCode;
+        RequestUrl = requestUrl;
+        SubjectCommonName = subjectCn;
+        IssuerCommonName = issuerCn;
+    }
+
+    /// <summary>Trust this cert for the current request. Idempotent.</summary>
+    public void Proceed()
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Excef.excef_resolve_cert_error(_token, 1);
+    }
+
+    /// <summary>Block the load (page sees the error).</summary>
+    public void Cancel()
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Excef.excef_resolve_cert_error(_token, 0);
     }
 }
 

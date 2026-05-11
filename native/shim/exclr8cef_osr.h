@@ -137,6 +137,12 @@ public:
                                     int error_code,
                                     const CefString& error_string) override;
 
+    bool OnCertificateError(CefRefPtr<CefBrowser> browser,
+                              cef_errorcode_t cert_error,
+                              const CefString& request_url,
+                              CefRefPtr<CefSSLInfo> ssl_info,
+                              CefRefPtr<CefCallback> callback) override;
+
     // Return ourselves as the resource handler for every request — keeps
     // the v1 implementation flat (one CefResourceRequestHandler instance
     // shared, not one per request).

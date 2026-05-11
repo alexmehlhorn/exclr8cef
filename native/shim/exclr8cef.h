@@ -682,6 +682,30 @@ typedef struct excef_init_settings {
 // to defaults. The struct is copied; pointers don't need to outlive the call.
 EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 
+// ---- Certificate error handler -----------------------------------------
+//
+// CefRequestHandler::OnCertificateError. Fires when a TLS connection
+// can't be verified (self-signed, expired, hostname mismatch, …). Without
+// a subscriber, CEF reports the error as a normal load failure (the page
+// shows Chromium's interstitial). With a subscriber, the host receives
+// the URL + subject/issuer common names and decides to proceed or block.
+//
+// `cert_error` is from cef_errorcode_t (negative int, e.g.
+// ERR_CERT_AUTHORITY_INVALID=-202, ERR_CERT_DATE_INVALID=-201).
+//
+// Deferred-response pattern — host calls excef_resolve_cert_error(token,
+// proceed): proceed=1 continues the load (treat cert as trusted for this
+// request only); proceed=0 cancels (page sees the load failure).
+typedef void (*excef_cert_error_cb_t)(int browser_id,
+                                        unsigned long long token,
+                                        int cert_error,
+                                        const char* request_url,
+                                        const char* subject_common_name,
+                                        const char* issuer_common_name);
+
+EXCEF_API void excef_set_cert_error_callback(excef_cert_error_cb_t cb);
+EXCEF_API void excef_resolve_cert_error(unsigned long long token, int proceed);
+
 // ---- LifeSpan: OnBeforePopup -------------------------------------------
 //
 // CefLifeSpanHandler::OnBeforePopup. Fires when the page tries to open a

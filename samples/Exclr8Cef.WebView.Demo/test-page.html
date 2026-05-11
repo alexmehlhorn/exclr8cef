@@ -191,6 +191,7 @@
       <a href="#auth">Auth + Find</a>
       <a href="#permissions">Permissions</a>
       <a href="#popup">Popup intercept</a>
+      <a href="#cert">TLS cert errors</a>
       <a href="#crash">Renderer crash</a>
       <a href="#config">Init settings</a>
     </div>
@@ -314,6 +315,19 @@
     <div class="row">
       <button id="popOpen">window.open(example.com)</button>
       <a href="https://example.com" target="_blank">target=_blank link</a>
+    </div>
+  </section>
+
+  <section id="cert">
+    <h2>TLS cert errors</h2>
+    <p class="lede">Loads a self-signed-cert host. The host intercepts via
+       <code>OnCertificateError</code>, shows a confirm dialog with the
+       subject/issuer, and either proceeds (cert trusted for this load only)
+       or cancels (page sees the load failure).</p>
+    <div class="row">
+      <a href="https://self-signed.badssl.com/" target="_self">self-signed.badssl.com</a>
+      <a href="https://expired.badssl.com/" target="_self">expired.badssl.com</a>
+      <a href="https://wrong.host.badssl.com/" target="_self">wrong.host.badssl.com</a>
     </div>
   </section>
 

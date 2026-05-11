@@ -75,6 +75,7 @@ excef_drag_image_cb_t g_drag_image_cb = nullptr;
 excef_permission_prompt_cb_t g_permission_prompt_cb = nullptr;
 excef_media_access_cb_t g_media_access_cb = nullptr;
 excef_before_popup_cb_t g_before_popup_cb = nullptr;
+excef_cert_error_cb_t g_cert_error_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -113,6 +114,10 @@ struct PendingMediaAccess {
     CefRefPtr<CefMediaAccessCallback> callback;
     uint32_t requested;  // mask of requested perms, for clamping the response
 };
+struct PendingCertError {
+    int browser_id;
+    CefRefPtr<CefCallback> callback;
+};
 
 // Scheme-request handler state. The resource handler instance lives across
 // Open() / GetResponseHeaders() / Read() — the host's resolve fills in
@@ -148,6 +153,8 @@ std::mutex g_permission_prompt_mu;
 std::map<uint64_t, PendingPermissionPrompt> g_permission_prompt_pending;
 std::mutex g_media_access_mu;
 std::map<uint64_t, PendingMediaAccess> g_media_access_pending;
+std::mutex g_cert_error_mu;
+std::map<uint64_t, PendingCertError> g_cert_error_pending;
 std::mutex g_scheme_mu;
 std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
 std::mutex g_resource_request_mu;
@@ -518,6 +525,33 @@ void Exclr8CefOsrHandler::OnRenderProcessTerminated(CefRefPtr<CefBrowser> /*brow
         g_render_process_gone_cb(id_, static_cast<int>(status),
                                   error_code, err.c_str());
     }
+}
+
+bool Exclr8CefOsrHandler::OnCertificateError(
+        CefRefPtr<CefBrowser> /*browser*/,
+        cef_errorcode_t cert_error,
+        const CefString& request_url,
+        CefRefPtr<CefSSLInfo> ssl_info,
+        CefRefPtr<CefCallback> callback) {
+    if (!g_cert_error_cb) return false;  // CEF reports as load failure
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_cert_error_mu);
+        g_cert_error_pending[token] = PendingCertError{id_, callback};
+    }
+    std::string url = request_url.ToString();
+    std::string subject_cn, issuer_cn;
+    if (ssl_info) {
+        if (auto cert = ssl_info->GetX509Certificate()) {
+            if (auto subject = cert->GetSubject())
+                subject_cn = subject->GetCommonName().ToString();
+            if (auto issuer = cert->GetIssuer())
+                issuer_cn = issuer->GetCommonName().ToString();
+        }
+    }
+    g_cert_error_cb(id_, token, static_cast<int>(cert_error),
+                     url.c_str(), subject_cn.c_str(), issuer_cn.c_str());
+    return true;
 }
 
 CefRefPtr<CefResourceRequestHandler>
@@ -900,6 +934,17 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Cancel();
                 it = g_media_access_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_cert_error_mu);
+        for (auto it = g_cert_error_pending.begin(); it != g_cert_error_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_cert_error_pending.erase(it);
             } else {
                 ++it;
             }
@@ -1624,6 +1669,21 @@ private:
     uint32_t granted_;
     IMPLEMENT_REFCOUNTING(MediaAccessResolveTask);
 };
+
+class CertErrorResolveTask : public CefTask {
+public:
+    CertErrorResolveTask(CefRefPtr<CefCallback> cb, bool proceed)
+        : cb_(std::move(cb)), proceed_(proceed) {}
+    void Execute() override {
+        if (!cb_) return;
+        if (proceed_) cb_->Continue();
+        else cb_->Cancel();
+    }
+private:
+    CefRefPtr<CefCallback> cb_;
+    bool proceed_;
+    IMPLEMENT_REFCOUNTING(CertErrorResolveTask);
+};
 }  // namespace
 
 extern "C" void excef_resolve_auth(uint64_t token, const char* username, const char* password) {
@@ -1678,6 +1738,29 @@ extern "C" void excef_set_media_access_callback(excef_media_access_cb_t cb) {
 
 extern "C" void excef_set_before_popup_callback(excef_before_popup_cb_t cb) {
     exclr8cef::g_before_popup_cb = cb;
+}
+
+extern "C" void excef_set_cert_error_callback(excef_cert_error_cb_t cb) {
+    exclr8cef::g_cert_error_cb = cb;
+}
+
+extern "C" void excef_resolve_cert_error(uint64_t token, int proceed) {
+    CefRefPtr<CefCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_cert_error_mu);
+        auto it = exclr8cef::g_cert_error_pending.find(token);
+        if (it == exclr8cef::g_cert_error_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_cert_error_pending.erase(it);
+    }
+    if (!callback) return;
+    bool ok = proceed != 0;
+    if (CefCurrentlyOn(TID_UI)) {
+        if (ok) callback->Continue();
+        else callback->Cancel();
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(new CertErrorResolveTask(callback, ok)));
+    }
 }
 
 extern "C" void excef_resolve_media_access(uint64_t token, int granted_permissions) {

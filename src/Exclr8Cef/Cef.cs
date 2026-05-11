@@ -839,6 +839,7 @@ public static class Cef
                 Excef.excef_set_permission_prompt_callback(&PermissionPromptTrampoline);
                 Excef.excef_set_media_access_callback(&MediaAccessTrampoline);
                 Excef.excef_set_before_popup_callback(&BeforePopupTrampoline);
+                Excef.excef_set_cert_error_callback(&CertErrorTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1090,6 +1091,29 @@ public static class Cef
             Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
             (PermissionRequestType)requestedPermissions);
         b.RaisePermissionRequest(args);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void CertErrorTrampoline(
+        int browserId, ulong token, int certError,
+        sbyte* requestUrl, sbyte* subjectCn, sbyte* issuerCn)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_cert_error(token, 0);
+            return;
+        }
+        if (!b.HasCertErrorSubscriber)
+        {
+            Excef.excef_resolve_cert_error(token, 0);
+            return;
+        }
+        b.RaiseCertError(new CertErrorEventArgs(
+            token,
+            (CefErrorCode)certError,
+            Marshal.PtrToStringUTF8((IntPtr)requestUrl) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)subjectCn) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)issuerCn) ?? ""));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

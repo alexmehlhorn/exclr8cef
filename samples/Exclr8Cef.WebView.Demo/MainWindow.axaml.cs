@@ -91,6 +91,18 @@ public partial class MainWindow : Window
         b.PermissionRequest     += OnBrowserPermissionRequest;
         b.MediaAccessRequest    += OnBrowserMediaAccessRequest;
         b.BeforePopup           += OnBrowserBeforePopup;
+        b.CertError             += OnBrowserCertError;
+    }
+
+    private async void OnBrowserCertError(object? sender, Exclr8Cef.CertErrorEventArgs e)
+    {
+        LogEvent("cert", $"{e.ErrorCode} for {e.RequestUrl} subject={e.SubjectCommonName} issuer={e.IssuerCommonName}");
+        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+            this, Exclr8Cef.Cef.JsDialogType.Confirm,
+            $"TLS error {e.ErrorCode} for {e.RequestUrl}\nSubject: {e.SubjectCommonName}\nIssuer: {e.IssuerCommonName}\n\nProceed anyway?",
+            defaultPromptText: "");
+        if (result.Accepted) { e.Proceed(); LogEvent("cert", "→ Proceed"); }
+        else                 { e.Cancel();  LogEvent("cert", "→ Cancel");  }
     }
 
     private void OnBrowserBeforePopup(object? sender, Exclr8Cef.BeforePopupEventArgs e)
