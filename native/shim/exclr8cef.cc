@@ -13,6 +13,77 @@
 #  include <windows.h>
 #endif
 
+namespace exclr8cef {
+
+// Host-provided init settings (set via excef_set_init_settings before init).
+// Stored by value so the host's pointers don't need to outlive the call.
+struct StashedInitSettings {
+    bool set = false;
+    std::string cache_path;
+    std::string root_cache_path;
+    std::string user_agent;
+    std::string user_agent_product;
+    std::string locale;
+    std::string accept_language_list;
+    std::string log_file;
+    std::string javascript_flags;
+    int log_severity = 0;
+    bool persist_session_cookies = false;
+    int remote_debugging_port = 0;
+};
+StashedInitSettings g_init_settings;
+
+// Apply host-provided settings to a CefSettings instance. Called from every
+// init path. Fields the shim controls itself (no_sandbox,
+// external_message_pump, windowless rendering, browser_subprocess_path) are
+// set by the caller; this helper only overlays optional host values.
+void ApplyHostInitSettings(CefSettings& settings) {
+    const auto& s = g_init_settings;
+    if (!s.set) return;
+    if (!s.cache_path.empty())
+        CefString(&settings.cache_path).FromString(s.cache_path);
+    if (!s.root_cache_path.empty())
+        CefString(&settings.root_cache_path).FromString(s.root_cache_path);
+    if (!s.user_agent.empty())
+        CefString(&settings.user_agent).FromString(s.user_agent);
+    if (!s.user_agent_product.empty())
+        CefString(&settings.user_agent_product).FromString(s.user_agent_product);
+    if (!s.locale.empty())
+        CefString(&settings.locale).FromString(s.locale);
+    if (!s.accept_language_list.empty())
+        CefString(&settings.accept_language_list).FromString(s.accept_language_list);
+    if (!s.log_file.empty())
+        CefString(&settings.log_file).FromString(s.log_file);
+    if (!s.javascript_flags.empty())
+        CefString(&settings.javascript_flags).FromString(s.javascript_flags);
+    if (s.log_severity != 0)
+        settings.log_severity = static_cast<cef_log_severity_t>(s.log_severity);
+    if (s.persist_session_cookies)
+        settings.persist_session_cookies = true;
+    if (s.remote_debugging_port > 0)
+        settings.remote_debugging_port = s.remote_debugging_port;
+}
+
+}  // namespace exclr8cef
+
+extern "C" void excef_set_init_settings(const excef_init_settings* in) {
+    if (!in) { exclr8cef::g_init_settings = exclr8cef::StashedInitSettings{}; return; }
+    exclr8cef::StashedInitSettings s;
+    s.set = true;
+    if (in->cache_path)             s.cache_path = in->cache_path;
+    if (in->root_cache_path)        s.root_cache_path = in->root_cache_path;
+    if (in->user_agent)             s.user_agent = in->user_agent;
+    if (in->user_agent_product)     s.user_agent_product = in->user_agent_product;
+    if (in->locale)                 s.locale = in->locale;
+    if (in->accept_language_list)   s.accept_language_list = in->accept_language_list;
+    if (in->log_file)               s.log_file = in->log_file;
+    if (in->javascript_flags)       s.javascript_flags = in->javascript_flags;
+    s.log_severity = in->log_severity;
+    s.persist_session_cookies = in->persist_session_cookies != 0;
+    s.remote_debugging_port = in->remote_debugging_port;
+    exclr8cef::g_init_settings = std::move(s);
+}
+
 namespace {
 
 constexpr const char kShimVersion[] = "0.5.0-stage5";
@@ -88,6 +159,7 @@ extern "C" int excef_initialize(int argc, char** argv,
     if (subprocess_path && *subprocess_path) {
         CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
     }
+    exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
     if (!CefInitialize(main_args, settings, app, nullptr)) return 1;
     return 0;
@@ -106,6 +178,7 @@ extern "C" int excef_initialize_external_pump(int argc, char** argv,
     if (subprocess_path && *subprocess_path) {
         CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
     }
+    exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
     if (!CefInitialize(main_args, settings, app, nullptr)) return 2;
     return 0;
@@ -125,6 +198,7 @@ extern "C" int excef_initialize_offscreen(int argc, char** argv,
     if (subprocess_path && *subprocess_path) {
         CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
     }
+    exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
     if (!CefInitialize(main_args, settings, app, nullptr)) return 2;
     return 0;

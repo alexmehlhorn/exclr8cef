@@ -118,6 +118,82 @@ public static class Cef
     public static void DoMessageLoopWork() => Excef.excef_do_message_loop_work();
 
     /// <summary>
+    /// A useful subset of <c>CefSettings</c>. All properties are optional;
+    /// null / 0 means "use CEF's default". Pass an instance to
+    /// <see cref="SetInitSettings"/> before any Initialize* call.
+    /// </summary>
+    public sealed class CefSettings
+    {
+        /// <summary>Disk cache + cookies directory. Null = in-memory.</summary>
+        public string? CachePath { get; init; }
+        /// <summary>Parent dir for browser caches. Null = system default.</summary>
+        public string? RootCachePath { get; init; }
+        /// <summary>Full user-agent override (replaces Chromium's UA).</summary>
+        public string? UserAgent { get; init; }
+        /// <summary>Product token appended to Chromium's UA, e.g. "MyApp/1.0".</summary>
+        public string? UserAgentProduct { get; init; }
+        /// <summary>UI locale, e.g. "en-US". Drives accept-language fallback.</summary>
+        public string? Locale { get; init; }
+        /// <summary>Override accept-language list, e.g. "en-US,en;q=0.9".</summary>
+        public string? AcceptLanguageList { get; init; }
+        /// <summary>Log file path. Null = stderr.</summary>
+        public string? LogFile { get; init; }
+        /// <summary>V8 command-line flags, e.g. "--max-old-space-size=512".</summary>
+        public string? JavascriptFlags { get; init; }
+        public CefLogSeverity LogSeverity { get; init; }
+        /// <summary>Persist session cookies to <see cref="CachePath"/>.</summary>
+        public bool PersistSessionCookies { get; init; }
+        /// <summary>Open a Chromium DevTools remote-debugging port (0 = disabled).</summary>
+        public int RemoteDebuggingPort { get; init; }
+    }
+
+    /// <summary>
+    /// Apply host-provided init settings. Call before any
+    /// <see cref="Initialize"/> / <see cref="InitializeForOsr"/> /
+    /// <see cref="InitializeExternalPump"/>; settings later than the
+    /// init call have no effect on that process.
+    /// </summary>
+    public static void SetInitSettings(CefSettings? settings)
+    {
+        unsafe
+        {
+            if (settings is null) { Excef.excef_set_init_settings(null); return; }
+
+            sbyte* cache    = MarshalUtf8(settings.CachePath);
+            sbyte* rootC    = MarshalUtf8(settings.RootCachePath);
+            sbyte* ua       = MarshalUtf8(settings.UserAgent);
+            sbyte* uaProd   = MarshalUtf8(settings.UserAgentProduct);
+            sbyte* locale   = MarshalUtf8(settings.Locale);
+            sbyte* accept   = MarshalUtf8(settings.AcceptLanguageList);
+            sbyte* logf     = MarshalUtf8(settings.LogFile);
+            sbyte* jsFlags  = MarshalUtf8(settings.JavascriptFlags);
+            try
+            {
+                var raw = new excef_init_settings
+                {
+                    cache_path = cache,
+                    root_cache_path = rootC,
+                    user_agent = ua,
+                    user_agent_product = uaProd,
+                    locale = locale,
+                    accept_language_list = accept,
+                    log_file = logf,
+                    javascript_flags = jsFlags,
+                    log_severity = (int)settings.LogSeverity,
+                    persist_session_cookies = settings.PersistSessionCookies ? 1 : 0,
+                    remote_debugging_port = settings.RemoteDebuggingPort,
+                };
+                Excef.excef_set_init_settings(&raw);
+            }
+            finally
+            {
+                FreeUtf8(cache); FreeUtf8(rootC); FreeUtf8(ua); FreeUtf8(uaProd);
+                FreeUtf8(locale); FreeUtf8(accept); FreeUtf8(logf); FreeUtf8(jsFlags);
+            }
+        }
+    }
+
+    /// <summary>
     /// Open a top-level Chromium browser window. Safe before or after
     /// <see cref="Initialize"/>; URLs requested pre-init are queued.
     /// Use <see cref="CreateOffscreenBrowser"/> for embedded OSR scenarios.

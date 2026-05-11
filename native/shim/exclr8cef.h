@@ -638,6 +638,36 @@ EXCEF_API void excef_find(int browser_id,
 // orange highlight on the last match.
 EXCEF_API void excef_stop_finding(int browser_id, int clear_selection);
 
+// ---- Init settings ------------------------------------------------------
+//
+// A useful subset of CefSettings the host can configure before calling
+// excef_initialize_offscreen / excef_initialize_external_pump / etc.
+// All fields are optional:
+//   - char* strings: NULL/empty = use CEF default
+//   - int booleans: 0 = use CEF default
+//   - log_severity: 0 = LOGSEVERITY_DEFAULT (which is Info in release builds)
+//
+// We intentionally do not expose fields the shim controls internally:
+// browser_subprocess_path, framework_dir_path, multi_threaded_message_loop,
+// external_message_pump, windowless_rendering_enabled.
+typedef struct excef_init_settings {
+    const char* cache_path;             // disk cache + cookies. NULL = in-memory.
+    const char* root_cache_path;        // parent for browser caches; defaults to system app-data.
+    const char* user_agent;             // full UA override (replaces Chromium's)
+    const char* user_agent_product;     // product-token suffix ("MyApp/1.0"); leaves the rest
+    const char* locale;                 // "en-US"; controls UI locale + accept-language fallback
+    const char* accept_language_list;   // "en-US,en;q=0.9"; overrides locale-derived default
+    const char* log_file;               // NULL/empty = stderr
+    const char* javascript_flags;       // V8 flags, e.g. "--max-old-space-size=512"
+    int log_severity;                   // cef_log_severity_t
+    int persist_session_cookies;        // 0/1; requires cache_path
+    int remote_debugging_port;          // 0 = disabled, else 1024..65535
+} excef_init_settings;
+
+// Stash settings to apply on the next init call. Pass NULL to clear back
+// to defaults. The struct is copied; pointers don't need to outlive the call.
+EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

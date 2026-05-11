@@ -186,6 +186,7 @@
       <a href="#jsdialog">JS dialogs</a>
       <a href="#download">Downloads</a>
       <a href="#auth">Auth + Find</a>
+      <a href="#config">Init settings</a>
     </div>
   </nav>
 </aside>
@@ -252,6 +253,19 @@
       <a href="https://www.exclr8.com">exclr8.com</a>
       <a href="https://example.com">example.com</a>
       <a href="https://duckduckgo.com">duckduckgo.com</a>
+    </div>
+  </section>
+
+  <section id="config">
+    <h2>CEF init settings</h2>
+    <p class="lede">The demo passes a CefSettings instance to
+       <code>Cef.SetInitSettings</code> before init (cache path, custom
+       user-agent product token, persistent session cookies). Click to
+       round-trip through httpbin's UA echo to verify the product token
+       made it into the actual User-Agent header.</p>
+    <div class="row">
+      <button id="cfgUa">Show User-Agent (httpbin echo)</button>
+      <span id="cfgOut" style="color:var(--muted); margin-left:8px"></span>
     </div>
   </section>
 
@@ -373,6 +387,19 @@
     submitCount++;
     const v = $('#formInput').value;
     $('#formOut').textContent = '#' + submitCount + ' "' + v + '"';
+  });
+
+  // Init settings — round-trip the user-agent through httpbin to verify
+  // the CefSettings.UserAgentProduct token was actually applied.
+  $('#cfgUa').addEventListener('click', async () => {
+    $('#cfgOut').textContent = 'fetching…';
+    try {
+      const r = await fetch('https://httpbin.org/user-agent');
+      const j = await r.json();
+      $('#cfgOut').textContent = j['user-agent'] || '(empty)';
+    } catch (err) {
+      $('#cfgOut').textContent = 'error: ' + err;
+    }
   });
 
   // Download — generate a same-origin blob URL with a 'download' attribute.

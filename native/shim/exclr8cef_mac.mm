@@ -76,6 +76,7 @@ extern "C" int excef_initialize(int argc, char** argv,
             CefString(&settings.browser_subprocess_path)
                 .FromASCII(subprocess_path);
         }
+        exclr8cef::ApplyHostInitSettings(settings);
 
         CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
         if (!CefInitialize(main_args, settings, app.get(), nullptr)) return 2;
@@ -123,6 +124,7 @@ static int initialize_with_pump_impl(int argc, char** argv,
         if (subprocess_path && *subprocess_path) {
             CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
         }
+        exclr8cef::ApplyHostInitSettings(settings);
 
         CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
         if (!CefInitialize(main_args, settings, app.get(), nullptr)) return 2;
@@ -158,6 +160,7 @@ extern "C" int excef_initialize_external_pump(int argc, char** argv,
         if (subprocess_path && *subprocess_path) {
             CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
         }
+        exclr8cef::ApplyHostInitSettings(settings);
 
         CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
         if (!CefInitialize(main_args, settings, app.get(), nullptr)) return 2;

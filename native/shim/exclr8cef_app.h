@@ -55,6 +55,12 @@ void SetPendingBrowserUrl(const std::string& url);
 typedef void (*ScheduleMessagePumpWorkCallback)(int64_t delay_ms);
 void SetSchedulePumpCallback(ScheduleMessagePumpWorkCallback cb);
 
+// Overlay host-provided init settings onto a CefSettings instance. The
+// host sets these via excef_set_init_settings (in exclr8cef.cc) before
+// calling any init function. Each init path (Windows/Linux + macOS) calls
+// this helper after setting the shim-controlled fields.
+void ApplyHostInitSettings(CefSettings& settings);
+
 }  // namespace exclr8cef
 
 #endif  // EXCLR8CEF_APP_H_

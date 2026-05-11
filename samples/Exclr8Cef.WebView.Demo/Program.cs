@@ -41,6 +41,29 @@ internal static class Program
         var lifetime = new ClassicDesktopStyleApplicationLifetime { Args = args };
         BuildAvaloniaApp().SetupWithLifetime(lifetime);
 
+        // Configure CEF init settings before the InitializeForOsr call.
+        // Settings applied after init have no effect on this process.
+        //
+        // UA strategy: set the full UserAgent (instead of UserAgentProduct,
+        // which REPLACES the "Chrome/…" token in CEF's default UA and
+        // makes sites think we're not Chromium at all). The full string
+        // keeps Chrome's identifier and appends our app token — the
+        // pattern Slack / Discord / etc. use for Electron-based apps.
+        var v = Cef.GetVersions();
+        var platform = OperatingSystem.IsMacOS()
+            ? "(Macintosh; Intel Mac OS X 10_15_7)"
+            : OperatingSystem.IsWindows()
+                ? "(Windows NT 10.0; Win64; x64)"
+                : "(X11; Linux x86_64)";
+        Cef.SetInitSettings(new Cef.CefSettings
+        {
+            CachePath = Path.Combine(AppContext.BaseDirectory, "cef-cache"),
+            UserAgent = $"Mozilla/5.0 {platform} AppleWebKit/537.36 (KHTML, like Gecko) "
+                      + $"Chrome/{v.Chromium} Safari/537.36 Exclr8CefDemo/{v.Shim}",
+            PersistSessionCookies = true,
+            LogSeverity = Cef.CefLogSeverity.Warning,
+        });
+
         // CEF in OSR mode (windowless rendering + external pump).
         Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
 
