@@ -33,3 +33,6 @@ debug.log
 
 # (ClangSharp-generated bindings under managed/Exclr8Cef/Generated/ ARE
 #  committed; running scripts/regenerate-bindings.sh updates them.)
+
+# Claude Code local config
+.claude/
