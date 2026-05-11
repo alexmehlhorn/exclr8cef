@@ -61,22 +61,23 @@ Exclr8CEF takes CefSharp's shim model and ports it to plain C++ with a C ABI for
 
 ## Status
 
-**Stages 4c–4e complete.** A real Avalonia desktop app with a `WebView` control that hosts an embedded Chromium browser via off-screen rendering. Public C# API:
+**Stages 1–5, Phases 1–7 complete on macOS arm64.** A real Avalonia desktop app with a `WebView` control that hosts an embedded Chromium browser via off-screen rendering. Win/Linux ride the same cross-platform native code but are CI-tested rather than exercised by hand.
 
-- `Cef.InitializeForOsr` + `Cef.Shutdown`
-- `Cef.CreateOffscreenBrowser` / `ResizeOffscreenBrowser`
-- `Cef.LoadUrl` / `GoBack` / `GoForward` / `Reload` / `StopLoad` / `CloseBrowser` / `WasHidden`
-- `Cef.SendMouseMove/Click/Wheel`, `Cef.SendKeyEvent`, `Cef.SetBrowserFocus`
-- `Cef.ExecuteJavaScript`, `Cef.ShowDevTools` / `CloseDevTools`
-- `Cef.PrintToPdfAsync`
-- `Cef.AddressChanged` / `TitleChanged` / `LoadingStateChanged` / `BrowserClosed` static events
-- `Cef.EvaluateJavaScriptAsync(browserId, code)` — returns JSON-serialized result via render-process IPC
-- `Cef.GetCookiesAsync(url) / SetCookie / DeleteCookies`
-- `Cef.ImeSetComposition / ImeCommitText / ImeFinishComposing / ImeCancel` (Avalonia IME integration follow-on)
-- `WebView` Avalonia control: `Url`, `Title`, `IsLoading`, `CanGoBack`, `CanGoForward` properties; `GoBack/Forward/Reload/StopLoad/ShowDevTools/EvaluateJavaScriptAsync/PrintToPdfAsync` methods.
-- Avalonia `Key` → Windows VK code mapping in `Exclr8Cef.WebView.KeyMap`.
+Public C# surface highlights (full API in `src/Exclr8Cef/Cef.cs` and `CefBrowser.cs`):
 
-Demo (`Exclr8Cef.WebView.Demo.app`) has a full browser-style toolbar (◀ ▶ ⟳ ✕ DevTools Run JS Save PDF), a URL address bar with Enter-to-navigate, and starts on a self-contained Chromium-rendered test page. "Run JS" demonstrates the round-trip `EvaluateJavaScriptAsync`: the demo executes a small expression in the page and prints the JSON result to the status bar.
+- **Lifecycle**: `Cef.InitializeForOsr/Shutdown`, `Cef.CreateOffscreenBrowser` (returns `CefBrowser`)
+- **Navigation**: `LoadUrl/GoBack/GoForward/Reload/StopLoad/Close`
+- **Input**: mouse / wheel / keyboard / IME forwarding; clipboard + zoom
+- **Events** (per-browser, on `CefBrowser`): `AddressChanged`, `TitleChanged`, `LoadingStateChanged`, `LoadStart/End/Error`, `LoadingProgress`, `ConsoleMessage`, `StatusMessage`, `TooltipChanged`, `FaviconChanged`, `FullscreenModeChanged`, `CursorChanged`, `ScrollOffsetChanged`, `AutoResize`, `Initialized`, `Closed`, `Painted`, `PopupShow/Size/Painted`, `RenderProcessGone`
+- **Deferred-response handlers**: `JsDialog`, `FileDialog`, `ContextMenu`, `DownloadStarting/Progress`, `AuthRequest`, `FindResult`, `ResourceRequest`, `SchemeRequest`, `PermissionRequest`, `MediaAccessRequest`, `CertError`, `BeforePopup`, `DragStarted`, `DragImage`
+- **JS bridge**: `EvaluateJavaScriptAsync` (with result), `ExecuteJavaScript` (fire-and-forget), `JsInvoke` event for `window.exclr8cef.invoke(...)` calls from the page
+- **Cookies + isolation**: `Cef.GetCookiesAsync/SetCookie/DeleteCookies`, `CefRequestContext` for per-browser cookie/cache isolation
+- **Custom schemes**: `Cef.RegisterCustomScheme` + `SchemeRequest` event
+- **Accessibility**: `SetAccessibilityEnabled` + `AccessibilityTreeChange/LocationChange` (raw Chromium a11y tree as JSON)
+- **PDF**: `PrintToPdfAsync` (+ `Exclr8Cef.Print` extension for headers/footers/margins)
+- **Vision / automation**: `EnableFrameCapture`, `TryCaptureLastFrame`, `FrameStream` (`ChannelReader<PaintFrame>`), `HitTestAtAsync(x,y)` — in-process pixel + DOM-probe access for AI hosts
+
+Demo (`Exclr8Cef.WebView.Demo.app`) has a full toolbar (◀ ▶ ⟳ ✕ Hit-test Capture-PNG DevTools Isolated Run-JS Save-PDF + zoom), a URL bar, a sectioned `app://`-served test page covering every event surface, and a host-side event console pane that color-codes every fired callback.
 
 ## Layout
 
@@ -174,8 +175,13 @@ The Stage 2 demo opens a window rendering `chrome://version` — confirming end-
 | **4f** ✓ | JS eval w/ result, cookies, IME, key map, browser-closed event | `Exclr8CefApp` now also implements `CefRenderProcessHandler`; helper subprocess passes the app to `CefExecuteProcess` so renderer-side IPC works. `Cef.EvaluateJavaScriptAsync` returns a JSON-serialized result via "Eval" / "EvalResult" `CefProcessMessage` round-trip. Cookie API via `CefCookieManager`: `Cef.GetCookiesAsync(url)`, `Cef.SetCookie(url, name, value, ...)`, `Cef.DeleteCookies(url, name)`. `Cef.BrowserClosed` static event from `OnBeforeClose`. IME ABI: `Cef.ImeSetComposition / ImeCommitText / ImeFinishComposing / ImeCancel`. Avalonia `Key` → Windows VK code translation in `KeyMap.cs`. Demo adds a "Run JS" button. |
 | **4g** ✓ | Avalonia IME wired into WebView | `WebViewTextInputMethodClient` extends `Avalonia.Input.TextInput.TextInputMethodClient`. `WebView` subscribes to `TextInputMethodClientRequested` and provides the client. `SetPreeditText` from the platform IME is forwarded to `Cef.ImeSetComposition`; lost focus calls `Cef.ImeCancel`. Composition events (CJK input, dead keys for diacritics) now flow into the embedded Chromium browser. |
 | **5** ✓ | Auto-update pipeline + Windows/Linux readiness | `cef.json` source-of-truth. Cross-platform shim refactor (Windows/Linux now have `excef_initialize_offscreen` / `excef_initialize_external_pump` / `excef_do_message_loop_work`). `Cef.ExecuteProcess` wrapper for Windows/Linux subprocess re-invocation. NuGet packaging: `Exclr8Cef`, `Exclr8Cef.WebView`, and `runtime.<rid>.Exclr8Cef` per-platform packages with `runtime.json` for auto RID resolution. GitHub Actions: `ci.yml` (matrix build), `upstream-check.yml` (cron PR-bot), `release.yml` (tag-driven NuGet publish). |
-| **5** | Distribution | Playwright-style binary fetch, NuGet packages per RID, CI matrix Win/macOS/Linux × x64/arm64 |
-| **6** | Polish | Code signing, App Store / notarization, request interception, JS interop, custom schemes |
+| **Phase 1** ✓ | Cheap callback events per-browser | `ConsoleMessage`, `LoadStart/End/Error`, `LoadingProgress`, `StatusMessage`, `TooltipChanged`, `FaviconChanged`, `FullscreenModeChanged`, `Initialized`, `ScrollOffsetChanged`, `AutoResize`, `CanZoom`. CefBrowser instance class introduced; events become per-browser instead of static. |
+| **Phase 2** ✓ | Deferred-response handlers | Token-registry pattern: `JsDialog`, `FileDialog`, `ContextMenu`, `DownloadStarting/Progress`, `AuthRequest`, `FindResult`. CefBrowser owns the registries; OnBeforeClose cancels everything for a closing browser. |
+| **Phase 4** ✓ | CefSettings exposure, render-process termination, custom schemes, resource interception | `CefSettings` via `Cef.SetInitSettings`. `RenderProcessGone` event. `RegisterCustomScheme` + `SchemeRequest` event for `app://`-style routing (env-var propagation to subprocesses). `ResourceRequest` event for per-request header inject / cancel. |
+| **Phase 5** ✓ | OSR popups, per-browser request context, JS bridge, accessibility | `PopupShow/Size/Painted` so `<select>` dropdowns render. `CefRequestContext` for incognito-style isolation. `window.exclr8cef.invoke(method, args)` installed via `OnContextCreated` → `JsInvoke` event on host. `AccessibilityTreeChange/LocationChange` stream the Chromium a11y tree as JSON. |
+| **Phase 6** ✓ | Drag / permissions / popup intercept / TLS errors | `DragStarted`+`DragImage` (drag-target funcs + start-drag callback + ghost overlay). `PermissionRequest` + `MediaAccessRequest` (handler wired; Alloy+OSR runtime denies notifications/geolocation/getUserMedia upstream of the handler — by design). `BeforePopup` cancels at CEF layer and routes URL to host. `CertError` deferred-response with X.509 subject/issuer. |
+| **Phase 7** ✓ | Vision / automation surface | `EnableFrameCapture` + `TryCaptureLastFrame` for sync BGRA access. `FrameStream` bounded-drop-oldest channel for an agent loop. `HitTestAtAsync(x,y)` returns the DOM element at that point via the JS bridge. Demo toolbar buttons: Capture PNG, Hit-test mode. |
+| **6** | Polish | Code signing, App Store / notarization, additional handler categories (audio, keyboard, focus, print dialog), Win/Linux manual exercise. |
 
 ## C ABI naming
 

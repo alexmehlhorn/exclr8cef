@@ -951,6 +951,14 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
         }
     }
 
+    // If a drag is in flight when the browser closes, drop the drag state
+    // (releases the CefDragData ref) and tell the host to clear any drag
+    // overlay it was rendering.
+    if (in_drag_) {
+        clear_drag();
+        if (g_drag_image_cb) g_drag_image_cb(closed_id, nullptr, 0, 0, 0, 0);
+    }
+
     browser_ = nullptr;
     g_osr_browsers.erase(id_);
     if (g_browser_closed_cb) {

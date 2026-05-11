@@ -586,6 +586,10 @@ public sealed class CefBrowser : IDisposable
     /// <summary>
     /// Evaluate JS in the main frame and return the result as a JSON string.
     /// </summary>
+    // Eval request IDs owned by this browser, so RaiseClosed can fail any
+    // in-flight TaskCompletionSources instead of leaving them hanging.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _evalRequestIds = new();
+
     public Task<string> EvaluateJavaScriptAsync(string code)
     {
         ArgumentNullException.ThrowIfNull(code);
@@ -594,6 +598,7 @@ public sealed class CefBrowser : IDisposable
         int reqId = Interlocked.Increment(ref Cef.s_nextEvalRequestId);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         Cef.s_evalRequests[reqId] = tcs;
+        _evalRequestIds[reqId] = 0;
 
         unsafe
         {
@@ -604,6 +609,7 @@ public sealed class CefBrowser : IDisposable
                 if (scheduled == 0)
                 {
                     Cef.s_evalRequests.TryRemove(reqId, out _);
+                    _evalRequestIds.TryRemove(reqId, out _);
                     tcs.TrySetException(new InvalidOperationException("eval not scheduled (browser unknown or closed)"));
                 }
             }
@@ -614,6 +620,8 @@ public sealed class CefBrowser : IDisposable
         }
         return tcs.Task;
     }
+
+    internal void RemoveEvalRequest(int reqId) => _evalRequestIds.TryRemove(reqId, out _);
 
     // ---- PDF ------------------------------------------------------------
 
@@ -1007,13 +1015,18 @@ public sealed class CefBrowser : IDisposable
     {
         if (_frameCaptureEnabled)
         {
+            // Two independent copies — _lastFrame and PaintFrame each own
+            // their bytes, so a consumer mutating one can't corrupt the
+            // cache. Copy outside the lock so the paint thread doesn't
+            // stall on a slow ~3MB memcpy.
             int byteCount = width * height * 4;
-            byte[] copy = new byte[byteCount];
-            Marshal.Copy(buffer, copy, 0, byteCount);
-            var frame = new PaintFrame(copy, width, height, DateTime.UtcNow);
+            byte[] cacheCopy = new byte[byteCount];
+            Marshal.Copy(buffer, cacheCopy, 0, byteCount);
+            byte[] frameCopy = (byte[])cacheCopy.Clone();
+            var frame = new PaintFrame(frameCopy, width, height, DateTime.UtcNow);
             lock (_frameLock)
             {
-                _lastFrame = copy;
+                _lastFrame = cacheCopy;
                 _lastFrameWidth = width;
                 _lastFrameHeight = height;
                 _frameChannel?.Writer.TryWrite(frame);
@@ -1030,6 +1043,25 @@ public sealed class CefBrowser : IDisposable
         {
             foreach (var cb in _pdfQueue) cb(Id, 0);
             _pdfQueue.Clear();
+        }
+        // Fail any pending JS evals — without this, HitTestAtAsync and any
+        // other awaiter hangs forever when the browser closes mid-eval.
+        var browserClosedEx = new InvalidOperationException("browser closed");
+        foreach (var reqId in _evalRequestIds.Keys)
+        {
+            if (Cef.s_evalRequests.TryRemove(reqId, out var tcs))
+                tcs.TrySetException(browserClosedEx);
+        }
+        _evalRequestIds.Clear();
+        // Unblock any FrameStream consumers — without TryComplete, an
+        // awaiter on ReadAsync hangs after browser close.
+        lock (_frameLock)
+        {
+            _frameChannel?.Writer.TryComplete();
+            _frameChannel = null;
+            _lastFrame = null;
+            _lastFrameWidth = _lastFrameHeight = 0;
+            _frameCaptureEnabled = false;
         }
         Closed?.Invoke(this, EventArgs.Empty);
         Id = 0;

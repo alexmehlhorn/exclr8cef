@@ -1090,7 +1090,8 @@ public static class Cef
             token, promptId,
             Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
             (PermissionRequestType)requestedPermissions);
-        b.RaisePermissionRequest(args);
+        try { b.RaisePermissionRequest(args); }
+        catch { args.Deny(); }  // idempotent — won't double-resolve if handler already did
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1108,12 +1109,14 @@ public static class Cef
             Excef.excef_resolve_cert_error(token, 0);
             return;
         }
-        b.RaiseCertError(new CertErrorEventArgs(
+        var certArgs = new CertErrorEventArgs(
             token,
             (CefErrorCode)certError,
             Marshal.PtrToStringUTF8((IntPtr)requestUrl) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)subjectCn) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)issuerCn) ?? ""));
+            Marshal.PtrToStringUTF8((IntPtr)issuerCn) ?? "");
+        try { b.RaiseCertError(certArgs); }
+        catch { certArgs.Cancel(); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1122,11 +1125,17 @@ public static class Cef
         int disposition, int userGesture)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseBeforePopup(new BeforePopupEventArgs(
-            Marshal.PtrToStringUTF8((IntPtr)targetUrl) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)targetFrameName) ?? "",
-            (WindowOpenDisposition)disposition,
-            userGesture != 0));
+        // Fire-and-forget on the host side; swallow exceptions so a host
+        // handler bug can't crash the CEF pump thread.
+        try
+        {
+            b.RaiseBeforePopup(new BeforePopupEventArgs(
+                Marshal.PtrToStringUTF8((IntPtr)targetUrl) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)targetFrameName) ?? "",
+                (WindowOpenDisposition)disposition,
+                userGesture != 0));
+        }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1147,7 +1156,8 @@ public static class Cef
             token,
             Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
             (MediaAccessPermissions)requestedPermissions);
-        b.RaiseMediaAccessRequest(args);
+        try { b.RaiseMediaAccessRequest(args); }
+        catch { args.Deny(); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1333,6 +1343,7 @@ public static class Cef
     private static unsafe void EvalResultTrampoline(int browserId, int requestId, int success, sbyte* payload)
     {
         if (!s_evalRequests.TryRemove(requestId, out var tcs)) return;
+        if (s_browsers.TryGetValue(browserId, out var browser)) browser.RemoveEvalRequest(requestId);
         var s = Marshal.PtrToStringUTF8((IntPtr)payload) ?? "";
         if (success != 0) tcs.TrySetResult(s);
         else tcs.TrySetException(new InvalidOperationException(string.IsNullOrEmpty(s) ? "JS eval failed" : s));

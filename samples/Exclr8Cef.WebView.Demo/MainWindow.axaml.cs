@@ -166,13 +166,24 @@ public partial class MainWindow : Window
 
     private async void OnBrowserCertError(object? sender, Exclr8Cef.CertErrorEventArgs e)
     {
-        LogEvent("cert", $"{e.ErrorCode} for {e.RequestUrl} subject={e.SubjectCommonName} issuer={e.IssuerCommonName}");
-        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
-            this, Exclr8Cef.Cef.JsDialogType.Confirm,
-            $"TLS error {e.ErrorCode} for {e.RequestUrl}\nSubject: {e.SubjectCommonName}\nIssuer: {e.IssuerCommonName}\n\nProceed anyway?",
-            defaultPromptText: "");
-        if (result.Accepted) { e.Proceed(); LogEvent("cert", "→ Proceed"); }
-        else                 { e.Cancel();  LogEvent("cert", "→ Cancel");  }
+        try
+        {
+            LogEvent("cert", $"{e.ErrorCode} for {e.RequestUrl} subject={e.SubjectCommonName} issuer={e.IssuerCommonName}");
+            var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+                this, Exclr8Cef.Cef.JsDialogType.Confirm,
+                $"TLS error {e.ErrorCode} for {e.RequestUrl}\nSubject: {e.SubjectCommonName}\nIssuer: {e.IssuerCommonName}\n\nProceed anyway?",
+                defaultPromptText: "");
+            if (result.Accepted) { e.Proceed(); LogEvent("cert", "→ Proceed"); }
+            else                 { e.Cancel();  LogEvent("cert", "→ Cancel");  }
+        }
+        catch (Exception ex)
+        {
+            LogEvent("cert", $"handler error → Cancel: {ex.Message}");
+        }
+        finally
+        {
+            e.Cancel();
+        }
     }
 
     private void OnBrowserBeforePopup(object? sender, Exclr8Cef.BeforePopupEventArgs e)
@@ -196,25 +207,48 @@ public partial class MainWindow : Window
 
     private async void OnBrowserPermissionRequest(object? sender, Exclr8Cef.PermissionRequestEventArgs e)
     {
-        LogEvent("permission", $"prompt: {e.RequestedPermissions} from {e.Origin}");
-        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
-            this, Exclr8Cef.Cef.JsDialogType.Confirm,
-            $"{e.Origin} wants permission for: {e.RequestedPermissions}",
-            defaultPromptText: "");
-        var pr = result.Accepted ? Exclr8Cef.Cef.PermissionResult.Accept : Exclr8Cef.Cef.PermissionResult.Deny;
-        LogEvent("permission", $"→ {pr}");
-        e.Continue(pr);
+        try
+        {
+            LogEvent("permission", $"prompt: {e.RequestedPermissions} from {e.Origin}");
+            var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+                this, Exclr8Cef.Cef.JsDialogType.Confirm,
+                $"{e.Origin} wants permission for: {e.RequestedPermissions}",
+                defaultPromptText: "");
+            var pr = result.Accepted ? Exclr8Cef.Cef.PermissionResult.Accept : Exclr8Cef.Cef.PermissionResult.Deny;
+            LogEvent("permission", $"→ {pr}");
+            e.Continue(pr);
+        }
+        catch (Exception ex)
+        {
+            LogEvent("permission", $"handler error → Deny: {ex.Message}");
+        }
+        finally
+        {
+            // Idempotent Deny — if a path above already resolved, this is a no-op.
+            e.Deny();
+        }
     }
 
     private async void OnBrowserMediaAccessRequest(object? sender, Exclr8Cef.MediaAccessRequestEventArgs e)
     {
-        LogEvent("media", $"getUserMedia: {e.RequestedPermissions} from {e.Origin}");
-        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
-            this, Exclr8Cef.Cef.JsDialogType.Confirm,
-            $"{e.Origin} wants camera/mic access: {e.RequestedPermissions}",
-            defaultPromptText: "");
-        if (result.Accepted) { e.AllowAll(); LogEvent("media", "→ Allow"); }
-        else                 { e.Deny();     LogEvent("media", "→ Deny");  }
+        try
+        {
+            LogEvent("media", $"getUserMedia: {e.RequestedPermissions} from {e.Origin}");
+            var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+                this, Exclr8Cef.Cef.JsDialogType.Confirm,
+                $"{e.Origin} wants camera/mic access: {e.RequestedPermissions}",
+                defaultPromptText: "");
+            if (result.Accepted) { e.AllowAll(); LogEvent("media", "→ Allow"); }
+            else                 { e.Deny();     LogEvent("media", "→ Deny");  }
+        }
+        catch (Exception ex)
+        {
+            LogEvent("media", $"handler error → Deny: {ex.Message}");
+        }
+        finally
+        {
+            e.Deny();
+        }
     }
 
     private void OnBrowserDragStarted(object? sender, Exclr8Cef.DragStartedEventArgs e)
