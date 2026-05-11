@@ -817,6 +817,9 @@ public class WebView : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
+        // Lets a host's Tunnel-phase handler claim the click before we
+        // forward to CEF (e.g. for an "inspect-mode" hit-test overlay).
+        if (e.Handled) return;
         if (_browser is null) return;
         Focus();
         // Re-assert browser focus on every click. OnGotFocus only fires

@@ -1,11 +1,14 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 
 namespace Exclr8Cef.WebView.Demo;
@@ -37,11 +40,74 @@ public partial class MainWindow : Window
         // exists (creation is lazy — happens on the first arrange with size).
         Browser.AttachedToVisualTree += OnBrowserAttachedForEvents;
 
+        // Tunnel-phase handler so we can claim the click for hit-test mode
+        // before the WebView forwards it to CEF.
+        Browser.AddHandler(InputElement.PointerPressedEvent, OnBrowserPointerForHitTest,
+            RoutingStrategies.Tunnel);
+
         AddressBox.Text = Browser.Url;
         BackButton.IsEnabled = Browser.CanGoBack;
         ForwardButton.IsEnabled = Browser.CanGoForward;
 
         LogEvent("init", "Demo started");
+    }
+
+    private bool _hitTestMode;
+
+    private async void OnBrowserPointerForHitTest(object? sender, PointerPressedEventArgs e)
+    {
+        if (!_hitTestMode) return;
+        if (Browser.Browser is not { } b) return;
+        var p = e.GetCurrentPoint(Browser);
+        int x = (int)p.Position.X, y = (int)p.Position.Y;
+        e.Handled = true;  // suppress CEF forwarding
+        try
+        {
+            var hit = await b.HitTestAtAsync(x, y);
+            if (hit is null) LogEvent("hit-test", $"({x},{y}): no element");
+            else LogEvent("hit-test", $"({x},{y}): <{hit.Tag}> id={hit.Id ?? "-"} text='{hit.Text}' rect=({hit.X:F0},{hit.Y:F0} {hit.Width:F0}x{hit.Height:F0})");
+        }
+        catch (Exception ex)
+        {
+            LogEvent("hit-test", $"error: {ex.Message}");
+        }
+    }
+
+    private void OnHitTestModeClick(object? sender, RoutedEventArgs e)
+    {
+        _hitTestMode = !_hitTestMode;
+        HitTestButton.Content = _hitTestMode ? "Hit-test mode ✓" : "Hit-test mode";
+        LogEvent("hit-test", _hitTestMode ? "enabled — click to probe" : "disabled");
+    }
+
+    private void OnCapturePngClick(object? sender, RoutedEventArgs e)
+    {
+        if (Browser.Browser is not { } b) { LogEvent("capture", "no browser"); return; }
+        b.EnableFrameCapture(true);
+        if (!b.TryCaptureLastFrame(out var bgra, out int w, out int h) || bgra is null)
+        {
+            LogEvent("capture", "no frame yet — try again");
+            return;
+        }
+        var path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"exclr8cef-snapshot-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+        try
+        {
+            using var bmp = new WriteableBitmap(
+                new PixelSize(w, h), new Vector(96, 96),
+                Avalonia.Platform.PixelFormat.Bgra8888, AlphaFormat.Premul);
+            using (var locked = bmp.Lock())
+            {
+                Marshal.Copy(bgra, 0, locked.Address, bgra.Length);
+            }
+            bmp.Save(path);
+            LogEvent("capture", $"saved {w}x{h} → {path}");
+        }
+        catch (Exception ex)
+        {
+            LogEvent("capture", $"failed: {ex.Message}");
+        }
     }
 
     // Hook events on the underlying tech-neutral CefBrowser. Done lazily
@@ -92,6 +158,10 @@ public partial class MainWindow : Window
         b.MediaAccessRequest    += OnBrowserMediaAccessRequest;
         b.BeforePopup           += OnBrowserBeforePopup;
         b.CertError             += OnBrowserCertError;
+
+        // Always-on frame capture so the Capture PNG toolbar button has a
+        // snapshot to save the first time it's clicked. ~3MB resident.
+        b.EnableFrameCapture(true);
     }
 
     private async void OnBrowserCertError(object? sender, Exclr8Cef.CertErrorEventArgs e)
@@ -805,6 +875,13 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["request"]         = SolidColorBrush.Parse("#74c7ec"),
         ["js-invoke"]       = SolidColorBrush.Parse("#cba6f7"),
         ["a11y"]            = SolidColorBrush.Parse("#94e2d5"),
+        ["drag-out"]        = SolidColorBrush.Parse("#fab387"),
+        ["permission"]      = SolidColorBrush.Parse("#cba6f7"),
+        ["media"]           = SolidColorBrush.Parse("#cba6f7"),
+        ["popup"]           = SolidColorBrush.Parse("#f5c2e7"),
+        ["cert"]            = SolidColorBrush.Parse("#f38ba8"),
+        ["hit-test"]        = SolidColorBrush.Parse("#89dceb"),
+        ["capture"]         = SolidColorBrush.Parse("#a6e3a1"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

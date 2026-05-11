@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Exclr8Cef.Native;
 
 namespace Exclr8Cef;
@@ -886,8 +887,140 @@ public sealed class CefBrowser : IDisposable
         if (!_closed) Excef.excef_set_accessibility_enabled(Id, enabled ? 1 : 0);
     }
 
+    // ---- Vision / automation surface -----------------------------------
+    //
+    // For in-process AI / automation hosts that want direct access to the
+    // rendered pixels without going through CDP screenshots.
+    //
+    // Opt-in: EnableFrameCapture(true) allocates a managed copy of every
+    // paint buffer (~3MB for 1280x720). When enabled, TryCaptureLastFrame
+    // returns the most recent frame, and FrameStream yields each new
+    // paint as it arrives (bounded drop-oldest channel, no backpressure).
+
+    private readonly object _frameLock = new();
+    private byte[]? _lastFrame;
+    private int _lastFrameWidth;
+    private int _lastFrameHeight;
+    private bool _frameCaptureEnabled;
+    private System.Threading.Channels.Channel<PaintFrame>? _frameChannel;
+
+    /// <summary>
+    /// Toggle the latest-frame cache and frame-stream channel. Off by
+    /// default — paint buffers are ~3MB each. Idempotent.
+    /// </summary>
+    public void EnableFrameCapture(bool enabled)
+    {
+        lock (_frameLock)
+        {
+            if (_frameCaptureEnabled == enabled) return;
+            _frameCaptureEnabled = enabled;
+            if (!enabled)
+            {
+                _lastFrame = null;
+                _lastFrameWidth = _lastFrameHeight = 0;
+                _frameChannel?.Writer.TryComplete();
+                _frameChannel = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copy the most-recent paint buffer into <paramref name="bgra"/>.
+    /// Returns false if no frame has been seen yet or capture is disabled.
+    /// Buffer is BGRA8888 in physical pixels (multiply DIPs by device scale).
+    /// </summary>
+    public bool TryCaptureLastFrame(out byte[]? bgra, out int width, out int height)
+    {
+        lock (_frameLock)
+        {
+            if (_lastFrame is null || _lastFrameWidth == 0)
+            {
+                bgra = null; width = height = 0;
+                return false;
+            }
+            bgra = (byte[])_lastFrame.Clone();
+            width = _lastFrameWidth;
+            height = _lastFrameHeight;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Reader for a bounded, drop-oldest channel that yields each new paint
+    /// frame. Use for vision/automation loops that want to consume frames
+    /// at their own rate without blocking the renderer. Requires
+    /// <see cref="EnableFrameCapture"/>(true) first.
+    /// </summary>
+    public System.Threading.Channels.ChannelReader<PaintFrame> FrameStream
+    {
+        get
+        {
+            lock (_frameLock)
+            {
+                if (!_frameCaptureEnabled)
+                    throw new InvalidOperationException("Call EnableFrameCapture(true) first.");
+                _frameChannel ??= System.Threading.Channels.Channel.CreateBounded<PaintFrame>(
+                    new System.Threading.Channels.BoundedChannelOptions(1)
+                    {
+                        FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
+                        SingleReader = false,
+                        SingleWriter = true,
+                    });
+                return _frameChannel.Reader;
+            }
+        }
+    }
+
+    /// <summary>
+    /// DOM-level hit-test via the JS bridge: returns the element under the
+    /// given DIP coordinates (CSS pixels) along with its tag, id, classes,
+    /// text snippet, and bounding rect. Null if nothing's there.
+    /// </summary>
+    public async Task<HitTestResult?> HitTestAtAsync(int x, int y)
+    {
+        // Wrap the result in JSON so EvaluateJavaScriptAsync's structured
+        // serializer carries the object back as a string we can deserialize.
+        string js = $@"(function() {{
+  var el = document.elementFromPoint({x}, {y});
+  if (!el) return null;
+  var r = el.getBoundingClientRect();
+  return {{
+    tag: el.tagName.toLowerCase(),
+    id: el.id || null,
+    className: typeof el.className === 'string' ? el.className : null,
+    text: (el.textContent || '').slice(0, 200),
+    role: el.getAttribute('role'),
+    href: el.tagName === 'A' ? el.href : null,
+    x: r.x, y: r.y, width: r.width, height: r.height
+  }};
+}})()";
+        var json = await EvaluateJavaScriptAsync(js);
+        if (string.IsNullOrEmpty(json) || json == "null") return null;
+        return System.Text.Json.JsonSerializer.Deserialize<HitTestResult>(json,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+            });
+    }
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
-        => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
+    {
+        if (_frameCaptureEnabled)
+        {
+            int byteCount = width * height * 4;
+            byte[] copy = new byte[byteCount];
+            Marshal.Copy(buffer, copy, 0, byteCount);
+            var frame = new PaintFrame(copy, width, height, DateTime.UtcNow);
+            lock (_frameLock)
+            {
+                _lastFrame = copy;
+                _lastFrameWidth = width;
+                _lastFrameHeight = height;
+                _frameChannel?.Writer.TryWrite(frame);
+            }
+        }
+        Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
+    }
 
     internal void RaiseClosed()
     {
@@ -905,6 +1038,26 @@ public sealed class CefBrowser : IDisposable
 
 /// <summary>Loading-state snapshot fired by <see cref="CefBrowser.LoadingStateChanged"/>.</summary>
 public readonly record struct LoadingState(bool IsLoading, bool CanGoBack, bool CanGoForward);
+
+/// <summary>
+/// A snapshot of a rendered paint, delivered via
+/// <see cref="CefBrowser.FrameStream"/>. <see cref="Bgra"/> is owned by
+/// the consumer (independent copy, safe to retain).
+/// </summary>
+public sealed record PaintFrame(byte[] Bgra, int Width, int Height, DateTime Timestamp);
+
+/// <summary>
+/// Result of <see cref="CefBrowser.HitTestAtAsync"/>: the element found
+/// at the probed coordinates and its bounding rect.
+/// </summary>
+public sealed record HitTestResult(
+    string Tag,
+    string? Id,
+    string? ClassName,
+    string? Text,
+    string? Role,
+    string? Href,
+    double X, double Y, double Width, double Height);
 
 /// <summary>Args for <see cref="CefBrowser.JsInvoke"/>.</summary>
 public sealed class JsInvokeEventArgs : EventArgs
