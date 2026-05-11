@@ -275,6 +275,12 @@ internal static unsafe partial class Excef
     public static extern void excef_resolve_scheme_request([NativeTypeName("unsigned long long")] ulong token, int status_code, [NativeTypeName("const char *")] sbyte* status_text, [NativeTypeName("const char *")] sbyte* mime_type, [NativeTypeName("const unsigned char *")] byte* body, int body_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_resource_request_callback([NativeTypeName("excef_resource_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_resource_request([NativeTypeName("unsigned long long")] ulong token, int action, [NativeTypeName("const char *")] sbyte* new_headers);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

@@ -269,15 +269,17 @@
   </section>
 
   <section id="config">
-    <h2>CEF init settings</h2>
-    <p class="lede">The demo passes a CefSettings instance to
-       <code>Cef.SetInitSettings</code> before init (cache path, custom
-       user-agent product token, persistent session cookies). Click to
-       round-trip through httpbin's UA echo to verify the product token
-       made it into the actual User-Agent header.</p>
+    <h2>CEF init + request headers</h2>
+    <p class="lede">The demo passes a <code>CefSettings</code> to
+       <code>Cef.SetInitSettings</code> before init (cache, full UA,
+       persistent cookies). It also subscribes to
+       <code>CefBrowser.ResourceRequest</code> and injects an
+       <code>X-Exclr8Cef-Demo: hello</code> header on every outgoing
+       request. Click to round-trip through httpbin and verify both.</p>
     <div class="row">
-      <button id="cfgUa">Show User-Agent (httpbin echo)</button>
-      <span id="cfgOut" style="color:var(--muted); margin-left:8px"></span>
+      <button id="cfgUa">Show User-Agent (httpbin)</button>
+      <button id="cfgHeaders">Show all sent headers (httpbin)</button>
+      <span id="cfgOut" style="color:var(--muted); margin-left:8px; font-family:monospace; font-size:12px"></span>
     </div>
   </section>
 
@@ -409,6 +411,17 @@
       const r = await fetch('https://httpbin.org/user-agent');
       const j = await r.json();
       $('#cfgOut').textContent = j['user-agent'] || '(empty)';
+    } catch (err) {
+      $('#cfgOut').textContent = 'error: ' + err;
+    }
+  });
+  $('#cfgHeaders').addEventListener('click', async () => {
+    $('#cfgOut').textContent = 'fetching…';
+    try {
+      const r = await fetch('https://httpbin.org/headers');
+      const j = await r.json();
+      // Pretty-print so the X-Exclr8Cef-Demo header stands out.
+      $('#cfgOut').textContent = JSON.stringify(j.headers, null, 2);
     } catch (err) {
       $('#cfgOut').textContent = 'error: ' + err;
     }

@@ -173,6 +173,17 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<RenderProcessGoneEventArgs>? RenderProcessGone;
 
     /// <summary>
+    /// Fires once per outgoing network request — main-frame navigations,
+    /// sub-resources (CSS / JS / images / favicons), XHR / fetch, web
+    /// workers. Host can inspect the URL / method / current headers and
+    /// either let the request proceed (optionally replacing headers via
+    /// <see cref="ResourceRequestEventArgs.Continue"/>) or cancel via
+    /// <see cref="ResourceRequestEventArgs.Cancel"/>. Without a
+    /// subscriber the request goes through with no overhead.
+    /// </summary>
+    public event EventHandler<ResourceRequestEventArgs>? ResourceRequest;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -635,6 +646,11 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseRenderProcessGone(Cef.TerminationStatus status, int errorCode, string errorString)
         => RenderProcessGone?.Invoke(this, new RenderProcessGoneEventArgs(status, errorCode, errorString));
 
+    internal bool HasResourceRequestSubscriber => ResourceRequest is not null;
+
+    internal void RaiseResourceRequest(ulong token, string url, string method, Cef.ResourceType type, string headers)
+        => ResourceRequest?.Invoke(this, new ResourceRequestEventArgs(token, url, method, type, headers));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -759,6 +775,49 @@ public sealed class AuthRequestEventArgs : EventArgs
     {
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_auth(_token, null, null); }
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.ResourceRequest"/>. Host MUST call
+/// either <see cref="Continue"/> or <see cref="Cancel"/>.
+/// </summary>
+public sealed class ResourceRequestEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    public string Url { get; }
+    public string Method { get; }
+    public Cef.ResourceType Type { get; }
+    /// <summary>The request's current header set ("Name: Value\n" per line).</summary>
+    public string CurrentHeaders { get; }
+
+    internal ResourceRequestEventArgs(ulong token, string url, string method, Cef.ResourceType type, string headers)
+    {
+        _token = token; Url = url; Method = method; Type = type; CurrentHeaders = headers;
+    }
+
+    /// <summary>
+    /// Let the request proceed. If <paramref name="newHeaders"/> is non-null,
+    /// the request's entire header set is REPLACED (same `Name: Value\n` format
+    /// as <see cref="CurrentHeaders"/>); otherwise headers are left as-is.
+    /// </summary>
+    public void Continue(string? newHeaders = null)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* p = newHeaders is null ? null : (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(newHeaders);
+            try { Native.Excef.excef_resolve_resource_request(_token, 0, p); }
+            finally { if (p is not null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe { Native.Excef.excef_resolve_resource_request(_token, 1, null); }
     }
 }
 

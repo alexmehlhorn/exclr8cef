@@ -15,6 +15,7 @@
 #include "include/cef_load_handler.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_request_handler.h"
+#include "include/cef_resource_request_handler.h"
 
 #include "exclr8cef.h"
 
@@ -30,7 +31,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefContextMenuHandler,
                             public CefDownloadHandler,
                             public CefRequestHandler,
-                            public CefFindHandler {
+                            public CefFindHandler,
+                            public CefResourceRequestHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -121,6 +123,25 @@ public:
                                     TerminationStatus status,
                                     int error_code,
                                     const CefString& error_string) override;
+
+    // Return ourselves as the resource handler for every request — keeps
+    // the v1 implementation flat (one CefResourceRequestHandler instance
+    // shared, not one per request).
+    CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        bool is_navigation,
+        bool is_download,
+        const CefString& request_initiator,
+        bool& disable_default_handling) override;
+
+    // CefResourceRequestHandler — only OnBeforeResourceLoad in v1.
+    cef_return_value_t OnBeforeResourceLoad(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefCallback> callback) override;
 
     // CefFindHandler
     void OnFindResult(CefRefPtr<CefBrowser> browser,

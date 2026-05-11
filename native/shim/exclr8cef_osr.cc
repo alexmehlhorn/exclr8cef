@@ -55,6 +55,7 @@ excef_auth_request_cb_t g_auth_request_cb = nullptr;
 excef_find_result_cb_t g_find_result_cb = nullptr;
 excef_render_process_gone_cb_t g_render_process_gone_cb = nullptr;
 excef_scheme_request_cb_t g_scheme_request_cb = nullptr;
+excef_resource_request_cb_t g_resource_request_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -94,6 +95,14 @@ struct PendingSchemeRequest {
     int browser_id;
     CefRefPtr<SchemeResourceHandler> handler;
 };
+
+// Resource-request state. The CefRequest is kept alive until resolve
+// so the host's new headers (if any) can be applied to it.
+struct PendingResourceRequest {
+    int browser_id;
+    CefRefPtr<CefRequest> request;
+    CefRefPtr<CefCallback> callback;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
@@ -109,6 +118,8 @@ std::mutex g_auth_mu;
 std::map<uint64_t, PendingAuth> g_auth_pending;
 std::mutex g_scheme_mu;
 std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
+std::mutex g_resource_request_mu;
+std::map<uint64_t, PendingResourceRequest> g_resource_request_pending;
 
 // Resource handler for our custom schemes. One instance per request.
 // Open() defers via CefCallback while the host computes the response;
@@ -402,6 +413,82 @@ void Exclr8CefOsrHandler::OnRenderProcessTerminated(CefRefPtr<CefBrowser> /*brow
     }
 }
 
+CefRefPtr<CefResourceRequestHandler>
+Exclr8CefOsrHandler::GetResourceRequestHandler(
+    CefRefPtr<CefBrowser> /*browser*/,
+    CefRefPtr<CefFrame> /*frame*/,
+    CefRefPtr<CefRequest> /*request*/,
+    bool /*is_navigation*/,
+    bool /*is_download*/,
+    const CefString& /*request_initiator*/,
+    bool& /*disable_default_handling*/) {
+    // Reuse this handler instance — we only override OnBeforeResourceLoad
+    // and that method works fine for every request from this browser.
+    // Hosts that don't subscribe to the resource-request event get a
+    // free no-op (OnBeforeResourceLoad returns RV_CONTINUE).
+    if (!g_resource_request_cb) return nullptr;  // skip overhead entirely
+    return this;
+}
+
+// Header serialization helpers — in namespace exclr8cef (not the anon
+// namespace) so the extern "C" excef_resolve_resource_request below can
+// reach them via the namespace qualifier.
+std::string SerializeHeaders(const CefRequest::HeaderMap& headers) {
+    std::string out;
+    for (const auto& kv : headers) {
+        out += kv.first.ToString();
+        out += ": ";
+        out += kv.second.ToString();
+        out += '\n';
+    }
+    if (!out.empty()) out.pop_back();  // drop trailing newline
+    return out;
+}
+
+void ParseHeaders(const char* s, CefRequest::HeaderMap& out) {
+    if (!s || !*s) return;
+    std::string str(s);
+    size_t start = 0;
+    for (size_t i = 0; i <= str.size(); ++i) {
+        if (i == str.size() || str[i] == '\n') {
+            if (i > start) {
+                auto line = str.substr(start, i - start);
+                auto colon = line.find(':');
+                if (colon != std::string::npos) {
+                    std::string name = line.substr(0, colon);
+                    std::string value = line.substr(colon + 1);
+                    if (!value.empty() && value.front() == ' ') value.erase(0, 1);
+                    out.emplace(CefString(name), CefString(value));
+                }
+            }
+            start = i + 1;
+        }
+    }
+}
+
+cef_return_value_t Exclr8CefOsrHandler::OnBeforeResourceLoad(
+    CefRefPtr<CefBrowser> /*browser*/,
+    CefRefPtr<CefFrame> /*frame*/,
+    CefRefPtr<CefRequest> request,
+    CefRefPtr<CefCallback> callback) {
+    if (!g_resource_request_cb) return RV_CONTINUE;
+
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_resource_request_mu);
+        g_resource_request_pending[token] = PendingResourceRequest{id_, request, callback};
+    }
+    std::string url = request->GetURL().ToString();
+    std::string method = request->GetMethod().ToString();
+    CefRequest::HeaderMap headers;
+    request->GetHeaderMap(headers);
+    std::string serialized = SerializeHeaders(headers);
+    int rtype = static_cast<int>(request->GetResourceType());
+    g_resource_request_cb(id_, token, url.c_str(), method.c_str(),
+                          rtype, serialized.c_str());
+    return RV_CONTINUE_ASYNC;
+}
+
 void Exclr8CefOsrHandler::OnFindResult(CefRefPtr<CefBrowser> /*browser*/,
                                         int identifier,
                                         int count,
@@ -649,6 +736,17 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
                 if (it->second.handler)
                     it->second.handler->Resolve(410, "Gone", "text/plain", {});
                 it = g_scheme_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_resource_request_mu);
+        for (auto it = g_resource_request_pending.begin(); it != g_resource_request_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_resource_request_pending.erase(it);
             } else {
                 ++it;
             }
@@ -1106,6 +1204,52 @@ extern "C" void excef_set_auth_request_callback(excef_auth_request_cb_t cb) { ex
 extern "C" void excef_set_find_result_callback(excef_find_result_cb_t cb) { exclr8cef::g_find_result_cb = cb; }
 extern "C" void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb) { exclr8cef::g_render_process_gone_cb = cb; }
 extern "C" void excef_set_scheme_request_callback(excef_scheme_request_cb_t cb) { exclr8cef::g_scheme_request_cb = cb; }
+extern "C" void excef_set_resource_request_callback(excef_resource_request_cb_t cb) { exclr8cef::g_resource_request_cb = cb; }
+
+namespace {
+class ResourceRequestResolveTask : public CefTask {
+public:
+    ResourceRequestResolveTask(CefRefPtr<CefCallback> cb, bool allow)
+        : cb_(std::move(cb)), allow_(allow) {}
+    void Execute() override {
+        if (!cb_) return;
+        if (allow_) cb_->Continue();
+        else cb_->Cancel();
+    }
+private:
+    CefRefPtr<CefCallback> cb_;
+    bool allow_;
+    IMPLEMENT_REFCOUNTING(ResourceRequestResolveTask);
+};
+}  // namespace
+
+extern "C" void excef_resolve_resource_request(uint64_t token, int action, const char* new_headers) {
+    CefRefPtr<CefRequest> request;
+    CefRefPtr<CefCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_resource_request_mu);
+        auto it = exclr8cef::g_resource_request_pending.find(token);
+        if (it == exclr8cef::g_resource_request_pending.end()) return;
+        request = it->second.request;
+        callback = it->second.callback;
+        exclr8cef::g_resource_request_pending.erase(it);
+    }
+    if (!callback) return;
+    bool allow = (action == 0);
+    if (allow && request && new_headers && *new_headers) {
+        // Replace the entire header set with what the host provided.
+        CefRequest::HeaderMap parsed;
+        exclr8cef::ParseHeaders(new_headers, parsed);
+        request->SetHeaderMap(parsed);
+    }
+    if (CefCurrentlyOn(TID_IO)) {
+        if (allow) callback->Continue();
+        else callback->Cancel();
+    } else {
+        CefPostTask(TID_IO, CefRefPtr<CefTask>(
+            new ResourceRequestResolveTask(callback, allow)));
+    }
+}
 
 extern "C" int excef_register_custom_scheme(const char* scheme_name,
                                               int is_standard,

@@ -744,6 +744,38 @@ EXCEF_API void excef_resolve_scheme_request(
     const unsigned char* body,
     int body_length);
 
+// ---- Resource-request handler (lite) -----------------------------------
+//
+// Fires once per outgoing network request — main-frame navigations,
+// sub-resources (CSS / JS / images / favicons), XHR/fetch, web workers.
+// Host can inspect the URL / method / current headers and either let
+// the request proceed (optionally replacing the header set) or cancel.
+//
+// `resource_type` mirrors cef_resource_type_t (0=main_frame, 1=sub_frame,
+// 2=stylesheet, 3=script, 4=image, 5=font, 6=sub_resource, 7=object,
+// 8=media, 9=worker, 12=favicon, 13=xhr, 15=service_worker, ...).
+//
+// `current_headers` is the request's current header set serialized as
+// `Name: Value\n` lines (no trailing newline).
+typedef void (*excef_resource_request_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    const char* url,
+    const char* method,
+    int resource_type,
+    const char* current_headers);
+
+EXCEF_API void excef_set_resource_request_callback(excef_resource_request_cb_t cb);
+
+// Resolve. `action` = 0 → continue, 1 → cancel. If `action=0` and
+// `new_headers` is non-NULL, the request's entire header set is REPLACED
+// with the supplied list (same `Name: Value\n` format). Pass NULL or
+// empty to keep existing headers untouched.
+EXCEF_API void excef_resolve_resource_request(
+    unsigned long long token,
+    int action,
+    const char* new_headers);
+
 
 // ---- IME -----------------------------------------------------------------
 //

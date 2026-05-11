@@ -539,6 +539,35 @@ public static class Cef
     }
 
     /// <summary>
+    /// What a resource request is for. Mirrors cef_resource_type_t (most
+    /// values present; less-common ones omitted from the enum but pass
+    /// through as the underlying int).
+    /// </summary>
+    public enum ResourceType
+    {
+        MainFrame              = 0,
+        SubFrame               = 1,
+        Stylesheet             = 2,
+        Script                 = 3,
+        Image                  = 4,
+        Font                   = 5,
+        SubResource            = 6,
+        Object                 = 7,
+        Media                  = 8,
+        Worker                 = 9,
+        SharedWorker           = 10,
+        Prefetch               = 11,
+        Favicon                = 12,
+        Xhr                    = 13,
+        Ping                   = 14,
+        ServiceWorker          = 15,
+        CspReport              = 16,
+        PluginResource         = 17,
+        NavigationPreloadMainFrame = 19,
+        NavigationPreloadSubFrame  = 20,
+    }
+
+    /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
     /// <c>console.warn</c> → Warning, <c>console.error</c> → Error, …).
@@ -675,6 +704,7 @@ public static class Cef
                 Excef.excef_set_find_result_callback(&FindResultTrampoline);
                 Excef.excef_set_render_process_gone_callback(&RenderProcessGoneTrampoline);
                 Excef.excef_set_scheme_request_callback(&SchemeRequestTrampoline);
+                Excef.excef_set_resource_request_callback(&ResourceRequestTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -853,6 +883,29 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ResourceRequestTrampoline(int browserId, ulong token, sbyte* url, sbyte* method, int resourceType, sbyte* headers)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_resource_request(token, 0, null);
+            return;
+        }
+        if (!b.HasResourceRequestSubscriber)
+        {
+            // Shouldn't reach here — the native side skips firing when no
+            // subscriber is registered — but safe fallback.
+            Excef.excef_resolve_resource_request(token, 0, null);
+            return;
+        }
+        b.RaiseResourceRequest(
+            token,
+            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)method) ?? "GET",
+            (ResourceType)resourceType,
+            Marshal.PtrToStringUTF8((IntPtr)headers) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
