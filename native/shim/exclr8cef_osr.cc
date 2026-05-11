@@ -42,6 +42,8 @@ excef_auto_resize_cb_t g_auto_resize_cb = nullptr;
 excef_js_dialog_cb_t g_js_dialog_cb = nullptr;
 excef_file_dialog_cb_t g_file_dialog_cb = nullptr;
 excef_context_menu_cb_t g_context_menu_cb = nullptr;
+excef_download_starting_cb_t g_download_starting_cb = nullptr;
+excef_download_progress_cb_t g_download_progress_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -59,6 +61,14 @@ struct PendingContextMenu {
     int browser_id;
     CefRefPtr<CefRunContextMenuCallback> callback;
 };
+struct PendingDownloadStart {
+    int browser_id;
+    CefRefPtr<CefBeforeDownloadCallback> callback;
+};
+struct PendingDownloadProgress {
+    int browser_id;
+    CefRefPtr<CefDownloadItemCallback> callback;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
@@ -66,6 +76,10 @@ std::mutex g_file_dialog_mu;
 std::map<uint64_t, PendingFileDialog> g_file_dialog_pending;
 std::mutex g_context_menu_mu;
 std::map<uint64_t, PendingContextMenu> g_context_menu_pending;
+std::mutex g_download_starting_mu;
+std::map<uint64_t, PendingDownloadStart> g_download_starting_pending;
+std::mutex g_download_progress_mu;
+std::map<uint64_t, PendingDownloadProgress> g_download_progress_pending;
 
 }  // namespace
 
@@ -171,6 +185,58 @@ bool Exclr8CefOsrHandler::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> /*browser*/
     std::string msg = message_text.ToString();
     g_js_dialog_cb(id_, token, /*dialog_type=*/3, msg.c_str(), "");
     return true;
+}
+
+bool Exclr8CefOsrHandler::OnBeforeDownload(CefRefPtr<CefBrowser> /*browser*/,
+                                            CefRefPtr<CefDownloadItem> item,
+                                            const CefString& suggested_name,
+                                            CefRefPtr<CefBeforeDownloadCallback> callback) {
+    if (!g_download_starting_cb) {
+        // Without a host subscriber, just let CEF use the default save path.
+        // (No-op here; CEF's default handler will not fire because we
+        // installed ourselves, so we must give it a path or it'll hang.
+        // Pick Downloads/<suggested>.
+        std::string fallback = suggested_name.ToString();
+        if (fallback.empty()) fallback = "download.bin";
+        callback->Continue(fallback, /*show_dialog=*/true);
+        return true;
+    }
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_download_starting_mu);
+        g_download_starting_pending[token] = PendingDownloadStart{id_, callback};
+    }
+    std::string url = item->GetURL().ToString();
+    std::string name = suggested_name.ToString();
+    std::string mime = item->GetMimeType().ToString();
+    g_download_starting_cb(id_, token, item->GetId(),
+                           url.c_str(), name.c_str(), mime.c_str(),
+                           item->GetTotalBytes());
+    return true;
+}
+
+void Exclr8CefOsrHandler::OnDownloadUpdated(CefRefPtr<CefBrowser> /*browser*/,
+                                             CefRefPtr<CefDownloadItem> item,
+                                             CefRefPtr<CefDownloadItemCallback> callback) {
+    if (!g_download_progress_cb) return;
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_download_progress_mu);
+        g_download_progress_pending[token] = PendingDownloadProgress{id_, callback};
+    }
+    int state = item->IsInProgress() ? 0 : (item->IsComplete() ? 1 : 2);
+    std::string full_path = item->GetFullPath().ToString();
+    g_download_progress_cb(id_, token, item->GetId(),
+                           item->GetPercentComplete(),
+                           item->GetReceivedBytes(),
+                           item->GetTotalBytes(),
+                           item->GetCurrentSpeed(),
+                           state,
+                           full_path.c_str());
+    // Invalidate the token after the host's handler returns — the
+    // CefDownloadItemCallback is per-invocation and shouldn't be retained.
+    std::lock_guard<std::mutex> lock(g_download_progress_mu);
+    g_download_progress_pending.erase(token);
 }
 
 bool Exclr8CefOsrHandler::RunContextMenu(CefRefPtr<CefBrowser> /*browser*/,
@@ -308,6 +374,29 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Cancel();
                 it = g_context_menu_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_download_starting_mu);
+        for (auto it = g_download_starting_pending.begin(); it != g_download_starting_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                // No Cancel() on CefBeforeDownloadCallback; pass empty path
+                // which makes CEF abort the download.
+                if (it->second.callback) it->second.callback->Continue(CefString(), /*show_dialog=*/false);
+                it = g_download_starting_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_download_progress_mu);
+        for (auto it = g_download_progress_pending.begin(); it != g_download_progress_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                it = g_download_progress_pending.erase(it);
             } else {
                 ++it;
             }
@@ -759,6 +848,66 @@ extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { excl
 extern "C" void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb) { exclr8cef::g_js_dialog_cb = cb; }
 extern "C" void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb) { exclr8cef::g_file_dialog_cb = cb; }
 extern "C" void excef_set_context_menu_callback(excef_context_menu_cb_t cb) { exclr8cef::g_context_menu_cb = cb; }
+extern "C" void excef_set_download_starting_callback(excef_download_starting_cb_t cb) { exclr8cef::g_download_starting_cb = cb; }
+extern "C" void excef_set_download_progress_callback(excef_download_progress_cb_t cb) { exclr8cef::g_download_progress_cb = cb; }
+
+namespace {
+class DownloadStartingResolveTask : public CefTask {
+public:
+    DownloadStartingResolveTask(CefRefPtr<CefBeforeDownloadCallback> cb,
+                                 CefString path, bool show_dialog)
+        : cb_(std::move(cb)), path_(std::move(path)), show_(show_dialog) {}
+    void Execute() override { if (cb_) cb_->Continue(path_, show_); }
+private:
+    CefRefPtr<CefBeforeDownloadCallback> cb_;
+    CefString path_;
+    bool show_;
+    IMPLEMENT_REFCOUNTING(DownloadStartingResolveTask);
+};
+}  // namespace
+
+extern "C" void excef_resolve_download_starting(uint64_t token,
+                                                  const char* path,
+                                                  int show_dialog) {
+    CefRefPtr<CefBeforeDownloadCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_download_starting_mu);
+        auto it = exclr8cef::g_download_starting_pending.find(token);
+        if (it == exclr8cef::g_download_starting_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_download_starting_pending.erase(it);
+    }
+    if (!callback) return;
+    CefString p;
+    if (path && *path) p.FromString(path);
+    bool show = show_dialog != 0;
+    if (CefCurrentlyOn(TID_UI)) {
+        callback->Continue(p, show);
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(
+            new DownloadStartingResolveTask(callback, p, show)));
+    }
+}
+
+// Download progress action. Called synchronously from the host's
+// DownloadProgress event handler — outside that window the token is
+// invalid (we erase right after returning from the host callback).
+extern "C" void excef_download_action(uint64_t token, int action) {
+    CefRefPtr<CefDownloadItemCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_download_progress_mu);
+        auto it = exclr8cef::g_download_progress_pending.find(token);
+        if (it == exclr8cef::g_download_progress_pending.end()) return;
+        callback = it->second.callback;
+    }
+    if (!callback) return;
+    // These can be called from any thread per CEF docs — no need to hop.
+    switch (action) {
+        case 0: callback->Cancel(); break;
+        case 1: callback->Pause();  break;
+        case 2: callback->Resume(); break;
+    }
+}
 
 namespace {
 // CefPostTask in this CEF version doesn't take naked lambdas via base::BindOnce

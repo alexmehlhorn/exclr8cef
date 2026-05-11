@@ -233,6 +233,18 @@ internal static unsafe partial class Excef
     public static extern void excef_resolve_context_menu([NativeTypeName("unsigned long long")] ulong token, int command_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_download_starting_callback([NativeTypeName("excef_download_starting_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, long, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_download_starting([NativeTypeName("unsigned long long")] ulong token, [NativeTypeName("const char *")] sbyte* path, int show_dialog);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_download_progress_callback([NativeTypeName("excef_download_progress_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, int, long, long, long, int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_download_action([NativeTypeName("unsigned long long")] ulong token, int action);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

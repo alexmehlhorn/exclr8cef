@@ -80,6 +80,41 @@ public partial class MainWindow : Window
         b.JsDialog              += OnBrowserJsDialog;
         b.FileDialog            += OnBrowserFileDialog;
         b.ContextMenu           += OnBrowserContextMenu;
+        b.DownloadStarting      += OnBrowserDownloadStarting;
+        b.DownloadProgress      += OnBrowserDownloadProgress;
+    }
+
+    private async void OnBrowserDownloadStarting(object? sender, Exclr8Cef.DownloadStartingEventArgs e)
+    {
+        LogEvent("download", $"starting #{e.DownloadId}: {e.SuggestedName} ({e.MimeType}, {e.TotalBytes}B) ← {e.Url}");
+        var sp = StorageProvider;
+        if (sp is null) { e.Cancel(); return; }
+        var picked = await sp.SaveFilePickerAsync(new Avalonia.Platform.Storage.FilePickerSaveOptions
+        {
+            Title = "Save download",
+            SuggestedFileName = e.SuggestedName,
+        });
+        if (picked is null) { e.Cancel(); return; }
+        e.Continue(picked.Path.LocalPath);
+    }
+
+    // Bucket download-progress events so the log stays readable.
+    private readonly Dictionary<int, int> _lastDownloadBucket = new();
+    private void OnBrowserDownloadProgress(object? sender, Exclr8Cef.DownloadProgressEventArgs e)
+    {
+        // Log every 10% bucket and the final state transition.
+        int bucket = e.PercentComplete < 0 ? -1 : e.PercentComplete / 10;
+        if (e.State == Exclr8Cef.Cef.DownloadState.InProgress)
+        {
+            if (_lastDownloadBucket.TryGetValue(e.DownloadId, out var b) && b == bucket) return;
+            _lastDownloadBucket[e.DownloadId] = bucket;
+            LogEvent("download", $"#{e.DownloadId}: {e.PercentComplete}% ({e.ReceivedBytes}/{e.TotalBytes}B, {e.CurrentSpeedBytesPerSec}B/s)");
+        }
+        else
+        {
+            _lastDownloadBucket.Remove(e.DownloadId);
+            LogEvent("download", $"#{e.DownloadId}: {e.State} → {e.FullPath}");
+        }
     }
 
     private void OnBrowserContextMenu(object? sender, Exclr8Cef.ContextMenuEventArgs e)
@@ -544,6 +579,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["js-dialog"]       = SolidColorBrush.Parse("#cba6f7"),
         ["file-dialog"]     = SolidColorBrush.Parse("#cba6f7"),
         ["contextmenu"]     = SolidColorBrush.Parse("#cba6f7"),
+        ["download"]        = SolidColorBrush.Parse("#f5c2e7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

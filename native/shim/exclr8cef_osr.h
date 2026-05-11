@@ -8,6 +8,7 @@
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_download_handler.h"
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
@@ -24,7 +25,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefLoadHandler,
                             public CefJSDialogHandler,
                             public CefDialogHandler,
-                            public CefContextMenuHandler {
+                            public CefContextMenuHandler,
+                            public CefDownloadHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -37,6 +39,7 @@ public:
     CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
     CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+    CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -87,6 +90,16 @@ public:
                          CefRefPtr<CefContextMenuParams> params,
                          CefRefPtr<CefMenuModel> model,
                          CefRefPtr<CefRunContextMenuCallback> callback) override;
+
+    // CefDownloadHandler
+    bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefDownloadItem> download_item,
+                           const CefString& suggested_name,
+                           CefRefPtr<CefBeforeDownloadCallback> callback) override;
+
+    void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                            CefRefPtr<CefDownloadItem> download_item,
+                            CefRefPtr<CefDownloadItemCallback> callback) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

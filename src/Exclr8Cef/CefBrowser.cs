@@ -133,6 +133,23 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<ContextMenuEventArgs>? ContextMenu;
 
     /// <summary>
+    /// Fires once when a download begins, before any bytes are written.
+    /// Host must call <see cref="DownloadStartingEventArgs.Continue"/>
+    /// with a save path, or <see cref="DownloadStartingEventArgs.Cancel"/>.
+    /// Without a subscriber the file is saved with a default name.
+    /// </summary>
+    public event EventHandler<DownloadStartingEventArgs>? DownloadStarting;
+
+    /// <summary>
+    /// Fires repeatedly while a download is in flight (typically a few
+    /// times per second). The args carry the current snapshot plus
+    /// Cancel / Pause / Resume actions. Actions must be called
+    /// synchronously inside the event handler — the underlying CEF
+    /// callback is per-invocation.
+    /// </summary>
+    public event EventHandler<DownloadProgressEventArgs>? DownloadProgress;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -551,6 +568,14 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseContextMenu(ulong token, int x, int y, ContextMenuItem[] items)
         => ContextMenu?.Invoke(this, new ContextMenuEventArgs(token, x, y, items));
 
+    internal bool HasDownloadStartingSubscriber => DownloadStarting is not null;
+
+    internal void RaiseDownloadStarting(ulong token, int downloadId, string url, string suggestedName, string mimeType, long totalBytes)
+        => DownloadStarting?.Invoke(this, new DownloadStartingEventArgs(token, downloadId, url, suggestedName, mimeType, totalBytes));
+
+    internal void RaiseDownloadProgress(ulong token, int downloadId, int percent, long received, long total, long speed, Cef.DownloadState state, string fullPath)
+        => DownloadProgress?.Invoke(this, new DownloadProgressEventArgs(token, downloadId, percent, received, total, speed, state, fullPath));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -632,6 +657,77 @@ public sealed class JsDialogEventArgs : EventArgs
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_js_dialog(_token, 0, null); }
     }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.DownloadStarting"/>. Host MUST call
+/// <see cref="Continue"/> with a save path or <see cref="Cancel"/>.
+/// </summary>
+public sealed class DownloadStartingEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    public int DownloadId { get; }
+    public string Url { get; }
+    public string SuggestedName { get; }
+    public string MimeType { get; }
+    /// <summary>Total content length, -1 if unknown.</summary>
+    public long TotalBytes { get; }
+
+    internal DownloadStartingEventArgs(ulong token, int downloadId, string url, string suggestedName, string mimeType, long totalBytes)
+    {
+        _token = token; DownloadId = downloadId; Url = url; SuggestedName = suggestedName;
+        MimeType = mimeType; TotalBytes = totalBytes;
+    }
+
+    /// <summary>Start the download to <paramref name="path"/>. If <paramref name="showDialog"/> is true, the OS save-as dialog will appear as well.</summary>
+    public void Continue(string path, bool showDialog = false)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(path);
+            try { Native.Excef.excef_resolve_download_starting(_token, p, showDialog ? 1 : 0); }
+            finally { System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe { Native.Excef.excef_resolve_download_starting(_token, null, 0); }
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.DownloadProgress"/>. Action methods
+/// (<see cref="Cancel"/> / <see cref="Pause"/> / <see cref="Resume"/>)
+/// MUST be called synchronously inside the event handler.
+/// </summary>
+public sealed class DownloadProgressEventArgs : EventArgs
+{
+    private readonly ulong _token;
+
+    public int DownloadId { get; }
+    /// <summary>0–100, or -1 if total size is unknown.</summary>
+    public int PercentComplete { get; }
+    public long ReceivedBytes { get; }
+    public long TotalBytes { get; }
+    public long CurrentSpeedBytesPerSec { get; }
+    public Cef.DownloadState State { get; }
+    public string FullPath { get; }
+
+    internal DownloadProgressEventArgs(ulong token, int downloadId, int percent, long received, long total, long speed, Cef.DownloadState state, string fullPath)
+    {
+        _token = token; DownloadId = downloadId; PercentComplete = percent;
+        ReceivedBytes = received; TotalBytes = total; CurrentSpeedBytesPerSec = speed;
+        State = state; FullPath = fullPath;
+    }
+
+    public void Cancel() => Native.Excef.excef_download_action(_token, 0);
+    public void Pause()  => Native.Excef.excef_download_action(_token, 1);
+    public void Resume() => Native.Excef.excef_download_action(_token, 2);
 }
 
 /// <summary>One entry in <see cref="ContextMenuEventArgs.Items"/>.</summary>

@@ -352,6 +352,9 @@ public static class Cef
     /// <summary>What kind of file picker the page is asking for.</summary>
     public enum FileDialogMode { Open = 0, OpenMultiple = 1, OpenFolder = 2, Save = 3 }
 
+    /// <summary>Lifecycle state on a <see cref="DownloadProgressEventArgs"/>.</summary>
+    public enum DownloadState { InProgress = 0, Complete = 1, Canceled = 2 }
+
     /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
@@ -483,6 +486,8 @@ public static class Cef
                 Excef.excef_set_js_dialog_callback(&JsDialogTrampoline);
                 Excef.excef_set_file_dialog_callback(&FileDialogTrampoline);
                 Excef.excef_set_context_menu_callback(&ContextMenuTrampoline);
+                Excef.excef_set_download_starting_callback(&DownloadStartingTrampoline);
+                Excef.excef_set_download_progress_callback(&DownloadProgressTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -633,6 +638,42 @@ public static class Cef
             (JsDialogType)dialogType,
             Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void DownloadStartingTrampoline(int browserId, ulong token, int downloadId, sbyte* url, sbyte* suggestedName, sbyte* mimeType, long totalBytes)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            // Cancel by sending empty path.
+            Excef.excef_resolve_download_starting(token, null, 0);
+            return;
+        }
+        if (!b.HasDownloadStartingSubscriber)
+        {
+            // No subscriber: let CEF write to the default Downloads folder
+            // with the suggested filename (path="" + show_dialog=true is
+            // CEF's "I don't care, you decide" signal).
+            Excef.excef_resolve_download_starting(token, null, 1);
+            return;
+        }
+        b.RaiseDownloadStarting(
+            token, downloadId,
+            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)suggestedName) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)mimeType) ?? "",
+            totalBytes);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void DownloadProgressTrampoline(int browserId, ulong token, int downloadId, int percent, long received, long total, long speed, int state, sbyte* fullPath)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseDownloadProgress(
+            token, downloadId,
+            percent, received, total, speed,
+            (DownloadState)state,
+            Marshal.PtrToStringUTF8((IntPtr)fullPath) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

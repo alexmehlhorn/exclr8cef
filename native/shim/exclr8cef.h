@@ -539,6 +539,55 @@ EXCEF_API void excef_set_context_menu_callback(excef_context_menu_cb_t cb);
 // Resolve with the chosen command id, or -1 to dismiss without action.
 EXCEF_API void excef_resolve_context_menu(unsigned long long token, int command_id);
 
+// ---- Download handler --------------------------------------------------
+//
+// CefDownloadHandler has two distinct hooks:
+//
+// 1. `OnBeforeDownload` — fires once at the start. Host must pick a
+//    save path (or cancel). Standard deferred-response pattern:
+//    download-starting callback fires, host resolves with path.
+//
+// 2. `OnDownloadUpdated` — fires repeatedly while the download is in
+//    flight. Each invocation carries a *fresh* token; the host can
+//    optionally call excef_download_action(token, ...) synchronously
+//    inside the event handler to Cancel / Pause / Resume. Tokens are
+//    invalidated after the handler returns.
+typedef void (*excef_download_starting_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int download_id,
+    const char* url,
+    const char* suggested_name,
+    const char* mime_type,
+    long long total_bytes);
+
+EXCEF_API void excef_set_download_starting_callback(excef_download_starting_cb_t cb);
+
+// Resolve. `path` = NULL/"" cancels the download. `show_dialog` = 1
+// makes the OS show a save-as dialog (in addition to using `path`).
+EXCEF_API void excef_resolve_download_starting(unsigned long long token,
+                                                 const char* path,
+                                                 int show_dialog);
+
+// state: 0 = in-progress, 1 = complete, 2 = canceled.
+// percent_complete may be -1 if total_bytes is unknown.
+typedef void (*excef_download_progress_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int download_id,
+    int percent_complete,
+    long long received_bytes,
+    long long total_bytes,
+    long long current_speed,
+    int state,
+    const char* full_path);
+
+EXCEF_API void excef_set_download_progress_callback(excef_download_progress_cb_t cb);
+
+// action: 0 = cancel, 1 = pause, 2 = resume. No-op on unknown tokens
+// (the token is invalidated as soon as the event handler returns).
+EXCEF_API void excef_download_action(unsigned long long token, int action);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these
