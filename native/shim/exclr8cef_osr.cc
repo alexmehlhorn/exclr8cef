@@ -22,6 +22,7 @@ excef_eval_result_cb_t g_eval_result_cb = nullptr;
 excef_cookie_visit_cb_t g_cookie_visit_cb = nullptr;
 excef_browser_closed_cb_t g_browser_closed_cb = nullptr;
 excef_cursor_change_cb_t g_cursor_change_cb = nullptr;
+excef_console_message_cb_t g_console_message_cb = nullptr;
 
 }  // namespace
 
@@ -89,6 +90,21 @@ bool Exclr8CefOsrHandler::OnCursorChange(CefRefPtr<CefBrowser> /*browser*/,
     }
     // Return true: host (Avalonia) is responsible for setting the platform cursor.
     return true;
+}
+
+bool Exclr8CefOsrHandler::OnConsoleMessage(CefRefPtr<CefBrowser> /*browser*/,
+                                            cef_log_severity_t level,
+                                            const CefString& message,
+                                            const CefString& source,
+                                            int line) {
+    if (g_console_message_cb) {
+        std::string msg = message.ToString();
+        std::string src = source.ToString();
+        g_console_message_cb(id_, static_cast<int>(level),
+                             msg.c_str(), src.c_str(), line);
+    }
+    // Return false to let Chromium also emit its default console output.
+    return false;
 }
 
 void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -452,6 +468,7 @@ extern "C" void excef_set_title_change_callback(excef_title_change_cb_t cb) { ex
 extern "C" void excef_set_loading_state_callback(excef_loading_state_cb_t cb) { exclr8cef::g_loading_state_cb = cb; }
 extern "C" void excef_set_browser_closed_callback(excef_browser_closed_cb_t cb) { exclr8cef::g_browser_closed_cb = cb; }
 extern "C" void excef_set_cursor_change_callback(excef_cursor_change_cb_t cb) { exclr8cef::g_cursor_change_cb = cb; }
+extern "C" void excef_set_console_message_callback(excef_console_message_cb_t cb) { exclr8cef::g_console_message_cb = cb; }
 
 // ---- Cookies --------------------------------------------------------------
 

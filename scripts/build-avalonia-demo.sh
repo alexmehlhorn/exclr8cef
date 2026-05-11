@@ -17,6 +17,15 @@ if [ ! -d "${NATIVE_DEMO}" ]; then
   exit 1
 fi
 
+# Always re-link the native shim before bundling. Skipping this was a
+# repeated trap when adding a new C ABI symbol: the dotnet build picks up
+# the regenerated bindings (which reference the new entry point), the
+# bundle assembly copies the stale dylib, and the app crashes at startup
+# with EntryPointNotFoundException. ninja is incremental so the cost is
+# trivial when nothing changed.
+echo "==> Rebuilding native shim (incremental)..."
+cmake --build "${REPO_ROOT}/native/build" --target exclr8cef --parallel >/dev/null
+
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64)  RID="osx-arm64" ;;
   Darwin/x86_64) RID="osx-x64" ;;

@@ -35,11 +35,47 @@ public partial class MainWindow : Window
 
         Browser.PropertyChanged += OnBrowserPropertyChanged;
 
+        // Subscribe to the underlying CefBrowser's event stack as soon as it
+        // exists (creation is lazy — happens on the first arrange with size).
+        Browser.AttachedToVisualTree += OnBrowserAttachedForEvents;
+
         AddressBox.Text = Browser.Url;
         BackButton.IsEnabled = Browser.CanGoBack;
         ForwardButton.IsEnabled = Browser.CanGoForward;
 
         LogEvent("init", "Demo started");
+    }
+
+    // Hook events on the underlying tech-neutral CefBrowser. Done lazily
+    // because the WebView creates its CefBrowser on first arrange.
+    private bool _browserEventsHooked;
+    private void OnBrowserAttachedForEvents(object? sender, Avalonia.VisualTreeAttachmentEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(TryHookBrowserEvents,
+            Avalonia.Threading.DispatcherPriority.Background);
+    }
+    private void TryHookBrowserEvents()
+    {
+        if (_browserEventsHooked) return;
+        if (Browser.Browser is not { } b)
+        {
+            // Try again after the next layout pass.
+            Avalonia.Threading.Dispatcher.UIThread.Post(TryHookBrowserEvents,
+                Avalonia.Threading.DispatcherPriority.Background);
+            return;
+        }
+        _browserEventsHooked = true;
+        b.ConsoleMessage += OnBrowserConsoleMessage;
+    }
+
+    private void OnBrowserConsoleMessage(object? sender, Exclr8Cef.ConsoleMessageEventArgs e)
+    {
+        // Truncate source URL to the last path segment for readability.
+        var src = e.Source;
+        var slash = src.LastIndexOf('/');
+        if (slash >= 0 && slash < src.Length - 1) src = src[(slash + 1)..];
+        var loc = string.IsNullOrEmpty(src) ? "" : $"  ({src}:{e.Line})";
+        LogEvent("console." + e.Level.ToString().ToLowerInvariant(), e.Message + loc);
     }
 
     private void LogEvent(string category, string message)
@@ -167,13 +203,19 @@ public sealed class CategoryToBrushConverter : IValueConverter
 {
     private static readonly Dictionary<string, IBrush> Map = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["init"]      = SolidColorBrush.Parse("#94e2d5"),
-        ["url"]       = SolidColorBrush.Parse("#89b4fa"),
-        ["title"]     = SolidColorBrush.Parse("#cba6f7"),
-        ["loading"]   = SolidColorBrush.Parse("#f9e2af"),
-        ["js"]        = SolidColorBrush.Parse("#a6e3a1"),
-        ["js-err"]    = SolidColorBrush.Parse("#f38ba8"),
-        ["pdf"]       = SolidColorBrush.Parse("#fab387"),
+        ["init"]            = SolidColorBrush.Parse("#94e2d5"),
+        ["url"]             = SolidColorBrush.Parse("#89b4fa"),
+        ["title"]           = SolidColorBrush.Parse("#cba6f7"),
+        ["loading"]         = SolidColorBrush.Parse("#f9e2af"),
+        ["js"]              = SolidColorBrush.Parse("#a6e3a1"),
+        ["js-err"]          = SolidColorBrush.Parse("#f38ba8"),
+        ["pdf"]             = SolidColorBrush.Parse("#fab387"),
+        ["console.verbose"] = SolidColorBrush.Parse("#6c7086"),
+        ["console.info"]    = SolidColorBrush.Parse("#a6e3a1"),
+        ["console.warning"] = SolidColorBrush.Parse("#f9e2af"),
+        ["console.error"]   = SolidColorBrush.Parse("#f38ba8"),
+        ["console.fatal"]   = SolidColorBrush.Parse("#f38ba8"),
+        ["console.default"] = SolidColorBrush.Parse("#a6adc8"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

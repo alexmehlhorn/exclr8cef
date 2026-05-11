@@ -338,6 +338,22 @@ public static class Cef
 
     public enum CefKeyEventType { RawKeyDown = 0, KeyDown = 1, KeyUp = 2, Char = 3 }
 
+    /// <summary>
+    /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
+    /// derived from the JS console method (<c>console.log</c> → Info,
+    /// <c>console.warn</c> → Warning, <c>console.error</c> → Error, …).
+    /// </summary>
+    public enum CefLogSeverity
+    {
+        Default = 0,
+        Verbose = 1,  // a.k.a. Debug
+        Info    = 2,
+        Warning = 3,
+        Error   = 4,
+        Fatal   = 5,
+        Disable = 99,
+    }
+
     /// <summary>CEF's <c>cef_cursor_type_t</c>. Maps to OnCursorChange values.</summary>
     public enum CefCursorType
     {
@@ -382,6 +398,7 @@ public static class Cef
                 Excef.excef_set_eval_result_callback(&EvalResultTrampoline);
                 Excef.excef_set_cookie_visit_callback(&CookieVisitTrampoline);
                 Excef.excef_set_cursor_change_callback(&CursorChangeTrampoline);
+                Excef.excef_set_console_message_callback(&ConsoleMessageTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -415,6 +432,17 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseCursorChanged((CefCursorType)cursorType);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ConsoleMessageTrampoline(int browserId, int level, sbyte* message, sbyte* source, int line)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseConsoleMessage(
+            (CefLogSeverity)level,
+            Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)source) ?? "",
+            line);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

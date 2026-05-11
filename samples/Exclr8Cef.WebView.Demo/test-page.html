@@ -168,6 +168,10 @@
       <a href="#scroll">Scroll</a>
       <a href="#links">External links</a>
     </div>
+    <div class="group">
+      <div class="group-title">Events</div>
+      <a href="#console">Console messages</a>
+    </div>
   </nav>
 </aside>
 
@@ -235,6 +239,20 @@
       <a href="https://duckduckgo.com">duckduckgo.com</a>
     </div>
   </section>
+
+  <section id="console">
+    <h2>Console messages</h2>
+    <p class="lede">Each button calls a different <code>console.*</code> method.
+       The host-side event console below should show one row per click.</p>
+    <div class="row">
+      <button id="cLog">console.log</button>
+      <button id="cInfo">console.info</button>
+      <button id="cWarn">console.warn</button>
+      <button id="cError">console.error</button>
+      <button id="cDebug">console.debug</button>
+      <button id="cThrow" class="ghost">throw Error</button>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -254,6 +272,19 @@
     submitCount++;
     const v = $('#formInput').value;
     $('#formOut').textContent = '#' + submitCount + ' "' + v + '"';
+  });
+
+  // Console messages — exercise each severity. Counter included so repeated
+  // clicks are distinguishable in the host-side event console.
+  let cSeq = 0;
+  $('#cLog').addEventListener('click',   () => console.log('log #' + (++cSeq)));
+  $('#cInfo').addEventListener('click',  () => console.info('info #' + (++cSeq)));
+  $('#cWarn').addEventListener('click',  () => console.warn('warn #' + (++cSeq)));
+  $('#cError').addEventListener('click', () => console.error('error #' + (++cSeq)));
+  $('#cDebug').addEventListener('click', () => console.debug('debug #' + (++cSeq)));
+  $('#cThrow').addEventListener('click', () => {
+    // Uncaught errors surface as console.error to OnConsoleMessage.
+    setTimeout(() => { throw new Error('thrown error #' + (++cSeq)); }, 0);
   });
 
   // Drag & drop (internal between dzA / dzB)

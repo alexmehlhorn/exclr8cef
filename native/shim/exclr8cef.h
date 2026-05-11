@@ -363,6 +363,21 @@ EXCEF_API void excef_set_browser_closed_callback(excef_browser_closed_cb_t cb);
 typedef void (*excef_cursor_change_cb_t)(int browser_id, int cursor_type);
 EXCEF_API void excef_set_cursor_change_callback(excef_cursor_change_cb_t cb);
 
+// ---- Console-message event ----------------------------------------------
+//
+// CefDisplayHandler::OnConsoleMessage. Fires for every console.{log,info,
+// warn,error,debug} call from the page (and for runtime warnings emitted
+// by Chromium itself, e.g. CORS / deprecation). `level` is a value from
+// cef_log_severity_t: 0=default, 1=verbose/debug, 2=info, 3=warning,
+// 4=error, 5=fatal. `source` is the script URL (may be empty for inline
+// scripts); `line` is 1-based.
+typedef void (*excef_console_message_cb_t)(int browser_id,
+                                             int level,
+                                             const char* message,
+                                             const char* source,
+                                             int line);
+EXCEF_API void excef_set_console_message_callback(excef_console_message_cb_t cb);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

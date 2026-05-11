@@ -55,6 +55,12 @@ public sealed class CefBrowser : IDisposable
     /// <summary>Fires when the page requests a different cursor type (CSS <c>cursor:</c>).</summary>
     public event EventHandler<Cef.CefCursorType>? CursorChanged;
 
+    /// <summary>
+    /// Fires for every <c>console.{log,info,warn,error,debug}</c> call from
+    /// the page and for Chromium-emitted runtime warnings (CORS, deprecation, …).
+    /// </summary>
+    public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;
+
     /// <summary>Fires after the underlying CEF browser has been fully closed.</summary>
     public event EventHandler? Closed;
 
@@ -357,6 +363,9 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseCursorChanged(Cef.CefCursorType type)
         => CursorChanged?.Invoke(this, type);
 
+    internal void RaiseConsoleMessage(Cef.CefLogSeverity level, string message, string source, int line)
+        => ConsoleMessage?.Invoke(this, new ConsoleMessageEventArgs(level, message, source, line));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -388,5 +397,25 @@ public sealed class PaintEventArgs : EventArgs
         Buffer = buffer;
         Width = width;
         Height = height;
+    }
+}
+
+/// <summary>Console message delivered to <see cref="CefBrowser.ConsoleMessage"/>.</summary>
+public sealed class ConsoleMessageEventArgs : EventArgs
+{
+    /// <summary>Severity level from <c>cef_log_severity_t</c>.</summary>
+    public Cef.CefLogSeverity Level { get; }
+    /// <summary>The formatted message text.</summary>
+    public string Message { get; }
+    /// <summary>Source script URL (empty for inline scripts).</summary>
+    public string Source { get; }
+    /// <summary>1-based line number.</summary>
+    public int Line { get; }
+    public ConsoleMessageEventArgs(Cef.CefLogSeverity level, string message, string source, int line)
+    {
+        Level = level;
+        Message = message;
+        Source = source;
+        Line = line;
     }
 }

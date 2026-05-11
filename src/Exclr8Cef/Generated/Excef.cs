@@ -71,6 +71,27 @@ internal static unsafe partial class Excef
     public static extern void excef_redo(int browser_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_target_drag_enter(int browser_id, int x, int y, int modifiers, int allowed_ops, [NativeTypeName("const char *")] sbyte* text, [NativeTypeName("const char *")] sbyte* html, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("const char **")] sbyte** file_paths, int file_path_count);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_target_drag_over(int browser_id, int x, int y, int modifiers, int allowed_ops);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_target_drop(int browser_id, int x, int y, int modifiers);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_target_drag_leave(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_start_drag_callback([NativeTypeName("excef_start_drag_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, sbyte*, sbyte*, sbyte*, sbyte*, sbyte**, int, int> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_source_ended_at(int browser_id, int x, int y, int op);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_drag_source_system_drag_ended(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_send_mouse_move(int browser_id, int x, int y, int modifiers, int mouse_leave);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -147,6 +168,9 @@ internal static unsafe partial class Excef
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_cursor_change_callback([NativeTypeName("excef_cursor_change_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_console_message_callback([NativeTypeName("excef_console_message_cb_t")] delegate* unmanaged[Cdecl]<int, int, sbyte*, sbyte*, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
