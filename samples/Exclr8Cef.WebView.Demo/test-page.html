@@ -183,6 +183,7 @@
       <a href="#load">Load events</a>
       <a href="#display">Status / tooltip / favicon</a>
       <a href="#fullscreen">Fullscreen</a>
+      <a href="#jsdialog">JS dialogs</a>
     </div>
   </nav>
 </aside>
@@ -291,6 +292,19 @@
     </div>
   </section>
 
+  <section id="jsdialog">
+    <h2>JS dialogs</h2>
+    <p class="lede">Host-rendered modal dialogs for <code>alert</code>,
+       <code>confirm</code>, and <code>prompt</code>. Result is logged to
+       the page below.</p>
+    <div class="row">
+      <button id="jsAlert">alert()</button>
+      <button id="jsConfirm">confirm()</button>
+      <button id="jsPrompt">prompt()</button>
+      <span id="jsDialogOut" style="color:var(--muted); margin-left:8px"></span>
+    </div>
+  </section>
+
   <section id="console">
     <h2>Console messages</h2>
     <p class="lede">Each button calls a different <code>console.*</code> method.
@@ -323,6 +337,21 @@
     submitCount++;
     const v = $('#formInput').value;
     $('#formOut').textContent = '#' + submitCount + ' "' + v + '"';
+  });
+
+  // JS dialogs — exercise each primitive. Result text echoes into the
+  // page so the user can confirm host→renderer round-trip.
+  $('#jsAlert').addEventListener('click', () => {
+    alert('Hello from the page!');
+    $('#jsDialogOut').textContent = 'alert dismissed';
+  });
+  $('#jsConfirm').addEventListener('click', () => {
+    const ok = confirm('Delete the universe?');
+    $('#jsDialogOut').textContent = 'confirm → ' + ok;
+  });
+  $('#jsPrompt').addEventListener('click', () => {
+    const v = prompt('Your favourite editor:', 'vim');
+    $('#jsDialogOut').textContent = 'prompt → ' + (v === null ? '(cancelled)' : '"' + v + '"');
   });
 
   // Favicon — render a coloured circle into a canvas, export to a PNG

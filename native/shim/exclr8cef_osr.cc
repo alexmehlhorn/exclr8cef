@@ -1,12 +1,17 @@
 #include "exclr8cef_osr.h"
 
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <string>
 
+#include "include/base/cef_callback.h"
 #include "include/cef_browser.h"
 #include "include/cef_cookie.h"
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
+#include "include/cef_task.h"
+#include "include/wrapper/cef_closure_task.h"
 
 namespace exclr8cef {
 
@@ -34,6 +39,20 @@ excef_fullscreen_cb_t g_fullscreen_cb = nullptr;
 excef_browser_initialized_cb_t g_browser_initialized_cb = nullptr;
 excef_scroll_offset_cb_t g_scroll_offset_cb = nullptr;
 excef_auto_resize_cb_t g_auto_resize_cb = nullptr;
+excef_js_dialog_cb_t g_js_dialog_cb = nullptr;
+
+// Deferred-response registry for JS dialogs. The CEF callback is kept alive
+// here until C# resolves via excef_resolve_js_dialog. We also track the
+// owning browser_id so OnBeforeClose can cancel any in-flight dialog
+// associated with the closing browser (instead of leaving a dangling
+// CefJSDialogCallback that can never be invoked).
+struct PendingJsDialog {
+    int browser_id;
+    CefRefPtr<CefJSDialogCallback> callback;
+};
+std::atomic<uint64_t> g_next_token{1};
+std::mutex g_js_dialog_mu;
+std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
 
 }  // namespace
 
@@ -106,6 +125,41 @@ bool Exclr8CefOsrHandler::OnAutoResize(CefRefPtr<CefBrowser> /*browser*/,
     return true;
 }
 
+bool Exclr8CefOsrHandler::OnJSDialog(CefRefPtr<CefBrowser> /*browser*/,
+                                      const CefString& /*origin_url*/,
+                                      JSDialogType dialog_type,
+                                      const CefString& message_text,
+                                      const CefString& default_prompt_text,
+                                      CefRefPtr<CefJSDialogCallback> callback,
+                                      bool& /*suppress_message*/) {
+    if (!g_js_dialog_cb) return false;  // fall back to CEF default
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_js_dialog_mu);
+        g_js_dialog_pending[token] = PendingJsDialog{id_, callback};
+    }
+    std::string msg = message_text.ToString();
+    std::string def = default_prompt_text.ToString();
+    g_js_dialog_cb(id_, token, static_cast<int>(dialog_type),
+                   msg.c_str(), def.c_str());
+    return true;  // we'll respond asynchronously via excef_resolve_js_dialog
+}
+
+bool Exclr8CefOsrHandler::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> /*browser*/,
+                                                const CefString& message_text,
+                                                bool /*is_reload*/,
+                                                CefRefPtr<CefJSDialogCallback> callback) {
+    if (!g_js_dialog_cb) return false;
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_js_dialog_mu);
+        g_js_dialog_pending[token] = PendingJsDialog{id_, callback};
+    }
+    std::string msg = message_text.ToString();
+    g_js_dialog_cb(id_, token, /*dialog_type=*/3, msg.c_str(), "");
+    return true;
+}
+
 bool Exclr8CefOsrHandler::OnCursorChange(CefRefPtr<CefBrowser> /*browser*/,
                                          CefCursorHandle /*cursor*/,
                                          cef_cursor_type_t type,
@@ -142,6 +196,23 @@ void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
 void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
     int closed_id = id_;
+
+    // Cancel any pending deferred-response callbacks owned by this browser.
+    // Without this, the CEF callback objects stay refcounted in our registry
+    // until process exit; worse, if the host eventually resolves the token,
+    // we'd try to invoke a callback on a dead browser.
+    {
+        std::lock_guard<std::mutex> lock(g_js_dialog_mu);
+        for (auto it = g_js_dialog_pending.begin(); it != g_js_dialog_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Continue(false, CefString());
+                it = g_js_dialog_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     browser_ = nullptr;
     g_osr_browsers.erase(id_);
     if (g_browser_closed_cb) {
@@ -584,6 +655,47 @@ extern "C" void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb) { exclr8
 extern "C" void excef_set_browser_initialized_callback(excef_browser_initialized_cb_t cb) { exclr8cef::g_browser_initialized_cb = cb; }
 extern "C" void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb) { exclr8cef::g_scroll_offset_cb = cb; }
 extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { exclr8cef::g_auto_resize_cb = cb; }
+extern "C" void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb) { exclr8cef::g_js_dialog_cb = cb; }
+
+namespace {
+// CefPostTask in this CEF version doesn't take naked lambdas via base::BindOnce
+// without a function pointer, so we use an explicit CefTask subclass.
+class JsDialogResolveTask : public CefTask {
+public:
+    JsDialogResolveTask(CefRefPtr<CefJSDialogCallback> cb, bool ok, CefString input)
+        : cb_(std::move(cb)), ok_(ok), input_(std::move(input)) {}
+    void Execute() override { if (cb_) cb_->Continue(ok_, input_); }
+private:
+    CefRefPtr<CefJSDialogCallback> cb_;
+    bool ok_;
+    CefString input_;
+    IMPLEMENT_REFCOUNTING(JsDialogResolveTask);
+};
+}  // namespace
+
+// Resolve a pending JS dialog. Look the token up, invoke Continue on the
+// CEF UI thread (where the callback expects to be called from), drop our
+// refcount. No-op on unknown tokens — safe for double-resolve / post-close.
+extern "C" void excef_resolve_js_dialog(uint64_t token, int success, const char* user_input) {
+    CefRefPtr<CefJSDialogCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_js_dialog_mu);
+        auto it = exclr8cef::g_js_dialog_pending.find(token);
+        if (it == exclr8cef::g_js_dialog_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_js_dialog_pending.erase(it);
+    }
+    if (!callback) return;
+    CefString input;
+    if (user_input && *user_input) input.FromString(user_input);
+    bool ok = success != 0;
+    if (CefCurrentlyOn(TID_UI)) {
+        callback->Continue(ok, input);
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(
+            new JsDialogResolveTask(callback, ok, input)));
+    }
+}
 
 extern "C" int excef_can_zoom(int browser_id, int command) {
     auto b = exclr8cef::GetOsrBrowser(browser_id);

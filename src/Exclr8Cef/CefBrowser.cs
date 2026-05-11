@@ -104,6 +104,17 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<ScrollOffsetEventArgs>? ScrollOffsetChanged;
 
     /// <summary>
+    /// Fires when the page invokes <c>alert()</c>, <c>confirm()</c>,
+    /// <c>prompt()</c>, or <c>onbeforeunload</c>. Hosts MUST call either
+    /// <see cref="JsDialogEventArgs.Continue"/> or
+    /// <see cref="JsDialogEventArgs.Cancel"/> to dismiss the dialog and
+    /// unblock the renderer; failing to do so will leave the page hung
+    /// at the dialog call. If no subscriber exists, CEF's default
+    /// behaviour (Chromium-rendered system-style dialog) runs instead.
+    /// </summary>
+    public event EventHandler<JsDialogEventArgs>? JsDialog;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -509,6 +520,11 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseAutoResize(int w, int h)
         => AutoResize?.Invoke(this, new AutoResizeEventArgs(w, h));
 
+    internal bool HasJsDialogSubscriber => JsDialog is not null;
+
+    internal void RaiseJsDialog(ulong token, Cef.JsDialogType type, string message, string defaultPrompt)
+        => JsDialog?.Invoke(this, new JsDialogEventArgs(token, type, message, defaultPrompt));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -540,6 +556,55 @@ public sealed class PaintEventArgs : EventArgs
         Buffer = buffer;
         Width = width;
         Height = height;
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.JsDialog"/>. Hosts MUST call exactly one
+/// of <see cref="Continue"/> / <see cref="Cancel"/> to dismiss the dialog
+/// — leaving it unresolved hangs the renderer.
+/// </summary>
+public sealed class JsDialogEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved; // 0 = pending, 1 = resolved (atomic flip)
+
+    /// <summary>Which dialog primitive triggered the event.</summary>
+    public Cef.JsDialogType Type { get; }
+    /// <summary>The message text from the page (the alert/confirm/prompt argument).</summary>
+    public string Message { get; }
+    /// <summary>Default text for prompt() dialogs; empty otherwise.</summary>
+    public string DefaultPromptText { get; }
+
+    internal JsDialogEventArgs(ulong token, Cef.JsDialogType type, string message, string defaultPrompt)
+    {
+        _token = token;
+        Type = type;
+        Message = message;
+        DefaultPromptText = defaultPrompt;
+    }
+
+    /// <summary>
+    /// Accept the dialog. For prompts, <paramref name="userInput"/> is the
+    /// text the user typed; ignored for alert / confirm / onbeforeunload.
+    /// Idempotent — subsequent calls are no-ops.
+    /// </summary>
+    public void Continue(string? userInput = null)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* p = userInput is null ? null : (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(userInput);
+            try { Native.Excef.excef_resolve_js_dialog(_token, 1, p); }
+            finally { if (p is not null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>Cancel the dialog (user clicked Cancel / closed). Idempotent.</summary>
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe { Native.Excef.excef_resolve_js_dialog(_token, 0, null); }
     }
 }
 

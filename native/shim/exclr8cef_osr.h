@@ -6,6 +6,7 @@
 
 #include "include/cef_client.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_render_handler.h"
@@ -18,7 +19,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefRenderHandler,
                             public CefLifeSpanHandler,
                             public CefDisplayHandler,
-                            public CefLoadHandler {
+                            public CefLoadHandler,
+                            public CefJSDialogHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -28,6 +30,7 @@ public:
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+    CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -47,6 +50,20 @@ public:
 
     bool OnAutoResize(CefRefPtr<CefBrowser> browser,
                        const CefSize& new_size) override;
+
+    // CefJSDialogHandler
+    bool OnJSDialog(CefRefPtr<CefBrowser> browser,
+                    const CefString& origin_url,
+                    JSDialogType dialog_type,
+                    const CefString& message_text,
+                    const CefString& default_prompt_text,
+                    CefRefPtr<CefJSDialogCallback> callback,
+                    bool& suppress_message) override;
+
+    bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                               const CefString& message_text,
+                               bool is_reload,
+                               CefRefPtr<CefJSDialogCallback> callback) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

@@ -342,6 +342,14 @@ public static class Cef
     public enum CefZoomCommand { Out = 0, Reset = 1, In = 2 }
 
     /// <summary>
+    /// Which JS dialog primitive triggered <see cref="CefBrowser.JsDialog"/>.
+    /// Mirrors <c>cef_jsdialog_type_t</c>; <c>BeforeUnload</c> is our own
+    /// extension for the unload-confirmation case (CEF surfaces it via a
+    /// separate handler method, but we collapse both into one event).
+    /// </summary>
+    public enum JsDialogType { Alert = 0, Confirm = 1, Prompt = 2, BeforeUnload = 3 }
+
+    /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
     /// <c>console.warn</c> → Warning, <c>console.error</c> → Error, …).
@@ -469,6 +477,7 @@ public static class Cef
                 Excef.excef_set_browser_initialized_callback(&BrowserInitializedTrampoline);
                 Excef.excef_set_scroll_offset_callback(&ScrollOffsetTrampoline);
                 Excef.excef_set_auto_resize_callback(&AutoResizeTrampoline);
+                Excef.excef_set_js_dialog_callback(&JsDialogTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -594,6 +603,31 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseAutoResize(w, h);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void JsDialogTrampoline(int browserId, ulong token, int dialogType, sbyte* message, sbyte* defaultPrompt)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            // Unknown browser: cancel the dialog so the renderer isn't hung.
+            Excef.excef_resolve_js_dialog(token, 0, null);
+            return;
+        }
+        if (!b.HasJsDialogSubscriber)
+        {
+            // No host listener: cancel so the renderer is unblocked. (CEF
+            // would have fallen back to its default dialog if we'd returned
+            // false from OnJSDialog, but we always return true now — so we
+            // must resolve here ourselves.)
+            Excef.excef_resolve_js_dialog(token, 0, null);
+            return;
+        }
+        b.RaiseJsDialog(
+            token,
+            (JsDialogType)dialogType,
+            Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

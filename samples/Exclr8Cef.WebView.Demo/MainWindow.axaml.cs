@@ -77,6 +77,18 @@ public partial class MainWindow : Window
         b.FullscreenModeChanged += OnBrowserFullscreen;
         b.ScrollOffsetChanged   += OnBrowserScrollOffset;
         b.AutoResize            += OnBrowserAutoResize;
+        b.JsDialog              += OnBrowserJsDialog;
+    }
+
+    private async void OnBrowserJsDialog(object? sender, Exclr8Cef.JsDialogEventArgs e)
+    {
+        LogEvent("js-dialog", $"{e.Type}: {e.Message}");
+        // Show the host's native dialog. The handler must call Continue or
+        // Cancel exactly once; the args object guards against double-resolve.
+        var result = await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
+            () => JsDialogWindow.ShowAsync(this, e.Type, e.Message, e.DefaultPromptText));
+        if (result.Accepted) e.Continue(result.PromptText);
+        else                 e.Cancel();
     }
 
     // Scroll fires very often — bucket to 50px so the log stays useful.
@@ -419,6 +431,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["ready"]           = SolidColorBrush.Parse("#94e2d5"),
         ["scroll"]          = SolidColorBrush.Parse("#74c7ec"),
         ["autoresize"]      = SolidColorBrush.Parse("#fab387"),
+        ["js-dialog"]       = SolidColorBrush.Parse("#cba6f7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

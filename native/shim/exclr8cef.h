@@ -455,6 +455,43 @@ EXCEF_API void excef_set_auto_resize_enabled(int browser_id, int enabled,
 // Useful for graying out zoom UI controls at min/max zoom.
 EXCEF_API int excef_can_zoom(int browser_id, int command);
 
+// ---- Deferred-response handlers ----------------------------------------
+//
+// Pattern: a CEF handler callback in the renderer's main process hands us
+// a callback object (CefJSDialogCallback, CefFileDialogCallback, etc.). We
+// stash the callback in a per-handler-type map keyed by a uint64_t token,
+// fire the C# event with the token + payload, and return true to CEF
+// (meaning "we'll respond async"). C# decides on its UI thread and calls
+// the matching `excef_resolve_*` to invoke Continue / Cancel on the
+// stored callback (the resolve hops to the CEF UI thread internally).
+//
+// Resolve calls on unknown tokens are no-ops — safe if C# resolves twice
+// or after browser close. Pending callbacks for a browser are cancelled
+// automatically when that browser closes.
+
+// ---- JS dialog handler -------------------------------------------------
+//
+// CefJSDialogHandler::OnJSDialog + OnBeforeUnloadDialog. dialog_type:
+//   0 = alert       (user_input ignored on resolve)
+//   1 = confirm     (success only)
+//   2 = prompt      (user_input is the typed text on success)
+//   3 = onbeforeunload (success=1 means "leave page"; user_input ignored)
+typedef void (*excef_js_dialog_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int dialog_type,
+    const char* message_text,
+    const char* default_prompt_text);
+
+EXCEF_API void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb);
+
+// Continue the pending JS dialog. `success` = 1 if the user accepted
+// (clicked OK / Leave); `user_input` is the prompt text on accept
+// (NULL/empty otherwise).
+EXCEF_API void excef_resolve_js_dialog(unsigned long long token,
+                                        int success,
+                                        const char* user_input);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these
