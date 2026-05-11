@@ -585,6 +585,12 @@ extern "C" void excef_set_browser_initialized_callback(excef_browser_initialized
 extern "C" void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb) { exclr8cef::g_scroll_offset_cb = cb; }
 extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { exclr8cef::g_auto_resize_cb = cb; }
 
+extern "C" int excef_can_zoom(int browser_id, int command) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return 0;
+    return b->GetHost()->CanZoom(static_cast<cef_zoom_command_t>(command)) ? 1 : 0;
+}
+
 extern "C" void excef_set_auto_resize_enabled(int browser_id, int enabled,
                                                 int min_w, int min_h,
                                                 int max_w, int max_h) {

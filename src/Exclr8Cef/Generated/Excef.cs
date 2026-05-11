@@ -212,6 +212,9 @@ internal static unsafe partial class Excef
     public static extern void excef_set_auto_resize_enabled(int browser_id, int enabled, int min_w, int min_h, int max_w, int max_h);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_can_zoom(int browser_id, int command);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

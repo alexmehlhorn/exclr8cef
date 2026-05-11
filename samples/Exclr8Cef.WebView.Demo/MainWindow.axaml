@@ -34,7 +34,10 @@
                 <Button DockPanel.Dock="Left"   Name="StopButton"     Content="✕"        Click="OnStopClick"     Padding="10,4" Margin="0,0,8,0" />
                 <Button DockPanel.Dock="Right"  Name="SavePdfButton"  Content="Save PDF"   Click="OnSavePdfClick"  Padding="10,4" Margin="6,0,0,0" />
                 <Button DockPanel.Dock="Right"  Name="RunJsButton"    Content="Run JS"     Click="OnRunJsClick"    Padding="10,4" Margin="6,0,0,0" />
-                <Button DockPanel.Dock="Right"  Name="DevToolsButton" Content="DevTools"   Click="OnDevToolsClick" Padding="10,4" />
+                <Button DockPanel.Dock="Right"  Name="DevToolsButton" Content="DevTools"   Click="OnDevToolsClick" Padding="10,4" Margin="6,0,0,0" />
+                <Button DockPanel.Dock="Right"  Name="ZoomOutButton"  Content="−"          Click="OnZoomOutClick"  Padding="8,4" />
+                <Button DockPanel.Dock="Right"  Name="ZoomResetButton" Content="100%"      Click="OnZoomResetClick" Padding="8,4" />
+                <Button DockPanel.Dock="Right"  Name="ZoomInButton"   Content="+"          Click="OnZoomInClick"   Padding="8,4" Margin="0,0,6,0" />
                 <TextBox Name="AddressBox" Watermark="URL" KeyDown="OnAddressKeyDown" VerticalAlignment="Center" />
             </DockPanel>
         </Border>

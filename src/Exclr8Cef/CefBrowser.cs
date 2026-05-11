@@ -232,6 +232,18 @@ public sealed class CefBrowser : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the given zoom command is currently available. Useful for
+    /// graying out zoom buttons at min/max zoom (zoom in / zoom out
+    /// return false once the limit is reached).
+    /// </summary>
+    public bool CanZoom(Cef.CefZoomCommand command)
+        => !_closed && Excef.excef_can_zoom(Id, (int)command) != 0;
+
+    public bool CanZoomIn    => CanZoom(Cef.CefZoomCommand.In);
+    public bool CanZoomOut   => CanZoom(Cef.CefZoomCommand.Out);
+    public bool CanZoomReset => CanZoom(Cef.CefZoomCommand.Reset);
+
     // ---- Clipboard / editing -------------------------------------------
 
     public void Copy()      { if (!_closed) Excef.excef_copy(Id); }

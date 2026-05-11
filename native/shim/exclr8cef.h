@@ -450,6 +450,11 @@ EXCEF_API void excef_set_auto_resize_enabled(int browser_id, int enabled,
                                               int min_w, int min_h,
                                               int max_w, int max_h);
 
+// Zoom availability: query CefBrowserHost::CanZoom. `command` matches
+// cef_zoom_command_t — 0=ZOOM_OUT, 1=ZOOM_RESET, 2=ZOOM_IN. Returns 0/1.
+// Useful for graying out zoom UI controls at min/max zoom.
+EXCEF_API int excef_can_zoom(int browser_id, int command);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

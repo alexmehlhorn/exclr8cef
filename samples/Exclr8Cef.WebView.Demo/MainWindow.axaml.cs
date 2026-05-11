@@ -303,6 +303,32 @@ public partial class MainWindow : Window
     private void OnStopClick(object? sender, RoutedEventArgs e) => Browser.StopLoad();
     private void OnDevToolsClick(object? sender, RoutedEventArgs e) => Browser.ShowDevTools();
 
+    private void OnZoomInClick(object? sender, RoutedEventArgs e)
+    {
+        Browser.ZoomIn();
+        UpdateZoomUi();
+    }
+    private void OnZoomOutClick(object? sender, RoutedEventArgs e)
+    {
+        Browser.ZoomOut();
+        UpdateZoomUi();
+    }
+    private void OnZoomResetClick(object? sender, RoutedEventArgs e)
+    {
+        Browser.ResetZoom();
+        UpdateZoomUi();
+    }
+
+    private void UpdateZoomUi()
+    {
+        if (Browser.Browser is not { } b) return;
+        // Disable In/Out at the zoom limits using CanZoom; show the current
+        // percentage on the reset button.
+        ZoomInButton.IsEnabled = b.CanZoomIn;
+        ZoomOutButton.IsEnabled = b.CanZoomOut;
+        ZoomResetButton.Content = $"{Math.Round(Math.Pow(1.2, b.ZoomLevel) * 100)}%";
+    }
+
     private async void OnRunJsClick(object? sender, RoutedEventArgs e)
     {
         try

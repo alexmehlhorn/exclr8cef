@@ -338,6 +338,9 @@ public static class Cef
 
     public enum CefKeyEventType { RawKeyDown = 0, KeyDown = 1, KeyUp = 2, Char = 3 }
 
+    /// <summary>CEF's <c>cef_zoom_command_t</c>; argument to <see cref="CefBrowser.CanZoom"/>.</summary>
+    public enum CefZoomCommand { Out = 0, Reset = 1, In = 2 }
+
     /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
