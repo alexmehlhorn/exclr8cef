@@ -463,6 +463,7 @@ public static class Cef
                 Excef.excef_set_tooltip_callback(&TooltipTrampoline);
                 Excef.excef_set_favicon_callback(&FaviconTrampoline);
                 Excef.excef_set_fullscreen_callback(&FullscreenTrampoline);
+                Excef.excef_set_browser_initialized_callback(&BrowserInitializedTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -567,6 +568,13 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseFullscreenChanged(fullscreen != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void BrowserInitializedTrampoline(int browserId)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseInitialized();
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

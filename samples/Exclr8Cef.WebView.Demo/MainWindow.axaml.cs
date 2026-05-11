@@ -65,6 +65,7 @@ public partial class MainWindow : Window
             return;
         }
         _browserEventsHooked = true;
+        b.Initialized           += (_, _) => LogEvent("ready", $"CefBrowser #{b.Id} initialised");
         b.ConsoleMessage        += OnBrowserConsoleMessage;
         b.LoadStart             += OnBrowserLoadStart;
         b.LoadEnd               += OnBrowserLoadEnd;
@@ -374,6 +375,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["tooltip"]         = SolidColorBrush.Parse("#cba6f7"),
         ["favicon"]         = SolidColorBrush.Parse("#f5c2e7"),
         ["fullscreen"]      = SolidColorBrush.Parse("#fab387"),
+        ["ready"]           = SolidColorBrush.Parse("#94e2d5"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

@@ -416,6 +416,17 @@ EXCEF_API void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb);
 // flicker.
 EXCEF_API void excef_exit_fullscreen(int browser_id, int will_cause_resize);
 
+// ---- Browser-initialised event ------------------------------------------
+//
+// CefLifeSpanHandler::OnAfterCreated. Fires once per browser, on the CEF
+// UI thread, after the underlying CefBrowser is fully constructed and
+// available to host operations (frame access, clipboard, navigation, …).
+// The browser id returned by excef_create_offscreen_browser is valid
+// immediately, but ops that need the CefBrowser ref are no-ops until
+// this fires.
+typedef void (*excef_browser_initialized_cb_t)(int browser_id);
+EXCEF_API void excef_set_browser_initialized_callback(excef_browser_initialized_cb_t cb);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

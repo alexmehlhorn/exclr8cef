@@ -37,6 +37,17 @@ public sealed class CefBrowser : IDisposable
     public bool CanGoForward => _canGoForward;
     public bool IsClosed => _closed;
 
+    private bool _initialized;
+    /// <summary>
+    /// True after CEF has constructed the underlying browser and it is
+    /// ready for operations that need a CefBrowser ref (Copy/Paste/Cut,
+    /// frame access, clipboard, dev-tools open, …). The numeric
+    /// <see cref="Id"/> is valid immediately on return from
+    /// <see cref="Cef.CreateOffscreenBrowser"/>, but those ops are
+    /// no-ops until <see cref="Initialized"/> fires.
+    /// </summary>
+    public bool IsInitialized => _initialized;
+
     // ---- Events ---------------------------------------------------------
     //
     // All instance events. Sender is this CefBrowser. Fires on the CEF
@@ -84,6 +95,24 @@ public sealed class CefBrowser : IDisposable
 
     /// <summary>Page entered or left HTML5 fullscreen.</summary>
     public event EventHandler<bool>? FullscreenModeChanged;
+
+    /// <summary>
+    /// Fires once, when the underlying CefBrowser is constructed and ready
+    /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
+    /// If subscription happens after the browser is already initialised,
+    /// the handler is invoked synchronously on the subscribing thread —
+    /// safe to use as a "do this once the browser is up" pattern.
+    /// </summary>
+    public event EventHandler? Initialized
+    {
+        add
+        {
+            _initializedHandlers += value;
+            if (_initialized) value?.Invoke(this, EventArgs.Empty);
+        }
+        remove { _initializedHandlers -= value; }
+    }
+    private EventHandler? _initializedHandlers;
 
     /// <summary>Fires after the underlying CEF browser has been fully closed.</summary>
     public event EventHandler? Closed;
@@ -412,6 +441,12 @@ public sealed class CefBrowser : IDisposable
 
     internal void RaiseLoadingProgress(double progress)
         => LoadingProgress?.Invoke(this, progress);
+
+    internal void RaiseInitialized()
+    {
+        _initialized = true;
+        _initializedHandlers?.Invoke(this, EventArgs.Empty);
+    }
 
     internal void RaiseStatusMessage(string value) => StatusMessage?.Invoke(this, value);
     internal void RaiseTooltipChanged(string text) => TooltipChanged?.Invoke(this, text);

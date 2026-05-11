@@ -200,6 +200,9 @@ internal static unsafe partial class Excef
     public static extern void excef_exit_fullscreen(int browser_id, int will_cause_resize);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_browser_initialized_callback([NativeTypeName("excef_browser_initialized_cb_t")] delegate* unmanaged[Cdecl]<int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

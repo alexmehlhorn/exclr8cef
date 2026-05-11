@@ -31,6 +31,7 @@ excef_status_message_cb_t g_status_message_cb = nullptr;
 excef_tooltip_cb_t g_tooltip_cb = nullptr;
 excef_favicon_cb_t g_favicon_cb = nullptr;
 excef_fullscreen_cb_t g_fullscreen_cb = nullptr;
+excef_browser_initialized_cb_t g_browser_initialized_cb = nullptr;
 
 }  // namespace
 
@@ -118,6 +119,9 @@ bool Exclr8CefOsrHandler::OnConsoleMessage(CefRefPtr<CefBrowser> /*browser*/,
 void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     browser_ = browser;
     browser_->GetHost()->WasResized();
+    if (g_browser_initialized_cb) {
+        g_browser_initialized_cb(id_);
+    }
 }
 
 void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
@@ -561,6 +565,7 @@ extern "C" void excef_set_status_message_callback(excef_status_message_cb_t cb) 
 extern "C" void excef_set_tooltip_callback(excef_tooltip_cb_t cb) { exclr8cef::g_tooltip_cb = cb; }
 extern "C" void excef_set_favicon_callback(excef_favicon_cb_t cb) { exclr8cef::g_favicon_cb = cb; }
 extern "C" void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb) { exclr8cef::g_fullscreen_cb = cb; }
+extern "C" void excef_set_browser_initialized_callback(excef_browser_initialized_cb_t cb) { exclr8cef::g_browser_initialized_cb = cb; }
 
 extern "C" void excef_exit_fullscreen(int browser_id, int will_cause_resize) {
     auto b = exclr8cef::GetOsrBrowser(browser_id);
