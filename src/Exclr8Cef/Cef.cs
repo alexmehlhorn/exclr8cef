@@ -432,6 +432,19 @@ public static class Cef
     public enum DownloadState { InProgress = 0, Complete = 1, Canceled = 2 }
 
     /// <summary>
+    /// Why a renderer subprocess terminated. Mirrors cef_termination_status_t.
+    /// </summary>
+    public enum TerminationStatus
+    {
+        AbnormalTermination = 0,
+        ProcessWasKilled    = 1,
+        ProcessCrashed      = 2,
+        OutOfMemory         = 3,
+        LaunchFailed        = 4,
+        IntegrityFailure    = 5,
+    }
+
+    /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
     /// <c>console.warn</c> → Warning, <c>console.error</c> → Error, …).
@@ -566,6 +579,7 @@ public static class Cef
                 Excef.excef_set_download_progress_callback(&DownloadProgressTrampoline);
                 Excef.excef_set_auth_request_callback(&AuthRequestTrampoline);
                 Excef.excef_set_find_result_callback(&FindResultTrampoline);
+                Excef.excef_set_render_process_gone_callback(&RenderProcessGoneTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -744,6 +758,16 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void RenderProcessGoneTrampoline(int browserId, int status, int errorCode, sbyte* errorString)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseRenderProcessGone(
+            (TerminationStatus)status,
+            errorCode,
+            Marshal.PtrToStringUTF8((IntPtr)errorString) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

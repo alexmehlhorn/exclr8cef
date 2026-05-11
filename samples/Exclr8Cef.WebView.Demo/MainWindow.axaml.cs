@@ -84,6 +84,19 @@ public partial class MainWindow : Window
         b.DownloadProgress      += OnBrowserDownloadProgress;
         b.AuthRequest           += OnBrowserAuthRequest;
         b.FindResult            += OnBrowserFindResult;
+        b.RenderProcessGone     += OnBrowserRenderProcessGone;
+    }
+
+    private void OnBrowserRenderProcessGone(object? sender, Exclr8Cef.RenderProcessGoneEventArgs e)
+    {
+        LogEvent("renderer", $"{e.Status} code={e.ErrorCode} {e.ErrorString}");
+        // Recovery: reload after a short delay so the user can see the
+        // crashed state, then the page comes back.
+        Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
+        {
+            await Task.Delay(800);
+            Browser.Browser?.Reload();
+        });
     }
 
     private async void OnBrowserAuthRequest(object? sender, Exclr8Cef.AuthRequestEventArgs e)
@@ -669,6 +682,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["download"]        = SolidColorBrush.Parse("#f5c2e7"),
         ["auth"]            = SolidColorBrush.Parse("#cba6f7"),
         ["find"]            = SolidColorBrush.Parse("#94e2d5"),
+        ["renderer"]        = SolidColorBrush.Parse("#f38ba8"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

@@ -165,6 +165,14 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<FindResultEventArgs>? FindResult;
 
     /// <summary>
+    /// Fires when the renderer subprocess hosting this browser's page
+    /// terminates unexpectedly (crash, OOM, killed). The OSR paint buffer
+    /// freezes — hosts typically respond by calling <see cref="Reload"/>
+    /// to spawn a fresh renderer.
+    /// </summary>
+    public event EventHandler<RenderProcessGoneEventArgs>? RenderProcessGone;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -624,6 +632,9 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseFindResult(int identifier, int count, int activeMatchOrdinal, bool finalUpdate)
         => FindResult?.Invoke(this, new FindResultEventArgs(identifier, count, activeMatchOrdinal, finalUpdate));
 
+    internal void RaiseRenderProcessGone(Cef.TerminationStatus status, int errorCode, string errorString)
+        => RenderProcessGone?.Invoke(this, new RenderProcessGoneEventArgs(status, errorCode, errorString));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -748,6 +759,20 @@ public sealed class AuthRequestEventArgs : EventArgs
     {
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_auth(_token, null, null); }
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.RenderProcessGone"/>.</summary>
+public sealed class RenderProcessGoneEventArgs : EventArgs
+{
+    public Cef.TerminationStatus Status { get; }
+    /// <summary>Platform-specific exit / signal code (0 if not applicable).</summary>
+    public int ErrorCode { get; }
+    /// <summary>Human-readable status string from Chromium (may be empty).</summary>
+    public string ErrorString { get; }
+    internal RenderProcessGoneEventArgs(Cef.TerminationStatus status, int errorCode, string errorString)
+    {
+        Status = status; ErrorCode = errorCode; ErrorString = errorString;
     }
 }
 

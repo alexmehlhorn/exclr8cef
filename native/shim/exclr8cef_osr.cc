@@ -46,6 +46,7 @@ excef_download_starting_cb_t g_download_starting_cb = nullptr;
 excef_download_progress_cb_t g_download_progress_cb = nullptr;
 excef_auth_request_cb_t g_auth_request_cb = nullptr;
 excef_find_result_cb_t g_find_result_cb = nullptr;
+excef_render_process_gone_cb_t g_render_process_gone_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -216,6 +217,17 @@ bool Exclr8CefOsrHandler::GetAuthCredentials(CefRefPtr<CefBrowser> /*browser*/,
                       host_s.c_str(), port,
                       realm_s.c_str(), scheme_s.c_str());
     return true;
+}
+
+void Exclr8CefOsrHandler::OnRenderProcessTerminated(CefRefPtr<CefBrowser> /*browser*/,
+                                                     TerminationStatus status,
+                                                     int error_code,
+                                                     const CefString& error_string) {
+    if (g_render_process_gone_cb) {
+        std::string err = error_string.ToString();
+        g_render_process_gone_cb(id_, static_cast<int>(status),
+                                  error_code, err.c_str());
+    }
 }
 
 void Exclr8CefOsrHandler::OnFindResult(CefRefPtr<CefBrowser> /*browser*/,
@@ -906,6 +918,7 @@ extern "C" void excef_set_download_starting_callback(excef_download_starting_cb_
 extern "C" void excef_set_download_progress_callback(excef_download_progress_cb_t cb) { exclr8cef::g_download_progress_cb = cb; }
 extern "C" void excef_set_auth_request_callback(excef_auth_request_cb_t cb) { exclr8cef::g_auth_request_cb = cb; }
 extern "C" void excef_set_find_result_callback(excef_find_result_cb_t cb) { exclr8cef::g_find_result_cb = cb; }
+extern "C" void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb) { exclr8cef::g_render_process_gone_cb = cb; }
 
 namespace {
 class AuthResolveTask : public CefTask {

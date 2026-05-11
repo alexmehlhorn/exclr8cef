@@ -107,8 +107,7 @@ public:
                             CefRefPtr<CefDownloadItem> download_item,
                             CefRefPtr<CefDownloadItemCallback> callback) override;
 
-    // CefRequestHandler — only GetAuthCredentials in this version; all
-    // other methods use the default (no-op) implementation.
+    // CefRequestHandler
     bool GetAuthCredentials(CefRefPtr<CefBrowser> browser,
                              const CefString& origin_url,
                              bool isProxy,
@@ -117,6 +116,11 @@ public:
                              const CefString& realm,
                              const CefString& scheme,
                              CefRefPtr<CefAuthCallback> callback) override;
+
+    void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                    TerminationStatus status,
+                                    int error_code,
+                                    const CefString& error_string) override;
 
     // CefFindHandler
     void OnFindResult(CefRefPtr<CefBrowser> browser,

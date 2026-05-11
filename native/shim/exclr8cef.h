@@ -668,6 +668,25 @@ typedef struct excef_init_settings {
 // to defaults. The struct is copied; pointers don't need to outlive the call.
 EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 
+// ---- Render-process termination ----------------------------------------
+//
+// CefRequestHandler::OnRenderProcessTerminated. The renderer subprocess
+// hosting this browser's page died. `status` is from
+// cef_termination_status_t:
+//   0 = abnormal termination (generic non-zero exit)
+//   1 = process was killed (SIGTERM / TerminateProcess)
+//   2 = process crashed (SIGSEGV / access violation)
+//   3 = out of memory
+//   4 = launch failed (subprocess couldn't start)
+//   5 = integrity failure (CEF integrity check failed)
+// The browser's OSR paint buffer freezes after termination; hosts
+// typically respond by calling Reload() on the affected browser.
+typedef void (*excef_render_process_gone_cb_t)(int browser_id,
+                                                 int status,
+                                                 int error_code,
+                                                 const char* error_string);
+EXCEF_API void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

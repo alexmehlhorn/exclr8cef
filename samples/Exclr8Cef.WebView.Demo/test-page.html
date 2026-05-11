@@ -186,6 +186,7 @@
       <a href="#jsdialog">JS dialogs</a>
       <a href="#download">Downloads</a>
       <a href="#auth">Auth + Find</a>
+      <a href="#crash">Renderer crash</a>
       <a href="#config">Init settings</a>
     </div>
   </nav>
@@ -254,6 +255,17 @@
       <a href="https://example.com">example.com</a>
       <a href="https://duckduckgo.com">duckduckgo.com</a>
     </div>
+  </section>
+
+  <section id="crash">
+    <h2>Renderer crash recovery</h2>
+    <p class="lede"><code>chrome://crash</code> only works in CEF's Chrome
+       runtime, which conflicts with OSR — so there's no in-page trigger
+       here. Real renderer terminations (OOM, segfaults, killed Helper
+       processes) fire <code>CefBrowser.RenderProcessGone</code>. To test
+       it: <code>killall -9 "exclr8cef_demo Helper (Renderer)"</code> from
+       Terminal while the page is loaded. The demo logs the termination
+       cause to the event console then auto-reloads after 800 ms.</p>
   </section>
 
   <section id="config">

@@ -263,6 +263,9 @@ internal static unsafe partial class Excef
     public static extern void excef_set_init_settings([NativeTypeName("const excef_init_settings *")] excef_init_settings* settings);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_render_process_gone_callback([NativeTypeName("excef_render_process_gone_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
