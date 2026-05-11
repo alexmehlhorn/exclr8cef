@@ -56,6 +56,9 @@ excef_find_result_cb_t g_find_result_cb = nullptr;
 excef_render_process_gone_cb_t g_render_process_gone_cb = nullptr;
 excef_scheme_request_cb_t g_scheme_request_cb = nullptr;
 excef_resource_request_cb_t g_resource_request_cb = nullptr;
+excef_popup_show_cb_t g_popup_show_cb = nullptr;
+excef_popup_size_cb_t g_popup_size_cb = nullptr;
+excef_popup_paint_cb_t g_popup_paint_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -326,8 +329,19 @@ void Exclr8CefOsrHandler::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
                                   const RectList& /*dirtyRects*/,
                                   const void* buffer,
                                   int width, int height) {
-    if (type != PET_VIEW) return;
-    if (paint_cb_) paint_cb_(id_, buffer, width, height);
+    if (type == PET_VIEW) {
+        if (paint_cb_) paint_cb_(id_, buffer, width, height);
+    } else if (type == PET_POPUP) {
+        if (g_popup_paint_cb) g_popup_paint_cb(id_, buffer, width, height);
+    }
+}
+
+void Exclr8CefOsrHandler::OnPopupShow(CefRefPtr<CefBrowser> /*browser*/, bool show) {
+    if (g_popup_show_cb) g_popup_show_cb(id_, show ? 1 : 0);
+}
+
+void Exclr8CefOsrHandler::OnPopupSize(CefRefPtr<CefBrowser> /*browser*/, const CefRect& rect) {
+    if (g_popup_size_cb) g_popup_size_cb(id_, rect.x, rect.y, rect.width, rect.height);
 }
 
 void Exclr8CefOsrHandler::OnScrollOffsetChanged(CefRefPtr<CefBrowser> /*browser*/,
@@ -1205,6 +1219,9 @@ extern "C" void excef_set_find_result_callback(excef_find_result_cb_t cb) { excl
 extern "C" void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb) { exclr8cef::g_render_process_gone_cb = cb; }
 extern "C" void excef_set_scheme_request_callback(excef_scheme_request_cb_t cb) { exclr8cef::g_scheme_request_cb = cb; }
 extern "C" void excef_set_resource_request_callback(excef_resource_request_cb_t cb) { exclr8cef::g_resource_request_cb = cb; }
+extern "C" void excef_set_popup_show_callback(excef_popup_show_cb_t cb) { exclr8cef::g_popup_show_cb = cb; }
+extern "C" void excef_set_popup_size_callback(excef_popup_size_cb_t cb) { exclr8cef::g_popup_size_cb = cb; }
+extern "C" void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb) { exclr8cef::g_popup_paint_cb = cb; }
 
 namespace {
 class ResourceRequestResolveTask : public CefTask {

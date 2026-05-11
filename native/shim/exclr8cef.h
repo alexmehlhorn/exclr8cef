@@ -776,6 +776,29 @@ EXCEF_API void excef_resolve_resource_request(
     int action,
     const char* new_headers);
 
+// ---- OSR popup support --------------------------------------------------
+//
+// Page popups (<select> dropdowns, autocomplete, etc.) paint into a
+// *separate* buffer and at a *different* position from the main view. CEF
+// signals popup lifecycle through three callbacks:
+//
+//   excef_popup_show_cb_t   — toggle visibility (1 = show, 0 = hide)
+//   excef_popup_size_cb_t   — popup rect in DIP / CSS pixels, relative to
+//                             the browser's main view origin
+//   excef_popup_paint_cb_t  — popup bitmap (BGRA8888, physical pixels;
+//                             same shape as the regular paint callback)
+//
+// Hosts that don't wire these callbacks will see popups silently dropped
+// (the previous behaviour). With them wired and rendered as an overlay
+// at the popup rect, <select> dropdowns and HTML popups Just Work.
+typedef void (*excef_popup_show_cb_t)(int browser_id, int show);
+typedef void (*excef_popup_size_cb_t)(int browser_id, int x, int y, int width, int height);
+typedef void (*excef_popup_paint_cb_t)(int browser_id, const void* buffer, int width, int height);
+
+EXCEF_API void excef_set_popup_show_callback(excef_popup_show_cb_t cb);
+EXCEF_API void excef_set_popup_size_callback(excef_popup_size_cb_t cb);
+EXCEF_API void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb);
+
 
 // ---- IME -----------------------------------------------------------------
 //

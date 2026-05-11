@@ -705,6 +705,9 @@ public static class Cef
                 Excef.excef_set_render_process_gone_callback(&RenderProcessGoneTrampoline);
                 Excef.excef_set_scheme_request_callback(&SchemeRequestTrampoline);
                 Excef.excef_set_resource_request_callback(&ResourceRequestTrampoline);
+                Excef.excef_set_popup_show_callback(&PopupShowTrampoline);
+                Excef.excef_set_popup_size_callback(&PopupSizeTrampoline);
+                Excef.excef_set_popup_paint_callback(&PopupPaintTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -883,6 +886,27 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void PopupShowTrampoline(int browserId, int show)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaisePopupShow(show != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void PopupSizeTrampoline(int browserId, int x, int y, int w, int h)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaisePopupSize(x, y, w, h);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void PopupPaintTrampoline(int browserId, void* buffer, int width, int height)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaisePopupPainted((IntPtr)buffer, width, height);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

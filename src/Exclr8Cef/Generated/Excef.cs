@@ -281,6 +281,15 @@ internal static unsafe partial class Excef
     public static extern void excef_resolve_resource_request([NativeTypeName("unsigned long long")] ulong token, int action, [NativeTypeName("const char *")] sbyte* new_headers);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_popup_show_callback([NativeTypeName("excef_popup_show_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_popup_size_callback([NativeTypeName("excef_popup_size_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_popup_paint_callback([NativeTypeName("excef_popup_paint_cb_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

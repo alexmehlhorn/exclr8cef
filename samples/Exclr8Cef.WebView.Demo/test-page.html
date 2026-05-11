@@ -172,6 +172,7 @@
       <div class="group-title">Working today</div>
       <a href="#clicks">Clicks</a>
       <a href="#type">Type / Tab</a>
+      <a href="#select">&lt;select&gt; popup</a>
       <a href="#form">Form / Enter</a>
       <a href="#dnd">Drag &amp; drop</a>
       <a href="#scroll">Scroll</a>
@@ -213,6 +214,27 @@
     <div class="row">
       <input type="text" placeholder="Type here, then Tab to the next field" />
       <input type="text" placeholder="… and Shift+Tab back" />
+    </div>
+  </section>
+
+  <section id="select">
+    <h2>&lt;select&gt; popup</h2>
+    <p class="lede">Verifies OSR popup rendering — the dropdown that
+       appears when you click the select must paint into a separate
+       buffer at its own coords; the WebView control overlays it on
+       the main bitmap.</p>
+    <div class="row">
+      <select id="fruit">
+        <option value="">Choose a fruit…</option>
+        <option value="apple">🍎 Apple</option>
+        <option value="banana">🍌 Banana</option>
+        <option value="cherry">🍒 Cherry</option>
+        <option value="dragon">🐉 Dragonfruit</option>
+        <option value="elderberry">🫐 Elderberry</option>
+        <option value="fig">🌳 Fig</option>
+        <option value="grape">🍇 Grape</option>
+      </select>
+      <output id="fruitOut" style="margin-left:8px"></output>
     </div>
   </section>
 
@@ -392,6 +414,12 @@
   $('#clickBtn').addEventListener('click', () => {
     clicks++;
     $('#clickOut').textContent = clicks;
+  });
+
+  // <select> popup — echo the chosen value so we can confirm the popup
+  // actually fired its change event (in addition to rendering visually).
+  $('#fruit').addEventListener('change', (e) => {
+    $('#fruitOut').textContent = e.target.value ? '→ ' + e.target.value : '';
   });
 
   // Form / Enter

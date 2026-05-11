@@ -62,6 +62,9 @@ public:
                  const RectList& dirtyRects,
                  const void* buffer,
                  int width, int height) override;
+
+    void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+    void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
     void OnScrollOffsetChanged(CefRefPtr<CefBrowser> browser,
                                 double x, double y) override;
 

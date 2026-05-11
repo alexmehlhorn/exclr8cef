@@ -184,6 +184,28 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<ResourceRequestEventArgs>? ResourceRequest;
 
     /// <summary>
+    /// Fires when the page shows or hides a popup (HTML <c>&lt;select&gt;</c>
+    /// dropdowns, autocomplete suggestions, etc.). Hosts that don't
+    /// subscribe + render the popup buffer will see popups silently
+    /// dropped — the WebView control wires this automatically.
+    /// </summary>
+    public event EventHandler<bool>? PopupShow;
+
+    /// <summary>
+    /// Popup geometry — position + size in DIP / CSS pixels relative to
+    /// the browser's main view origin. Fires before <see cref="PopupShow"/>
+    /// = true and again whenever the popup moves / resizes.
+    /// </summary>
+    public event EventHandler<PopupRect>? PopupSize;
+
+    /// <summary>
+    /// New pixels for the popup. BGRA8888, top-left, stride = width × 4 —
+    /// same shape as <see cref="Painted"/> but for the popup buffer.
+    /// Buffer is only valid for the duration of the handler call.
+    /// </summary>
+    public event EventHandler<PaintEventArgs>? PopupPainted;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -651,6 +673,11 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseResourceRequest(ulong token, string url, string method, Cef.ResourceType type, string headers)
         => ResourceRequest?.Invoke(this, new ResourceRequestEventArgs(token, url, method, type, headers));
 
+    internal void RaisePopupShow(bool show) => PopupShow?.Invoke(this, show);
+    internal void RaisePopupSize(int x, int y, int w, int h) => PopupSize?.Invoke(this, new PopupRect(x, y, w, h));
+    internal void RaisePopupPainted(IntPtr buffer, int width, int height)
+        => PopupPainted?.Invoke(this, new PaintEventArgs(buffer, width, height));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -670,6 +697,13 @@ public sealed class CefBrowser : IDisposable
 
 /// <summary>Loading-state snapshot fired by <see cref="CefBrowser.LoadingStateChanged"/>.</summary>
 public readonly record struct LoadingState(bool IsLoading, bool CanGoBack, bool CanGoForward);
+
+/// <summary>
+/// Popup geometry delivered to <see cref="CefBrowser.PopupSize"/> —
+/// position and size in DIP / CSS pixels relative to the browser's
+/// main view origin.
+/// </summary>
+public readonly record struct PopupRect(int X, int Y, int Width, int Height);
 
 /// <summary>Paint frame delivered to <see cref="CefBrowser.Painted"/>.</summary>
 public sealed class PaintEventArgs : EventArgs

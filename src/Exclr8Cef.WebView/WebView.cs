@@ -101,6 +101,13 @@ public class WebView : Control
     private WriteableBitmap? _bitmap;
     private int _bitmapWidth;
     private int _bitmapHeight;
+    // Popup overlay state — <select> dropdowns, autocomplete, etc.
+    private WriteableBitmap? _popupBitmap;
+    private int _popupBitmapWidth;
+    private int _popupBitmapHeight;
+    private bool _popupVisible;
+    // Popup rect in DIP / CSS pixels relative to the browser's main view.
+    private int _popupX, _popupY, _popupW, _popupH;
     private bool _attached;
     private bool _suppressUrlChange;
     private WebViewTextInputMethodClient? _imeClient;
@@ -395,6 +402,9 @@ public class WebView : Control
         b.LoadingStateChanged  += OnBrowserLoadingStateChanged;
         b.CursorChanged        += OnBrowserCursorChanged;
         b.Painted              += OnBrowserPainted;
+        b.PopupShow            += OnBrowserPopupShow;
+        b.PopupSize            += OnBrowserPopupSize;
+        b.PopupPainted         += OnBrowserPopupPainted;
     }
 
     private void UnsubscribeBrowserEvents(CefBrowser b)
@@ -404,6 +414,9 @@ public class WebView : Control
         b.LoadingStateChanged  -= OnBrowserLoadingStateChanged;
         b.CursorChanged        -= OnBrowserCursorChanged;
         b.Painted              -= OnBrowserPainted;
+        b.PopupShow            -= OnBrowserPopupShow;
+        b.PopupSize            -= OnBrowserPopupSize;
+        b.PopupPainted         -= OnBrowserPopupPainted;
     }
 
     private void OnBrowserAddressChanged(object? sender, string url)
@@ -488,6 +501,73 @@ public class WebView : Control
         {
             context.FillRectangle(Avalonia.Media.Brushes.Black, new Rect(Bounds.Size));
         }
+        // Popup overlay (HTML <select> dropdowns etc.). CEF gives popup
+        // coords in DIP / CSS pixels relative to the browser view origin;
+        // we draw the popup bitmap at that rect, on top of the main view.
+        if (_popupVisible && _popupBitmap is not null)
+        {
+            context.DrawImage(_popupBitmap,
+                new Rect(_popupX, _popupY, _popupW, _popupH));
+        }
+    }
+
+    // ---- Popup overlay handling ----------------------------------------
+
+    private void OnBrowserPopupShow(object? sender, bool show)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            _popupVisible = show;
+            if (!show)
+            {
+                // Drop the bitmap on hide so the next show starts fresh —
+                // the popup may resize between shows.
+                _popupBitmap?.Dispose();
+                _popupBitmap = null;
+                _popupBitmapWidth = _popupBitmapHeight = 0;
+            }
+            InvalidateVisual();
+        });
+
+    private void OnBrowserPopupSize(object? sender, PopupRect r)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            _popupX = r.X; _popupY = r.Y; _popupW = r.Width; _popupH = r.Height;
+            InvalidateVisual();
+        });
+
+    private void OnBrowserPopupPainted(object? sender, PaintEventArgs e)
+    {
+        // Same staging-buffer pattern as the main view (see OnBrowserPainted).
+        int byteCount = e.Width * e.Height * 4;
+        byte[] snapshot = ArrayPool<byte>.Shared.Rent(byteCount);
+        Marshal.Copy(e.Buffer, snapshot, 0, byteCount);
+        int w = e.Width, h = e.Height;
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (_popupBitmap is null || _popupBitmapWidth != w || _popupBitmapHeight != h)
+                {
+                    _popupBitmap?.Dispose();
+                    _popupBitmap = new WriteableBitmap(
+                        new PixelSize(w, h),
+                        new Vector(96, 96),
+                        PixelFormat.Bgra8888,
+                        AlphaFormat.Premul);
+                    _popupBitmapWidth = w;
+                    _popupBitmapHeight = h;
+                }
+                using (var locked = _popupBitmap.Lock())
+                {
+                    Marshal.Copy(snapshot, 0, locked.Address, byteCount);
+                }
+                if (_popupVisible) InvalidateVisual();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(snapshot);
+            }
+        }, DispatcherPriority.Render);
     }
 
     // ---- Cursor cache --------------------------------------------------
