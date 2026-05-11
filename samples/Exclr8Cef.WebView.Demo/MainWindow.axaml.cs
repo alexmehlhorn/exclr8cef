@@ -78,6 +78,66 @@ public partial class MainWindow : Window
         b.ScrollOffsetChanged   += OnBrowserScrollOffset;
         b.AutoResize            += OnBrowserAutoResize;
         b.JsDialog              += OnBrowserJsDialog;
+        b.FileDialog            += OnBrowserFileDialog;
+    }
+
+    private async void OnBrowserFileDialog(object? sender, Exclr8Cef.FileDialogEventArgs e)
+    {
+        LogEvent("file-dialog", $"{e.Mode} title=\"{e.Title}\" filters=[{string.Join(",", e.AcceptFilters)}]");
+
+        // Map Avalonia filters from CEF's MIME / glob list. Crude — we
+        // accept any pattern as a single named filter; real apps would
+        // map per-type with sensible names.
+        var fileTypeFilter = e.AcceptFilters.Count == 0
+            ? null
+            : new[] { new Avalonia.Platform.Storage.FilePickerFileType("Accepted")
+              { Patterns = [.. e.AcceptFilters.Where(p => p.StartsWith("*") || p.Contains('.'))
+                                              .DefaultIfEmpty("*.*")] } };
+
+        var sp = StorageProvider;
+        if (sp is null) { e.Cancel(); return; }
+
+        switch (e.Mode)
+        {
+            case Exclr8Cef.Cef.FileDialogMode.Open:
+            case Exclr8Cef.Cef.FileDialogMode.OpenMultiple:
+            {
+                var opts = new Avalonia.Platform.Storage.FilePickerOpenOptions
+                {
+                    Title = e.Title,
+                    AllowMultiple = e.Mode == Exclr8Cef.Cef.FileDialogMode.OpenMultiple,
+                    FileTypeFilter = fileTypeFilter,
+                };
+                var picked = await sp.OpenFilePickerAsync(opts);
+                if (picked.Count == 0) { e.Cancel(); return; }
+                e.Continue(picked.Select(f => f.Path.LocalPath).ToArray());
+                break;
+            }
+            case Exclr8Cef.Cef.FileDialogMode.OpenFolder:
+            {
+                var opts = new Avalonia.Platform.Storage.FolderPickerOpenOptions { Title = e.Title };
+                var picked = await sp.OpenFolderPickerAsync(opts);
+                if (picked.Count == 0) { e.Cancel(); return; }
+                e.Continue(picked[0].Path.LocalPath);
+                break;
+            }
+            case Exclr8Cef.Cef.FileDialogMode.Save:
+            {
+                var opts = new Avalonia.Platform.Storage.FilePickerSaveOptions
+                {
+                    Title = e.Title,
+                    SuggestedFileName = string.IsNullOrEmpty(e.DefaultPath) ? null : System.IO.Path.GetFileName(e.DefaultPath),
+                    FileTypeChoices = fileTypeFilter,
+                };
+                var picked = await sp.SaveFilePickerAsync(opts);
+                if (picked is null) { e.Cancel(); return; }
+                e.Continue(picked.Path.LocalPath);
+                break;
+            }
+            default:
+                e.Cancel();
+                break;
+        }
     }
 
     private async void OnBrowserJsDialog(object? sender, Exclr8Cef.JsDialogEventArgs e)
@@ -432,6 +492,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["scroll"]          = SolidColorBrush.Parse("#74c7ec"),
         ["autoresize"]      = SolidColorBrush.Parse("#fab387"),
         ["js-dialog"]       = SolidColorBrush.Parse("#cba6f7"),
+        ["file-dialog"]     = SolidColorBrush.Parse("#cba6f7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

@@ -5,6 +5,7 @@
 #define EXCLR8CEF_OSR_H_
 
 #include "include/cef_client.h"
+#include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
@@ -20,7 +21,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefLifeSpanHandler,
                             public CefDisplayHandler,
                             public CefLoadHandler,
-                            public CefJSDialogHandler {
+                            public CefJSDialogHandler,
+                            public CefDialogHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -31,6 +33,7 @@ public:
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+    CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -64,6 +67,16 @@ public:
                                const CefString& message_text,
                                bool is_reload,
                                CefRefPtr<CefJSDialogCallback> callback) override;
+
+    // CefDialogHandler
+    bool OnFileDialog(CefRefPtr<CefBrowser> browser,
+                       FileDialogMode mode,
+                       const CefString& title,
+                       const CefString& default_file_path,
+                       const std::vector<CefString>& accept_filters,
+                       const std::vector<CefString>& accept_extensions,
+                       const std::vector<CefString>& accept_descriptions,
+                       CefRefPtr<CefFileDialogCallback> callback) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

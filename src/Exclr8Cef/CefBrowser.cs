@@ -115,6 +115,15 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<JsDialogEventArgs>? JsDialog;
 
     /// <summary>
+    /// Fires when the page triggers a file chooser (<c>&lt;input type=file&gt;</c>,
+    /// <c>showOpenFilePicker</c>, save-as on a download). Hosts MUST call
+    /// either <see cref="FileDialogEventArgs.Continue"/> with one or more
+    /// paths, or <see cref="FileDialogEventArgs.Cancel"/>. Without a
+    /// subscriber, CEF's default file picker runs.
+    /// </summary>
+    public event EventHandler<FileDialogEventArgs>? FileDialog;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -521,9 +530,13 @@ public sealed class CefBrowser : IDisposable
         => AutoResize?.Invoke(this, new AutoResizeEventArgs(w, h));
 
     internal bool HasJsDialogSubscriber => JsDialog is not null;
+    internal bool HasFileDialogSubscriber => FileDialog is not null;
 
     internal void RaiseJsDialog(ulong token, Cef.JsDialogType type, string message, string defaultPrompt)
         => JsDialog?.Invoke(this, new JsDialogEventArgs(token, type, message, defaultPrompt));
+
+    internal void RaiseFileDialog(ulong token, Cef.FileDialogMode mode, string title, string defaultPath, string[] filters)
+        => FileDialog?.Invoke(this, new FileDialogEventArgs(token, mode, title, defaultPath, filters));
 
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
@@ -605,6 +618,59 @@ public sealed class JsDialogEventArgs : EventArgs
     {
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_js_dialog(_token, 0, null); }
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.FileDialog"/>. Hosts MUST call exactly
+/// one of <see cref="Continue"/> / <see cref="Cancel"/>.
+/// </summary>
+public sealed class FileDialogEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    public Cef.FileDialogMode Mode { get; }
+    /// <summary>Title for the picker (empty = host default).</summary>
+    public string Title { get; }
+    /// <summary>Default file/folder path (empty if no hint).</summary>
+    public string DefaultPath { get; }
+    /// <summary>
+    /// Accept-filter list from the page (MIME types like "image/*", or
+    /// globs like "*.txt"). Empty if no filter.
+    /// </summary>
+    public IReadOnlyList<string> AcceptFilters { get; }
+
+    internal FileDialogEventArgs(ulong token, Cef.FileDialogMode mode, string title, string defaultPath, string[] filters)
+    {
+        _token = token;
+        Mode = mode;
+        Title = title;
+        DefaultPath = defaultPath;
+        AcceptFilters = filters;
+    }
+
+    /// <summary>
+    /// Resolve with the user's selection. Pass one path for Open/Save/OpenFolder,
+    /// one or more for OpenMultiple. Pass an empty array (or call <see cref="Cancel"/>)
+    /// for "user cancelled".
+    /// </summary>
+    public void Continue(params string[] paths)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        var joined = paths.Length == 0 ? null : string.Join('\n', paths);
+        unsafe
+        {
+            sbyte* p = joined is null ? null : (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(joined);
+            try { Native.Excef.excef_resolve_file_dialog(_token, p); }
+            finally { if (p is not null) System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe { Native.Excef.excef_resolve_file_dialog(_token, null); }
     }
 }
 

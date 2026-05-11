@@ -492,6 +492,31 @@ EXCEF_API void excef_resolve_js_dialog(unsigned long long token,
                                         int success,
                                         const char* user_input);
 
+// ---- File dialog handler -----------------------------------------------
+//
+// CefDialogHandler::OnFileDialog. Fires when the page triggers a file
+// chooser (<input type=file>, showOpenFilePicker, downloads with
+// Save-As, etc.). `mode`:
+//   0 = open single file
+//   1 = open multiple files
+//   2 = open folder
+//   3 = save file
+// `accept_filters` is newline-separated (each line is a MIME type
+// like "image/*" or a glob like "*.txt"). Empty if no filter.
+typedef void (*excef_file_dialog_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int mode,
+    const char* title,
+    const char* default_file_path,
+    const char* accept_filters);
+
+EXCEF_API void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb);
+
+// Resolve. `paths` is newline-separated absolute paths (UTF-8). Pass
+// NULL or empty string to cancel (the page sees an empty selection).
+EXCEF_API void excef_resolve_file_dialog(unsigned long long token, const char* paths);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

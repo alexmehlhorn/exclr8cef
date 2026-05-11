@@ -40,19 +40,25 @@ excef_browser_initialized_cb_t g_browser_initialized_cb = nullptr;
 excef_scroll_offset_cb_t g_scroll_offset_cb = nullptr;
 excef_auto_resize_cb_t g_auto_resize_cb = nullptr;
 excef_js_dialog_cb_t g_js_dialog_cb = nullptr;
+excef_file_dialog_cb_t g_file_dialog_cb = nullptr;
 
-// Deferred-response registry for JS dialogs. The CEF callback is kept alive
-// here until C# resolves via excef_resolve_js_dialog. We also track the
-// owning browser_id so OnBeforeClose can cancel any in-flight dialog
-// associated with the closing browser (instead of leaving a dangling
-// CefJSDialogCallback that can never be invoked).
+// Deferred-response registries (one per callback type — the CEF callback
+// shape differs across handlers). The owning browser_id lets OnBeforeClose
+// cancel any pending entries for the closing browser, rather than leaving
+// the CEF callback object refcounted indefinitely.
 struct PendingJsDialog {
     int browser_id;
     CefRefPtr<CefJSDialogCallback> callback;
 };
+struct PendingFileDialog {
+    int browser_id;
+    CefRefPtr<CefFileDialogCallback> callback;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
+std::mutex g_file_dialog_mu;
+std::map<uint64_t, PendingFileDialog> g_file_dialog_pending;
 
 }  // namespace
 
@@ -160,6 +166,34 @@ bool Exclr8CefOsrHandler::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> /*browser*/
     return true;
 }
 
+bool Exclr8CefOsrHandler::OnFileDialog(CefRefPtr<CefBrowser> /*browser*/,
+                                        FileDialogMode mode,
+                                        const CefString& title,
+                                        const CefString& default_file_path,
+                                        const std::vector<CefString>& accept_filters,
+                                        const std::vector<CefString>& /*accept_extensions*/,
+                                        const std::vector<CefString>& /*accept_descriptions*/,
+                                        CefRefPtr<CefFileDialogCallback> callback) {
+    if (!g_file_dialog_cb) return false;  // fall back to CEF default
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_file_dialog_mu);
+        g_file_dialog_pending[token] = PendingFileDialog{id_, callback};
+    }
+    // Join filters on '\n' for ABI simplicity — host splits on the other side.
+    std::string filters;
+    for (size_t i = 0; i < accept_filters.size(); ++i) {
+        if (i) filters += '\n';
+        filters += accept_filters[i].ToString();
+    }
+    std::string title_s = title.ToString();
+    std::string default_s = default_file_path.ToString();
+    g_file_dialog_cb(id_, token, static_cast<int>(mode),
+                     title_s.c_str(), default_s.c_str(),
+                     filters.c_str());
+    return true;
+}
+
 bool Exclr8CefOsrHandler::OnCursorChange(CefRefPtr<CefBrowser> /*browser*/,
                                          CefCursorHandle /*cursor*/,
                                          cef_cursor_type_t type,
@@ -207,6 +241,17 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Continue(false, CefString());
                 it = g_js_dialog_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_file_dialog_mu);
+        for (auto it = g_file_dialog_pending.begin(); it != g_file_dialog_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_file_dialog_pending.erase(it);
             } else {
                 ++it;
             }
@@ -656,10 +701,12 @@ extern "C" void excef_set_browser_initialized_callback(excef_browser_initialized
 extern "C" void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb) { exclr8cef::g_scroll_offset_cb = cb; }
 extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { exclr8cef::g_auto_resize_cb = cb; }
 extern "C" void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb) { exclr8cef::g_js_dialog_cb = cb; }
+extern "C" void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb) { exclr8cef::g_file_dialog_cb = cb; }
 
 namespace {
 // CefPostTask in this CEF version doesn't take naked lambdas via base::BindOnce
-// without a function pointer, so we use an explicit CefTask subclass.
+// without a function pointer, so we use explicit CefTask subclasses to hop
+// to the CEF UI thread.
 class JsDialogResolveTask : public CefTask {
 public:
     JsDialogResolveTask(CefRefPtr<CefJSDialogCallback> cb, bool ok, CefString input)
@@ -671,11 +718,59 @@ private:
     CefString input_;
     IMPLEMENT_REFCOUNTING(JsDialogResolveTask);
 };
+
+class FileDialogResolveTask : public CefTask {
+public:
+    FileDialogResolveTask(CefRefPtr<CefFileDialogCallback> cb, std::vector<CefString> paths)
+        : cb_(std::move(cb)), paths_(std::move(paths)) {}
+    void Execute() override { if (cb_) cb_->Continue(paths_); }
+private:
+    CefRefPtr<CefFileDialogCallback> cb_;
+    std::vector<CefString> paths_;
+    IMPLEMENT_REFCOUNTING(FileDialogResolveTask);
+};
 }  // namespace
 
 // Resolve a pending JS dialog. Look the token up, invoke Continue on the
 // CEF UI thread (where the callback expects to be called from), drop our
 // refcount. No-op on unknown tokens — safe for double-resolve / post-close.
+// Resolve a pending file dialog. `paths` is newline-separated absolute
+// paths (empty / NULL = cancel). Look up token, hop to UI thread, invoke
+// CefFileDialogCallback::Continue. No-op on unknown token.
+extern "C" void excef_resolve_file_dialog(uint64_t token, const char* paths) {
+    CefRefPtr<CefFileDialogCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_file_dialog_mu);
+        auto it = exclr8cef::g_file_dialog_pending.find(token);
+        if (it == exclr8cef::g_file_dialog_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_file_dialog_pending.erase(it);
+    }
+    if (!callback) return;
+
+    std::vector<CefString> selected;
+    if (paths && *paths) {
+        std::string s(paths);
+        size_t start = 0;
+        for (size_t i = 0; i <= s.size(); ++i) {
+            if (i == s.size() || s[i] == '\n') {
+                if (i > start) {
+                    CefString p;
+                    p.FromString(s.substr(start, i - start));
+                    selected.push_back(p);
+                }
+                start = i + 1;
+            }
+        }
+    }
+    if (CefCurrentlyOn(TID_UI)) {
+        callback->Continue(selected);
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(
+            new FileDialogResolveTask(callback, std::move(selected))));
+    }
+}
+
 extern "C" void excef_resolve_js_dialog(uint64_t token, int success, const char* user_input) {
     CefRefPtr<CefJSDialogCallback> callback;
     {

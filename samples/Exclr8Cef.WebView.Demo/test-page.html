@@ -293,15 +293,20 @@
   </section>
 
   <section id="jsdialog">
-    <h2>JS dialogs</h2>
+    <h2>JS &amp; file dialogs</h2>
     <p class="lede">Host-rendered modal dialogs for <code>alert</code>,
-       <code>confirm</code>, and <code>prompt</code>. Result is logged to
-       the page below.</p>
+       <code>confirm</code>, <code>prompt</code>, and file pickers
+       (single, multiple, save). Results are echoed below.</p>
     <div class="row">
       <button id="jsAlert">alert()</button>
       <button id="jsConfirm">confirm()</button>
       <button id="jsPrompt">prompt()</button>
       <span id="jsDialogOut" style="color:var(--muted); margin-left:8px"></span>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <input type="file" id="filePick" />
+      <input type="file" id="fileMulti" multiple />
+      <span id="fileOut" style="color:var(--muted)"></span>
     </div>
   </section>
 
@@ -352,6 +357,17 @@
   $('#jsPrompt').addEventListener('click', () => {
     const v = prompt('Your favourite editor:', 'vim');
     $('#jsDialogOut').textContent = 'prompt → ' + (v === null ? '(cancelled)' : '"' + v + '"');
+  });
+
+  // File pickers — show what the page sees back from the host.
+  function fileNames(files) {
+    return Array.from(files).map(f => f.name + ' (' + f.size + 'B)').join(', ');
+  }
+  $('#filePick').addEventListener('change', (e) => {
+    $('#fileOut').textContent = 'single → ' + (e.target.files.length === 0 ? '(none)' : fileNames(e.target.files));
+  });
+  $('#fileMulti').addEventListener('change', (e) => {
+    $('#fileOut').textContent = 'multiple → ' + (e.target.files.length === 0 ? '(none)' : fileNames(e.target.files));
   });
 
   // Favicon — render a coloured circle into a canvas, export to a PNG

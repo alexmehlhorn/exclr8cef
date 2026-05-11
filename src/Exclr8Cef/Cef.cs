@@ -349,6 +349,9 @@ public static class Cef
     /// </summary>
     public enum JsDialogType { Alert = 0, Confirm = 1, Prompt = 2, BeforeUnload = 3 }
 
+    /// <summary>What kind of file picker the page is asking for.</summary>
+    public enum FileDialogMode { Open = 0, OpenMultiple = 1, OpenFolder = 2, Save = 3 }
+
     /// <summary>
     /// CEF's <c>cef_log_severity_t</c>. Carried by <see cref="CefBrowser.ConsoleMessage"/>;
     /// derived from the JS console method (<c>console.log</c> → Info,
@@ -478,6 +481,7 @@ public static class Cef
                 Excef.excef_set_scroll_offset_callback(&ScrollOffsetTrampoline);
                 Excef.excef_set_auto_resize_callback(&AutoResizeTrampoline);
                 Excef.excef_set_js_dialog_callback(&JsDialogTrampoline);
+                Excef.excef_set_file_dialog_callback(&FileDialogTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -628,6 +632,31 @@ public static class Cef
             (JsDialogType)dialogType,
             Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void FileDialogTrampoline(int browserId, ulong token, int mode, sbyte* title, sbyte* defaultPath, sbyte* filtersJoined)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_file_dialog(token, null);
+            return;
+        }
+        if (!b.HasFileDialogSubscriber)
+        {
+            Excef.excef_resolve_file_dialog(token, null);
+            return;
+        }
+        var filters = Marshal.PtrToStringUTF8((IntPtr)filtersJoined) ?? "";
+        var split = filters.Length == 0
+            ? Array.Empty<string>()
+            : filters.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        b.RaiseFileDialog(
+            token,
+            (FileDialogMode)mode,
+            Marshal.PtrToStringUTF8((IntPtr)title) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)defaultPath) ?? "",
+            split);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
