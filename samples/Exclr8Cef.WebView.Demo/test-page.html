@@ -180,6 +180,7 @@
     </div>
     <div class="group">
       <div class="group-title">Events</div>
+      <a href="#a11y">Accessibility tree</a>
       <a href="#jsbridge">JS → host bridge</a>
       <a href="#console">Console messages</a>
       <a href="#load">Load events</a>
@@ -392,6 +393,20 @@
     </div>
   </section>
 
+  <section id="a11y">
+    <h2>Accessibility tree</h2>
+    <p class="lede">Enable Chromium's accessibility-tree stream via
+       <code>window.exclr8cef.invoke('a11y','on')</code>. The host
+       receives tree + location update JSON; each update is summarised
+       in the event console as <code>a11y tree update (NkB)</code>.
+       Real apps would translate the tree into their UI framework's
+       AutomationPeer hierarchy for screen-reader support.</p>
+    <div class="row">
+      <button id="a11yOn">Enable a11y tree</button>
+      <button id="a11yOff" class="ghost">Disable</button>
+    </div>
+  </section>
+
   <section id="jsbridge">
     <h2>JS → host bridge</h2>
     <p class="lede">Every renderer V8 context gets a
@@ -429,6 +444,16 @@
   $('#clickBtn').addEventListener('click', () => {
     clicks++;
     $('#clickOut').textContent = clicks;
+  });
+
+  // Accessibility — routes through the JS bridge so the host's
+  // SetAccessibilityEnabled toggle happens via the standard request
+  // path (the host handles the "a11y" method specially).
+  $('#a11yOn')?.addEventListener('click', () => {
+    window.exclr8cef?.invoke?.('a11y', 'on');
+  });
+  $('#a11yOff')?.addEventListener('click', () => {
+    window.exclr8cef?.invoke?.('a11y', 'off');
   });
 
   // JS → host bridge — sends a process message to the browser side via

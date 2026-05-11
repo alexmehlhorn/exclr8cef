@@ -293,6 +293,15 @@ internal static unsafe partial class Excef
     public static extern void excef_set_js_invoke_callback([NativeTypeName("excef_js_invoke_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_accessibility_tree_callback([NativeTypeName("excef_accessibility_tree_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_accessibility_location_callback([NativeTypeName("excef_accessibility_location_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_accessibility_enabled(int browser_id, int enabled);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_create_request_context([NativeTypeName("const char *")] sbyte* cache_path);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

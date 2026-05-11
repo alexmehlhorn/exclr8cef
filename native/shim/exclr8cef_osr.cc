@@ -11,6 +11,7 @@
 #include "include/cef_browser.h"
 #include "include/cef_cookie.h"
 #include "include/cef_frame.h"
+#include "include/cef_parser.h"
 #include "include/cef_process_message.h"
 #include "include/cef_request_context.h"
 #include "include/cef_resource_handler.h"
@@ -67,6 +68,8 @@ excef_popup_show_cb_t g_popup_show_cb = nullptr;
 excef_popup_size_cb_t g_popup_size_cb = nullptr;
 excef_popup_paint_cb_t g_popup_paint_cb = nullptr;
 excef_js_invoke_cb_t g_js_invoke_cb = nullptr;
+excef_accessibility_tree_cb_t g_a11y_tree_cb = nullptr;
+excef_accessibility_location_cb_t g_a11y_location_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -362,6 +365,20 @@ void Exclr8CefOsrHandler::OnPopupShow(CefRefPtr<CefBrowser> /*browser*/, bool sh
 
 void Exclr8CefOsrHandler::OnPopupSize(CefRefPtr<CefBrowser> /*browser*/, const CefRect& rect) {
     if (g_popup_size_cb) g_popup_size_cb(id_, rect.x, rect.y, rect.width, rect.height);
+}
+
+void Exclr8CefOsrHandler::OnAccessibilityTreeChange(CefRefPtr<CefValue> value) {
+    if (!g_a11y_tree_cb) return;
+    auto json = CefWriteJSON(value, JSON_WRITER_DEFAULT);
+    std::string s = json.ToString();
+    g_a11y_tree_cb(id_, s.c_str());
+}
+
+void Exclr8CefOsrHandler::OnAccessibilityLocationChange(CefRefPtr<CefValue> value) {
+    if (!g_a11y_location_cb) return;
+    auto json = CefWriteJSON(value, JSON_WRITER_DEFAULT);
+    std::string s = json.ToString();
+    g_a11y_location_cb(id_, s.c_str());
 }
 
 void Exclr8CefOsrHandler::OnScrollOffsetChanged(CefRefPtr<CefBrowser> /*browser*/,
@@ -1298,6 +1315,14 @@ extern "C" void excef_set_popup_show_callback(excef_popup_show_cb_t cb) { exclr8
 extern "C" void excef_set_popup_size_callback(excef_popup_size_cb_t cb) { exclr8cef::g_popup_size_cb = cb; }
 extern "C" void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb) { exclr8cef::g_popup_paint_cb = cb; }
 extern "C" void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb) { exclr8cef::g_js_invoke_cb = cb; }
+extern "C" void excef_set_accessibility_tree_callback(excef_accessibility_tree_cb_t cb) { exclr8cef::g_a11y_tree_cb = cb; }
+extern "C" void excef_set_accessibility_location_callback(excef_accessibility_location_cb_t cb) { exclr8cef::g_a11y_location_cb = cb; }
+
+extern "C" void excef_set_accessibility_enabled(int browser_id, int enabled) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return;
+    b->GetHost()->SetAccessibilityState(enabled ? STATE_ENABLED : STATE_DISABLED);
+}
 
 namespace {
 class ResourceRequestResolveTask : public CefTask {

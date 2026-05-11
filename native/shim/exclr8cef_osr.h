@@ -12,6 +12,7 @@
 #include "include/cef_find_handler.h"
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
+#include "include/cef_accessibility_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_request_handler.h"
@@ -32,7 +33,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefDownloadHandler,
                             public CefRequestHandler,
                             public CefFindHandler,
-                            public CefResourceRequestHandler {
+                            public CefResourceRequestHandler,
+                            public CefAccessibilityHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -48,6 +50,7 @@ public:
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
     CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
+    CefRefPtr<CefAccessibilityHandler> GetAccessibilityHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -65,6 +68,10 @@ public:
 
     void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
     void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
+
+    // CefAccessibilityHandler
+    void OnAccessibilityTreeChange(CefRefPtr<CefValue> value) override;
+    void OnAccessibilityLocationChange(CefRefPtr<CefValue> value) override;
     void OnScrollOffsetChanged(CefRefPtr<CefBrowser> browser,
                                 double x, double y) override;
 

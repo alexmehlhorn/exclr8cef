@@ -736,6 +736,8 @@ public static class Cef
                 Excef.excef_set_popup_size_callback(&PopupSizeTrampoline);
                 Excef.excef_set_popup_paint_callback(&PopupPaintTrampoline);
                 Excef.excef_set_js_invoke_callback(&JsInvokeTrampoline);
+                Excef.excef_set_accessibility_tree_callback(&AccessibilityTreeTrampoline);
+                Excef.excef_set_accessibility_location_callback(&AccessibilityLocationTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -944,6 +946,20 @@ public static class Cef
         b.RaiseJsInvoke(
             Marshal.PtrToStringUTF8((IntPtr)method) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AccessibilityTreeTrampoline(int browserId, sbyte* json)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseAccessibilityTreeChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AccessibilityLocationTrampoline(int browserId, sbyte* json)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseAccessibilityLocationChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

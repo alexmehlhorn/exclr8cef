@@ -214,6 +214,22 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<JsInvokeEventArgs>? JsInvoke;
 
     /// <summary>
+    /// Fires with Chromium's serialized accessibility tree as JSON
+    /// whenever the page's a11y structure changes. Only delivered after
+    /// <see cref="SetAccessibilityEnabled"/>(true). Hosts that want to
+    /// drive screen readers translate this tree into their UI
+    /// framework's AutomationPeer hierarchy.
+    /// </summary>
+    public event EventHandler<string>? AccessibilityTreeChange;
+
+    /// <summary>
+    /// Fires with serialized location updates for previously-reported
+    /// a11y nodes (bounding-box changes from scroll / resize). Only
+    /// delivered after <see cref="SetAccessibilityEnabled"/>(true).
+    /// </summary>
+    public event EventHandler<string>? AccessibilityLocationChange;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -688,6 +704,22 @@ public sealed class CefBrowser : IDisposable
 
     internal void RaiseJsInvoke(string method, string argsJson)
         => JsInvoke?.Invoke(this, new JsInvokeEventArgs(method, argsJson));
+
+    internal void RaiseAccessibilityTreeChange(string json)
+        => AccessibilityTreeChange?.Invoke(this, json);
+    internal void RaiseAccessibilityLocationChange(string json)
+        => AccessibilityLocationChange?.Invoke(this, json);
+
+    /// <summary>
+    /// Enable / disable the accessibility-tree event stream. Off by
+    /// default. With it enabled, <see cref="AccessibilityTreeChange"/>
+    /// + <see cref="AccessibilityLocationChange"/> fire as the page's
+    /// a11y structure changes.
+    /// </summary>
+    public void SetAccessibilityEnabled(bool enabled)
+    {
+        if (!_closed) Excef.excef_set_accessibility_enabled(Id, enabled ? 1 : 0);
+    }
 
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));

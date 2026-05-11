@@ -815,6 +815,28 @@ typedef void (*excef_js_invoke_cb_t)(int browser_id,
                                        const char* args_json);
 EXCEF_API void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb);
 
+// ---- Accessibility (lite) ----------------------------------------------
+//
+// CEF can emit Chromium's accessibility tree as updates, intended to be
+// reflected into the host UI framework's automation peer hierarchy
+// (NSAccessibility / UIA / AT-SPI). Building a full AutomationPeer
+// integration is a sizeable project; v1 here just surfaces the raw
+// updates as JSON for hosts that want to consume them.
+//
+// Disabled by default — call excef_set_accessibility_enabled(id, 1)
+// before tree/location callbacks fire. Disabling pauses delivery but
+// the tree is still maintained in the renderer.
+typedef void (*excef_accessibility_tree_cb_t)(int browser_id, const char* tree_json);
+typedef void (*excef_accessibility_location_cb_t)(int browser_id, const char* locations_json);
+
+EXCEF_API void excef_set_accessibility_tree_callback(excef_accessibility_tree_cb_t cb);
+EXCEF_API void excef_set_accessibility_location_callback(excef_accessibility_location_cb_t cb);
+
+// Enable / disable the a11y stream. State is per-browser. 0 = disabled,
+// 1 = enabled. (CEF supports a third "auto" state — wired to OS
+// accessibility detection — but that's not exposed here in v1.)
+EXCEF_API void excef_set_accessibility_enabled(int browser_id, int enabled);
+
 // ---- Request context (per-browser isolation) ---------------------------
 //
 // CefRequestContext lets browsers share or partition cookies, cache,

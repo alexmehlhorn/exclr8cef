@@ -85,6 +85,8 @@ public partial class MainWindow : Window
         b.RenderProcessGone     += OnBrowserRenderProcessGone;
         b.ResourceRequest       += OnBrowserResourceRequest;
         b.JsInvoke              += OnBrowserJsInvoke;
+        b.AccessibilityTreeChange     += OnBrowserA11yTree;
+        b.AccessibilityLocationChange += OnBrowserA11yLocation;
     }
 
     // Bucket request logs so the event console stays usable on busy pages —
@@ -92,7 +94,22 @@ public partial class MainWindow : Window
     // a short summary per resource type per page-load batch.
     private int _resourceRequestLogged;
     private void OnBrowserJsInvoke(object? sender, Exclr8Cef.JsInvokeEventArgs e)
-        => LogEvent("js-invoke", $"{e.Method}({e.ArgsJson})");
+    {
+        LogEvent("js-invoke", $"{e.Method}({e.ArgsJson})");
+        // Page-side toggle for the a11y stream goes through the JS bridge.
+        if (e.Method == "a11y" && Browser.Browser is { } b)
+        {
+            b.SetAccessibilityEnabled(e.ArgsJson == "on");
+        }
+    }
+
+    // The a11y tree fires for every layout update. Showing the full JSON in
+    // the event console would drown everything else — log a small summary.
+    private void OnBrowserA11yTree(object? sender, string json)
+        => LogEvent("a11y", $"tree update ({json.Length}B)");
+
+    private void OnBrowserA11yLocation(object? sender, string json)
+        => LogEvent("a11y", $"location update ({json.Length}B)");
 
     private void OnBrowserResourceRequest(object? sender, Exclr8Cef.ResourceRequestEventArgs e)
     {
@@ -717,6 +734,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["renderer"]        = SolidColorBrush.Parse("#f38ba8"),
         ["request"]         = SolidColorBrush.Parse("#74c7ec"),
         ["js-invoke"]       = SolidColorBrush.Parse("#cba6f7"),
+        ["a11y"]            = SolidColorBrush.Parse("#94e2d5"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");
