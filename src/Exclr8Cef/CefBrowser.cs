@@ -73,6 +73,18 @@ public sealed class CefBrowser : IDisposable
     /// <summary>Main-frame loading progress as a value in [0.0, 1.0]. Fires repeatedly during a load.</summary>
     public event EventHandler<double>? LoadingProgress;
 
+    /// <summary>Status-bar text, typically the URL of the link under the mouse cursor (empty when not hovering a link).</summary>
+    public event EventHandler<string>? StatusMessage;
+
+    /// <summary>Tooltip text from <c>title=</c> attributes / <c>aria-describedby</c>.</summary>
+    public event EventHandler<string>? TooltipChanged;
+
+    /// <summary>The highest-priority favicon URL declared by the page (empty if none).</summary>
+    public event EventHandler<string>? FaviconChanged;
+
+    /// <summary>Page entered or left HTML5 fullscreen.</summary>
+    public event EventHandler<bool>? FullscreenModeChanged;
+
     /// <summary>Fires after the underlying CEF browser has been fully closed.</summary>
     public event EventHandler? Closed;
 
@@ -128,6 +140,17 @@ public sealed class CefBrowser : IDisposable
     public void WasHidden(bool hidden)
     {
         if (!_closed) Excef.excef_was_hidden(Id, hidden ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Exit page-driven HTML5 fullscreen. Equivalent to JS
+    /// <c>document.exitFullscreen()</c>. Pass <paramref name="willCauseResize"/> = true
+    /// (the default) so Chromium knows the host will resize the view in response —
+    /// suppresses redundant layout flicker.
+    /// </summary>
+    public void ExitFullscreen(bool willCauseResize = true)
+    {
+        if (!_closed) Excef.excef_exit_fullscreen(Id, willCauseResize ? 1 : 0);
     }
 
     // ---- Zoom -----------------------------------------------------------
@@ -389,6 +412,11 @@ public sealed class CefBrowser : IDisposable
 
     internal void RaiseLoadingProgress(double progress)
         => LoadingProgress?.Invoke(this, progress);
+
+    internal void RaiseStatusMessage(string value) => StatusMessage?.Invoke(this, value);
+    internal void RaiseTooltipChanged(string text) => TooltipChanged?.Invoke(this, text);
+    internal void RaiseFaviconChanged(string url) => FaviconChanged?.Invoke(this, url);
+    internal void RaiseFullscreenChanged(bool fullscreen) => FullscreenModeChanged?.Invoke(this, fullscreen);
 
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));

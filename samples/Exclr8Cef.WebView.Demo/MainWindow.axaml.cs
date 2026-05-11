@@ -65,11 +65,122 @@ public partial class MainWindow : Window
             return;
         }
         _browserEventsHooked = true;
-        b.ConsoleMessage    += OnBrowserConsoleMessage;
-        b.LoadStart         += OnBrowserLoadStart;
-        b.LoadEnd           += OnBrowserLoadEnd;
-        b.LoadError         += OnBrowserLoadError;
-        b.LoadingProgress   += OnBrowserLoadingProgress;
+        b.ConsoleMessage        += OnBrowserConsoleMessage;
+        b.LoadStart             += OnBrowserLoadStart;
+        b.LoadEnd               += OnBrowserLoadEnd;
+        b.LoadError             += OnBrowserLoadError;
+        b.LoadingProgress       += OnBrowserLoadingProgress;
+        b.StatusMessage         += OnBrowserStatusMessage;
+        b.TooltipChanged        += OnBrowserTooltip;
+        b.FaviconChanged        += OnBrowserFavicon;
+        b.FullscreenModeChanged += OnBrowserFullscreen;
+    }
+
+    private void OnBrowserStatusMessage(object? sender, string text)
+    {
+        // OnStatusMessage fires frequently (every mouse-move over a link).
+        // Suppress empty + duplicate-consecutive values to keep the event
+        // console useful.
+        if (text == _lastStatus) return;
+        _lastStatus = text;
+        LogEvent("status", string.IsNullOrEmpty(text) ? "(cleared)" : text);
+    }
+    private string? _lastStatus;
+
+    private void OnBrowserTooltip(object? sender, string text)
+        => LogEvent("tooltip", string.IsNullOrEmpty(text) ? "(cleared)" : text);
+
+    private static readonly System.Net.Http.HttpClient s_faviconHttp = new();
+
+    private async void OnBrowserFavicon(object? sender, string url)
+    {
+        LogEvent("favicon", url);
+        if (string.IsNullOrEmpty(url)) return;
+
+        try
+        {
+            byte[]? bytes = null;
+            if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                // data:[<media>][;base64],<data>
+                var comma = url.IndexOf(',');
+                if (comma > 0)
+                {
+                    var header = url[..comma];
+                    var payload = url[(comma + 1)..];
+                    if (header.Contains(";base64", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bytes = Convert.FromBase64String(payload);
+                    }
+                    else
+                    {
+                        bytes = System.Text.Encoding.UTF8.GetBytes(Uri.UnescapeDataString(payload));
+                    }
+                }
+            }
+            else if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                using var resp = await s_faviconHttp.GetAsync(url);
+                if (resp.IsSuccessStatusCode)
+                    bytes = await resp.Content.ReadAsByteArrayAsync();
+            }
+
+            if (bytes is null || bytes.Length == 0) return;
+
+            // Bitmap decode supports PNG/JPEG/BMP/GIF — not SVG/ICO. Wrap in a
+            // try/catch so unsupported formats just leave the previous icon up.
+            using var stream = new MemoryStream(bytes);
+            var bmp = new Avalonia.Media.Imaging.Bitmap(stream);
+            FaviconImage.Source = bmp;
+            FaviconImage.IsVisible = true;
+        }
+        catch
+        {
+            // Unsupported format / fetch error — leave the previous icon.
+        }
+    }
+
+    private WindowState? _savedWindowState;
+    private Avalonia.Controls.GridLength? _savedConsoleHeight;
+
+    private void OnBrowserFullscreen(object? sender, bool fullscreen)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            // OnFullscreenModeChange is the host's cue to actually expand /
+            // restore the window. In OSR mode CEF doesn't own a window, so
+            // visible fullscreen is the host's responsibility:
+            //  - WindowState.FullScreen so the OS hides the title bar
+            //  - Hide every chrome row (branding, address bar, status, event
+            //    console pane) so the WebView fills the entire window
+            //  - Restore everything on exit
+            if (fullscreen)
+            {
+                _savedWindowState ??= WindowState;
+                _savedConsoleHeight ??= MainGrid.RowDefinitions[2].Height;
+
+                WindowState = WindowState.FullScreen;
+                BrandingStrip.IsVisible    = false;
+                AddressBar.IsVisible       = false;
+                StatusStrip.IsVisible      = false;
+                ConsoleSplitter.IsVisible  = false;
+                EventConsolePane.IsVisible = false;
+                MainGrid.RowDefinitions[2].Height = new Avalonia.Controls.GridLength(0);
+            }
+            else
+            {
+                WindowState = _savedWindowState ?? WindowState.Normal;
+                BrandingStrip.IsVisible    = true;
+                AddressBar.IsVisible       = true;
+                StatusStrip.IsVisible      = true;
+                ConsoleSplitter.IsVisible  = true;
+                EventConsolePane.IsVisible = true;
+                MainGrid.RowDefinitions[2].Height = _savedConsoleHeight ?? new Avalonia.Controls.GridLength(220);
+                _savedWindowState = null;
+                _savedConsoleHeight = null;
+            }
+        });
+        LogEvent("fullscreen", fullscreen ? "entered" : "exited");
     }
 
     private static string FrameTag(bool isMainFrame) => isMainFrame ? "[main] " : "[sub]  ";
@@ -259,6 +370,10 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["load-err"]        = SolidColorBrush.Parse("#f38ba8"),
         ["load-abort"]      = SolidColorBrush.Parse("#6c7086"),
         ["progress"]        = SolidColorBrush.Parse("#fab387"),
+        ["status"]          = SolidColorBrush.Parse("#94e2d5"),
+        ["tooltip"]         = SolidColorBrush.Parse("#cba6f7"),
+        ["favicon"]         = SolidColorBrush.Parse("#f5c2e7"),
+        ["fullscreen"]      = SolidColorBrush.Parse("#fab387"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

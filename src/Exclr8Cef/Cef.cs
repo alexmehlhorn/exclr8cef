@@ -459,6 +459,10 @@ public static class Cef
                 Excef.excef_set_load_end_callback(&LoadEndTrampoline);
                 Excef.excef_set_load_error_callback(&LoadErrorTrampoline);
                 Excef.excef_set_loading_progress_callback(&LoadingProgressTrampoline);
+                Excef.excef_set_status_message_callback(&StatusMessageTrampoline);
+                Excef.excef_set_tooltip_callback(&TooltipTrampoline);
+                Excef.excef_set_favicon_callback(&FaviconTrampoline);
+                Excef.excef_set_fullscreen_callback(&FullscreenTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -535,6 +539,34 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseLoadingProgress(progress);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void StatusMessageTrampoline(int browserId, sbyte* value)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseStatusMessage(Marshal.PtrToStringUTF8((IntPtr)value) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void TooltipTrampoline(int browserId, sbyte* text)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseTooltipChanged(Marshal.PtrToStringUTF8((IntPtr)text) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void FaviconTrampoline(int browserId, sbyte* firstUrl)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseFaviconChanged(Marshal.PtrToStringUTF8((IntPtr)firstUrl) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void FullscreenTrampoline(int browserId, int fullscreen)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseFullscreenChanged(fullscreen != 0);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

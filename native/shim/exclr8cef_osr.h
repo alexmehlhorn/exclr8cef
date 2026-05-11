@@ -95,6 +95,18 @@ public:
                           const CefString& source,
                           int line) override;
 
+    void OnStatusMessage(CefRefPtr<CefBrowser> browser,
+                         const CefString& value) override;
+
+    bool OnTooltip(CefRefPtr<CefBrowser> browser,
+                   CefString& text) override;
+
+    void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
+                            const std::vector<CefString>& icon_urls) override;
+
+    void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
+                                 bool fullscreen) override;
+
     int id() const { return id_; }
     int width() const { return width_; }
     int height() const { return height_; }

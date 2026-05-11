@@ -185,6 +185,21 @@ internal static unsafe partial class Excef
     public static extern void excef_set_loading_progress_callback([NativeTypeName("excef_loading_progress_cb_t")] delegate* unmanaged[Cdecl]<int, double, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_status_message_callback([NativeTypeName("excef_status_message_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_tooltip_callback([NativeTypeName("excef_tooltip_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_favicon_callback([NativeTypeName("excef_favicon_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_fullscreen_callback([NativeTypeName("excef_fullscreen_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_exit_fullscreen(int browser_id, int will_cause_resize);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

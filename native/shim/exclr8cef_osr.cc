@@ -27,6 +27,10 @@ excef_load_start_cb_t g_load_start_cb = nullptr;
 excef_load_end_cb_t g_load_end_cb = nullptr;
 excef_load_error_cb_t g_load_error_cb = nullptr;
 excef_loading_progress_cb_t g_loading_progress_cb = nullptr;
+excef_status_message_cb_t g_status_message_cb = nullptr;
+excef_tooltip_cb_t g_tooltip_cb = nullptr;
+excef_favicon_cb_t g_favicon_cb = nullptr;
+excef_fullscreen_cb_t g_fullscreen_cb = nullptr;
 
 }  // namespace
 
@@ -191,6 +195,43 @@ void Exclr8CefOsrHandler::OnLoadingProgressChange(CefRefPtr<CefBrowser> /*browse
                                                    double progress) {
     if (g_loading_progress_cb) {
         g_loading_progress_cb(id_, progress);
+    }
+}
+
+void Exclr8CefOsrHandler::OnStatusMessage(CefRefPtr<CefBrowser> /*browser*/,
+                                           const CefString& value) {
+    if (g_status_message_cb) {
+        std::string s = value.ToString();
+        g_status_message_cb(id_, s.c_str());
+    }
+}
+
+bool Exclr8CefOsrHandler::OnTooltip(CefRefPtr<CefBrowser> /*browser*/,
+                                     CefString& text) {
+    if (g_tooltip_cb) {
+        std::string s = text.ToString();
+        g_tooltip_cb(id_, s.c_str());
+    }
+    // Return false so Chromium can also render its default tooltip; hosts
+    // that want to fully take over should suppress at the C# layer.
+    return false;
+}
+
+void Exclr8CefOsrHandler::OnFaviconURLChange(CefRefPtr<CefBrowser> /*browser*/,
+                                              const std::vector<CefString>& icon_urls) {
+    if (g_favicon_cb) {
+        // We pass only the first URL; CEF orders them by browser-preference
+        // (highest-resolution PNG ahead of .ico), so the first is the most
+        // useful for typical tab-strip / window-icon use.
+        std::string first = icon_urls.empty() ? std::string() : icon_urls.front().ToString();
+        g_favicon_cb(id_, first.c_str());
+    }
+}
+
+void Exclr8CefOsrHandler::OnFullscreenModeChange(CefRefPtr<CefBrowser> /*browser*/,
+                                                  bool fullscreen) {
+    if (g_fullscreen_cb) {
+        g_fullscreen_cb(id_, fullscreen ? 1 : 0);
     }
 }
 
@@ -516,6 +557,15 @@ extern "C" void excef_set_load_start_callback(excef_load_start_cb_t cb) { exclr8
 extern "C" void excef_set_load_end_callback(excef_load_end_cb_t cb) { exclr8cef::g_load_end_cb = cb; }
 extern "C" void excef_set_load_error_callback(excef_load_error_cb_t cb) { exclr8cef::g_load_error_cb = cb; }
 extern "C" void excef_set_loading_progress_callback(excef_loading_progress_cb_t cb) { exclr8cef::g_loading_progress_cb = cb; }
+extern "C" void excef_set_status_message_callback(excef_status_message_cb_t cb) { exclr8cef::g_status_message_cb = cb; }
+extern "C" void excef_set_tooltip_callback(excef_tooltip_cb_t cb) { exclr8cef::g_tooltip_cb = cb; }
+extern "C" void excef_set_favicon_callback(excef_favicon_cb_t cb) { exclr8cef::g_favicon_cb = cb; }
+extern "C" void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb) { exclr8cef::g_fullscreen_cb = cb; }
+
+extern "C" void excef_exit_fullscreen(int browser_id, int will_cause_resize) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (b) b->GetHost()->ExitFullscreen(will_cause_resize != 0);
+}
 
 // ---- Cookies --------------------------------------------------------------
 

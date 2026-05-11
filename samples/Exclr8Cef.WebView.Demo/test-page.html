@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>Exclr8Cef demo</title>
+<!-- Favicon is set programmatically below to a canvas-rendered PNG so the
+     host can decode it with the standard Avalonia Bitmap loader (which
+     doesn't grok SVG). -->
+<link rel="icon" type="image/png" id="favicon">
 <style>
   :root {
     --bg: #1e1e2e;
@@ -28,6 +32,11 @@
     display: grid;
     grid-template-columns: 220px 1fr;
   }
+  /* When the body is the fullscreen element, Chromium's UA stylesheet
+     applies `position: fixed; height: 100%` and the body stops propagating
+     overflow to the html scroll context — content below the viewport
+     becomes unreachable. Re-enable scrolling on the fullscreen element. */
+  :fullscreen { overflow-y: auto; }
   /* Sidebar */
   aside {
     background: var(--bg2);
@@ -172,6 +181,8 @@
       <div class="group-title">Events</div>
       <a href="#console">Console messages</a>
       <a href="#load">Load events</a>
+      <a href="#display">Status / tooltip / favicon</a>
+      <a href="#fullscreen">Fullscreen</a>
     </div>
   </nav>
 </aside>
@@ -241,6 +252,31 @@
     </div>
   </section>
 
+  <section id="display">
+    <h2>Status / tooltip / favicon</h2>
+    <p class="lede">Hover the link to surface its URL as a status message.
+       Hover the tooltip element to surface its <code>title=</code>.
+       Click the favicon button to swap the page favicon to a different colour.</p>
+    <div class="row">
+      <a href="https://example.com" id="statusLink">hover to surface link URL</a>
+      <span title="this is a tooltip set via the title attribute"
+            style="text-decoration:underline dotted">hover for tooltip</span>
+      <button id="swapFavicon">Swap favicon</button>
+    </div>
+  </section>
+
+  <section id="fullscreen">
+    <h2>Fullscreen</h2>
+    <p class="lede">Click to request HTML5 fullscreen on the page body —
+       <code>FullscreenModeChanged</code> fires on enter/exit. ESC or the
+       "Exit fullscreen" button (which calls the host's
+       <code>browser.ExitFullscreen()</code>) restores normal mode.</p>
+    <div class="row">
+      <button id="reqFullscreen">Enter fullscreen</button>
+      <button id="exitFullscreen" class="ghost">Exit (page-side)</button>
+    </div>
+  </section>
+
   <section id="load">
     <h2>Load events</h2>
     <p class="lede">Trigger different load outcomes. Watch
@@ -287,6 +323,38 @@
     submitCount++;
     const v = $('#formInput').value;
     $('#formOut').textContent = '#' + submitCount + ' "' + v + '"';
+  });
+
+  // Favicon — render a coloured circle into a canvas, export to a PNG
+  // data URL, and assign as the favicon. Canvas-rendered PNGs avoid the
+  // SVG-decode limitation in Avalonia's host-side Bitmap loader.
+  const faviconColours = ['#f5c2e7','#a6e3a1','#89b4fa','#f9e2af','#f38ba8'];
+  function setFavicon(colour) {
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 32;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = colour;
+    ctx.beginPath(); ctx.arc(16, 16, 14, 0, 2*Math.PI); ctx.fill();
+    $('#favicon').href = c.toDataURL('image/png');
+  }
+  setFavicon(faviconColours[0]); // initial
+  let faviconIdx = 0;
+  $('#swapFavicon').addEventListener('click', () => {
+    faviconIdx = (faviconIdx + 1) % faviconColours.length;
+    setFavicon(faviconColours[faviconIdx]);
+  });
+
+  // Fullscreen — page-side request + page-side exit.
+  // Request fullscreen on <html> (documentElement) rather than <body>:
+  // when body becomes the :fullscreen element it's repositioned with
+  // position:fixed by Chromium's UA stylesheet, which kills the normal
+  // body→html scroll propagation. Targeting <html> keeps body's
+  // scrolling behaviour intact.
+  $('#reqFullscreen').addEventListener('click', () => {
+    document.documentElement.requestFullscreen?.().catch(err => console.error('fullscreen request failed:', err));
+  });
+  $('#exitFullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
   });
 
   // Console messages — exercise each severity. Counter included so repeated

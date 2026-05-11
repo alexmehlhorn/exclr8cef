@@ -394,6 +394,28 @@ EXCEF_API void excef_set_load_end_callback(excef_load_end_cb_t cb);
 EXCEF_API void excef_set_load_error_callback(excef_load_error_cb_t cb);
 EXCEF_API void excef_set_loading_progress_callback(excef_loading_progress_cb_t cb);
 
+// ---- Display events (status / tooltip / favicon / fullscreen) -----------
+//
+// All CefDisplayHandler. Strings are non-null but may be empty.
+// `first_url` on favicon is the highest-priority icon URL from the
+// page's <link rel="icon" …> tags (we pass the first; hosts that want
+// the full list can call back into the page via JS). `fullscreen` is 1
+// when the page enters HTML5 fullscreen, 0 when it leaves.
+typedef void (*excef_status_message_cb_t)(int browser_id, const char* value);
+typedef void (*excef_tooltip_cb_t)(int browser_id, const char* text);
+typedef void (*excef_favicon_cb_t)(int browser_id, const char* first_url);
+typedef void (*excef_fullscreen_cb_t)(int browser_id, int fullscreen);
+
+EXCEF_API void excef_set_status_message_callback(excef_status_message_cb_t cb);
+EXCEF_API void excef_set_tooltip_callback(excef_tooltip_cb_t cb);
+EXCEF_API void excef_set_favicon_callback(excef_favicon_cb_t cb);
+EXCEF_API void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb);
+
+// Exit page-driven fullscreen. `will_cause_resize=1` lets Chromium know
+// the host will resize the view in response, suppressing redundant layout
+// flicker.
+EXCEF_API void excef_exit_fullscreen(int browser_id, int will_cause_resize);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

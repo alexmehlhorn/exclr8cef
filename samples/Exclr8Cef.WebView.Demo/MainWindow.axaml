@@ -12,16 +12,21 @@
 
     <Grid RowDefinitions="Auto,Auto,*,Auto">
         <!-- Branding strip -->
-        <Border Grid.Row="0" Background="#1E1E2E" Padding="16,8">
-            <StackPanel Orientation="Vertical" Spacing="2">
-                <TextBlock Text="Exclr8Cef.WebView — embedded Chromium inside Avalonia (OSR)"
-                           Foreground="#CDD6F4" FontWeight="Bold" FontSize="14" />
-                <TextBlock Name="TitleText" Foreground="#A6ADC8" FontSize="12" />
-            </StackPanel>
+        <Border Grid.Row="0" Name="BrandingStrip" Background="#1E1E2E" Padding="16,8">
+            <DockPanel LastChildFill="True">
+                <Image DockPanel.Dock="Left" Name="FaviconImage"
+                       Width="20" Height="20" Margin="0,0,10,0"
+                       VerticalAlignment="Center" IsVisible="False" />
+                <StackPanel Orientation="Vertical" Spacing="2" VerticalAlignment="Center">
+                    <TextBlock Text="Exclr8Cef.WebView — embedded Chromium inside Avalonia (OSR)"
+                               Foreground="#CDD6F4" FontWeight="Bold" FontSize="14" />
+                    <TextBlock Name="TitleText" Foreground="#A6ADC8" FontSize="12" />
+                </StackPanel>
+            </DockPanel>
         </Border>
 
         <!-- Address bar + nav buttons -->
-        <Border Grid.Row="1" Background="#181825" Padding="8,6">
+        <Border Grid.Row="1" Name="AddressBar" Background="#181825" Padding="8,6">
             <DockPanel LastChildFill="True">
                 <Button DockPanel.Dock="Left"   Name="BackButton"     Content="◀"        Click="OnBackClick"     Padding="10,4" Margin="0,0,4,0" />
                 <Button DockPanel.Dock="Left"   Name="ForwardButton"  Content="▶"        Click="OnForwardClick"  Padding="10,4" Margin="0,0,4,0" />
@@ -35,14 +40,14 @@
         </Border>
 
         <!-- WebView on top, splitter, event console at bottom -->
-        <Grid Grid.Row="2" RowDefinitions="*,Auto,220">
+        <Grid Grid.Row="2" Name="MainGrid" RowDefinitions="*,Auto,220">
             <cef:WebView Grid.Row="0" Name="Browser" />
 
-            <GridSplitter Grid.Row="1" Height="4" Background="#181825"
+            <GridSplitter Grid.Row="1" Name="ConsoleSplitter" Height="4" Background="#181825"
                           HorizontalAlignment="Stretch"
                           ResizeDirection="Rows" />
 
-            <Border Grid.Row="2" Background="#11111B" BorderBrush="#313244" BorderThickness="0,1,0,0">
+            <Border Grid.Row="2" Name="EventConsolePane" Background="#11111B" BorderBrush="#313244" BorderThickness="0,1,0,0">
                 <Grid RowDefinitions="Auto,*">
                     <Border Grid.Row="0" Background="#181825" Padding="10,4">
                         <DockPanel LastChildFill="True">
@@ -80,7 +85,7 @@
             </Border>
         </Grid>
 
-        <Border Grid.Row="3" Background="#181825" Padding="12,4">
+        <Border Grid.Row="3" Name="StatusStrip" Background="#181825" Padding="12,4">
             <DockPanel LastChildFill="True">
                 <ProgressBar DockPanel.Dock="Right" Name="ProgressBar"
                              Width="120" Height="6" Minimum="0" Maximum="100"
