@@ -42,6 +42,12 @@ public:
                  const RectList& dirtyRects,
                  const void* buffer,
                  int width, int height) override;
+    void OnScrollOffsetChanged(CefRefPtr<CefBrowser> browser,
+                                double x, double y) override;
+
+    bool OnAutoResize(CefRefPtr<CefBrowser> browser,
+                       const CefSize& new_size) override;
+
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,
                        DragOperationsMask allowed_ops,

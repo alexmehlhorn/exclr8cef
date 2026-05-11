@@ -32,6 +32,8 @@ excef_tooltip_cb_t g_tooltip_cb = nullptr;
 excef_favicon_cb_t g_favicon_cb = nullptr;
 excef_fullscreen_cb_t g_fullscreen_cb = nullptr;
 excef_browser_initialized_cb_t g_browser_initialized_cb = nullptr;
+excef_scroll_offset_cb_t g_scroll_offset_cb = nullptr;
+excef_auto_resize_cb_t g_auto_resize_cb = nullptr;
 
 }  // namespace
 
@@ -88,6 +90,20 @@ void Exclr8CefOsrHandler::OnPaint(CefRefPtr<CefBrowser> /*browser*/,
                                   int width, int height) {
     if (type != PET_VIEW) return;
     if (paint_cb_) paint_cb_(id_, buffer, width, height);
+}
+
+void Exclr8CefOsrHandler::OnScrollOffsetChanged(CefRefPtr<CefBrowser> /*browser*/,
+                                                 double x, double y) {
+    if (g_scroll_offset_cb) g_scroll_offset_cb(id_, x, y);
+}
+
+bool Exclr8CefOsrHandler::OnAutoResize(CefRefPtr<CefBrowser> /*browser*/,
+                                        const CefSize& new_size) {
+    if (g_auto_resize_cb) g_auto_resize_cb(id_, new_size.width, new_size.height);
+    // Return true to mark the resize as handled (the host responds via its
+    // event hook). Returning false would suggest Chromium take its own
+    // action, which in OSR mode is a no-op anyway.
+    return true;
 }
 
 bool Exclr8CefOsrHandler::OnCursorChange(CefRefPtr<CefBrowser> /*browser*/,
@@ -566,6 +582,21 @@ extern "C" void excef_set_tooltip_callback(excef_tooltip_cb_t cb) { exclr8cef::g
 extern "C" void excef_set_favicon_callback(excef_favicon_cb_t cb) { exclr8cef::g_favicon_cb = cb; }
 extern "C" void excef_set_fullscreen_callback(excef_fullscreen_cb_t cb) { exclr8cef::g_fullscreen_cb = cb; }
 extern "C" void excef_set_browser_initialized_callback(excef_browser_initialized_cb_t cb) { exclr8cef::g_browser_initialized_cb = cb; }
+extern "C" void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb) { exclr8cef::g_scroll_offset_cb = cb; }
+extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { exclr8cef::g_auto_resize_cb = cb; }
+
+extern "C" void excef_set_auto_resize_enabled(int browser_id, int enabled,
+                                                int min_w, int min_h,
+                                                int max_w, int max_h) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return;
+    if (enabled) {
+        b->GetHost()->SetAutoResizeEnabled(true,
+            CefSize(min_w, min_h), CefSize(max_w, max_h));
+    } else {
+        b->GetHost()->SetAutoResizeEnabled(false, CefSize(), CefSize());
+    }
+}
 
 extern "C" void excef_exit_fullscreen(int browser_id, int will_cause_resize) {
     auto b = exclr8cef::GetOsrBrowser(browser_id);

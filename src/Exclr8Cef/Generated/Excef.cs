@@ -203,6 +203,15 @@ internal static unsafe partial class Excef
     public static extern void excef_set_browser_initialized_callback([NativeTypeName("excef_browser_initialized_cb_t")] delegate* unmanaged[Cdecl]<int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_scroll_offset_callback([NativeTypeName("excef_scroll_offset_cb_t")] delegate* unmanaged[Cdecl]<int, double, double, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_auto_resize_callback([NativeTypeName("excef_auto_resize_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_auto_resize_enabled(int browser_id, int enabled, int min_w, int min_h, int max_w, int max_h);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

@@ -40,7 +40,8 @@
         </Border>
 
         <!-- WebView on top, splitter, event console at bottom -->
-        <Grid Grid.Row="2" Name="MainGrid" RowDefinitions="*,Auto,220">
+        <Grid Grid.Row="2" Name="MainGrid" Background="#11111B"
+              RowDefinitions="*,Auto,220">
             <cef:WebView Grid.Row="0" Name="Browser" />
 
             <GridSplitter Grid.Row="1" Name="ConsoleSplitter" Height="4" Background="#181825"

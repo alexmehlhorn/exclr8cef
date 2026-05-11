@@ -427,6 +427,29 @@ EXCEF_API void excef_exit_fullscreen(int browser_id, int will_cause_resize);
 typedef void (*excef_browser_initialized_cb_t)(int browser_id);
 EXCEF_API void excef_set_browser_initialized_callback(excef_browser_initialized_cb_t cb);
 
+// ---- Render-handler observation: scroll & auto-resize -------------------
+//
+// CefRenderHandler::OnScrollOffsetChanged fires whenever the page's
+// scroll position changes (smooth-scroll updates included — many times
+// per second during a flick). x/y are in CSS pixels.
+typedef void (*excef_scroll_offset_cb_t)(int browser_id, double x, double y);
+EXCEF_API void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb);
+
+// CefRenderHandler::OnAutoResize fires when the page content's natural
+// size changes; only delivered if auto-resize is enabled on the host
+// side. Width/height are in CSS pixels.
+typedef void (*excef_auto_resize_cb_t)(int browser_id, int width, int height);
+EXCEF_API void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb);
+
+// Toggle CefBrowserHost auto-resize. When enabled, Chromium re-measures
+// the page after every layout and emits an OnAutoResize callback if the
+// natural content size differs from the current view rect. Pass
+// `enabled=0` to disable; min/max are in DIPs / CSS pixels (ignored when
+// disabling).
+EXCEF_API void excef_set_auto_resize_enabled(int browser_id, int enabled,
+                                              int min_w, int min_h,
+                                              int max_w, int max_h);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

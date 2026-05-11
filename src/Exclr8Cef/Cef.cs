@@ -464,6 +464,8 @@ public static class Cef
                 Excef.excef_set_favicon_callback(&FaviconTrampoline);
                 Excef.excef_set_fullscreen_callback(&FullscreenTrampoline);
                 Excef.excef_set_browser_initialized_callback(&BrowserInitializedTrampoline);
+                Excef.excef_set_scroll_offset_callback(&ScrollOffsetTrampoline);
+                Excef.excef_set_auto_resize_callback(&AutoResizeTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -575,6 +577,20 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseInitialized();
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ScrollOffsetTrampoline(int browserId, double x, double y)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseScrollOffset(x, y);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void AutoResizeTrampoline(int browserId, int w, int h)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseAutoResize(w, h);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

@@ -278,6 +278,19 @@ public class WebView : Control
         => _browser is null ? Task.FromResult(false) : _browser.PrintToPdfAsync(path);
 
     /// <summary>
+    /// Drop the cached paint bitmap and request a redraw. Useful when the
+    /// control's bounds are about to change drastically and showing a brief
+    /// black frame is preferable to a stretched / squished old bitmap until
+    /// CEF's next paint lands.
+    /// </summary>
+    public void InvalidateBitmap()
+    {
+        _bitmap?.Dispose();
+        _bitmap = null;
+        InvalidateVisual();
+    }
+
+    /// <summary>
     /// Close the underlying CEF browser and release the bitmap. Idempotent.
     /// Called automatically when the hosted <see cref="Window"/> closes.
     /// </summary>

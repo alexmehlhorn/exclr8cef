@@ -97,6 +97,20 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<bool>? FullscreenModeChanged;
 
     /// <summary>
+    /// Fires whenever the page's scroll position changes (in CSS pixels).
+    /// May fire many times per second during smooth-scrolling — hosts that
+    /// want a coarser stream should throttle locally.
+    /// </summary>
+    public event EventHandler<ScrollOffsetEventArgs>? ScrollOffsetChanged;
+
+    /// <summary>
+    /// Fires after the page's natural content size changes, but only when
+    /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
+    /// Width / height are in CSS pixels.
+    /// </summary>
+    public event EventHandler<AutoResizeEventArgs>? AutoResize;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -180,6 +194,30 @@ public sealed class CefBrowser : IDisposable
     public void ExitFullscreen(bool willCauseResize = true)
     {
         if (!_closed) Excef.excef_exit_fullscreen(Id, willCauseResize ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Enable / disable Chromium's auto-resize. When enabled, Chromium
+    /// takes over the browser's view sizing — the page lays out at its
+    /// natural content size (clamped to the min/max bounds), <see cref="AutoResize"/>
+    /// fires with that size, and the host is expected to resize its
+    /// control to match. Used for embed/iframe scenarios where the host
+    /// wants the browser to be exactly as tall as the content.
+    ///
+    /// <para><b>Important:</b> if you enable auto-resize but don't resize
+    /// the host control in response to the <see cref="AutoResize"/> event,
+    /// the page won't render correctly and input may stop working — the
+    /// host's view rect and Chromium's chosen rect diverge. For standard
+    /// "fixed-size embed" scenarios leave auto-resize disabled.</para>
+    ///
+    /// Pass <c>enabled=false</c> to disable; min/max are ignored.
+    /// </summary>
+    public void SetAutoResizeEnabled(bool enabled,
+                                      int minWidth = 1, int minHeight = 1,
+                                      int maxWidth = 4096, int maxHeight = 4096)
+    {
+        if (!_closed) Excef.excef_set_auto_resize_enabled(Id, enabled ? 1 : 0,
+            minWidth, minHeight, maxWidth, maxHeight);
     }
 
     // ---- Zoom -----------------------------------------------------------
@@ -453,6 +491,12 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseFaviconChanged(string url) => FaviconChanged?.Invoke(this, url);
     internal void RaiseFullscreenChanged(bool fullscreen) => FullscreenModeChanged?.Invoke(this, fullscreen);
 
+    internal void RaiseScrollOffset(double x, double y)
+        => ScrollOffsetChanged?.Invoke(this, new ScrollOffsetEventArgs(x, y));
+
+    internal void RaiseAutoResize(int w, int h)
+        => AutoResize?.Invoke(this, new AutoResizeEventArgs(w, h));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -485,6 +529,22 @@ public sealed class PaintEventArgs : EventArgs
         Width = width;
         Height = height;
     }
+}
+
+/// <summary>Args for <see cref="CefBrowser.ScrollOffsetChanged"/>.</summary>
+public sealed class ScrollOffsetEventArgs : EventArgs
+{
+    public double X { get; }
+    public double Y { get; }
+    public ScrollOffsetEventArgs(double x, double y) { X = x; Y = y; }
+}
+
+/// <summary>Args for <see cref="CefBrowser.AutoResize"/>.</summary>
+public sealed class AutoResizeEventArgs : EventArgs
+{
+    public int Width { get; }
+    public int Height { get; }
+    public AutoResizeEventArgs(int w, int h) { Width = w; Height = h; }
 }
 
 /// <summary>Args for <see cref="CefBrowser.LoadStart"/>.</summary>

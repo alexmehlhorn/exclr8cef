@@ -65,7 +65,7 @@ public partial class MainWindow : Window
             return;
         }
         _browserEventsHooked = true;
-        b.Initialized           += (_, _) => LogEvent("ready", $"CefBrowser #{b.Id} initialised");
+        b.Initialized += (_, _) => LogEvent("ready", $"CefBrowser #{b.Id} initialised");
         b.ConsoleMessage        += OnBrowserConsoleMessage;
         b.LoadStart             += OnBrowserLoadStart;
         b.LoadEnd               += OnBrowserLoadEnd;
@@ -75,7 +75,22 @@ public partial class MainWindow : Window
         b.TooltipChanged        += OnBrowserTooltip;
         b.FaviconChanged        += OnBrowserFavicon;
         b.FullscreenModeChanged += OnBrowserFullscreen;
+        b.ScrollOffsetChanged   += OnBrowserScrollOffset;
+        b.AutoResize            += OnBrowserAutoResize;
     }
+
+    // Scroll fires very often — bucket to 50px so the log stays useful.
+    private int _lastScrollBucketY = -1;
+    private void OnBrowserScrollOffset(object? sender, Exclr8Cef.ScrollOffsetEventArgs e)
+    {
+        int bucket = (int)(e.Y / 50);
+        if (bucket == _lastScrollBucketY) return;
+        _lastScrollBucketY = bucket;
+        LogEvent("scroll", $"x={e.X:F0} y={e.Y:F0}");
+    }
+
+    private void OnBrowserAutoResize(object? sender, Exclr8Cef.AutoResizeEventArgs e)
+        => LogEvent("autoresize", $"{e.Width} × {e.Height}");
 
     private void OnBrowserStatusMessage(object? sender, string text)
     {
@@ -376,6 +391,8 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["favicon"]         = SolidColorBrush.Parse("#f5c2e7"),
         ["fullscreen"]      = SolidColorBrush.Parse("#fab387"),
         ["ready"]           = SolidColorBrush.Parse("#94e2d5"),
+        ["scroll"]          = SolidColorBrush.Parse("#74c7ec"),
+        ["autoresize"]      = SolidColorBrush.Parse("#fab387"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");
