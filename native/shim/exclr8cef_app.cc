@@ -1,5 +1,6 @@
 #include "exclr8cef_app.h"
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,7 @@
 #include "include/cef_command_line.h"
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
+#include "include/cef_scheme.h"
 #include "include/cef_v8.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_browser_view_delegate.h"
@@ -26,6 +28,15 @@ CefRefPtr<Exclr8CefApp> g_app;
 std::vector<std::string> g_pending_urls;
 bool g_context_initialized = false;
 ScheduleMessagePumpWorkCallback g_schedule_pump_cb = nullptr;
+
+// Custom schemes registered via excef_register_custom_scheme. Populated
+// before init; consumed in OnRegisterCustomSchemes and OnContextInitialized.
+struct CustomSchemeEntry {
+    std::string name;
+    int options;  // OR-combined CEF_SCHEME_OPTION_*
+};
+std::vector<CustomSchemeEntry> g_custom_schemes;
+std::mutex g_custom_schemes_mu;
 
 class Exclr8CefWindowDelegate : public CefWindowDelegate {
 public:
@@ -131,15 +142,91 @@ Exclr8CefApp::Exclr8CefApp() = default;
 void Exclr8CefApp::OnBeforeCommandLineProcessing(
     const CefString& process_type,
     CefRefPtr<CefCommandLine> command_line) {
-    if (!process_type.empty()) return;
+    if (process_type.empty()) {
+        // Main process. Apply default switches + serialize our custom-scheme
+        // list to a flag so child processes (renderer, GPU, utility) can
+        // re-populate their own g_custom_schemes when this method fires
+        // again over there.
+        command_line->AppendSwitch("use-mock-keychain");
 
-    // Skip the macOS Keychain prompt that blocks startup.
-    command_line->AppendSwitch("use-mock-keychain");
+        std::vector<CustomSchemeEntry> schemes;
+        {
+            std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+            schemes = g_custom_schemes;
+        }
+        if (!schemes.empty()) {
+            std::string serialized;
+            for (size_t i = 0; i < schemes.size(); ++i) {
+                if (i) serialized += ',';
+                serialized += schemes[i].name;
+                serialized += ':';
+                serialized += std::to_string(schemes[i].options);
+            }
+            command_line->AppendSwitchWithValue("exclr8cef-schemes", serialized);
+        }
+        return;
+    }
+
+    // Subprocess (renderer / GPU / utility). Decode the scheme list our main
+    // process passed via cmdline and re-populate g_custom_schemes so
+    // OnRegisterCustomSchemes (called next in the lifecycle) sees them.
+    if (command_line->HasSwitch("exclr8cef-schemes")) {
+        std::string val = command_line->GetSwitchValue("exclr8cef-schemes").ToString();
+        size_t start = 0;
+        for (size_t i = 0; i <= val.size(); ++i) {
+            if (i == val.size() || val[i] == ',') {
+                auto chunk = val.substr(start, i - start);
+                auto colon = chunk.find(':');
+                if (colon != std::string::npos) {
+                    std::string name = chunk.substr(0, colon);
+                    int opts = std::atoi(chunk.substr(colon + 1).c_str());
+                    AddCustomScheme(name, opts);
+                }
+                start = i + 1;
+            }
+        }
+    }
+}
+
+void Exclr8CefApp::OnRegisterCustomSchemes(
+    CefRawPtr<CefSchemeRegistrar> registrar) {
+    std::vector<CustomSchemeEntry> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+        snapshot = g_custom_schemes;
+    }
+    for (const auto& entry : snapshot) {
+        registrar->AddCustomScheme(entry.name, entry.options);
+    }
+}
+
+// Storage accessors for the C ABI / scheme factory side. We expose these
+// so the per-process scheme-factory registration in exclr8cef.cc (which
+// hooks into OnContextInitialized) can read what the host registered.
+std::vector<std::string> GetRegisteredSchemeNames() {
+    std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+    std::vector<std::string> names;
+    names.reserve(g_custom_schemes.size());
+    for (const auto& e : g_custom_schemes) names.push_back(e.name);
+    return names;
+}
+
+void AddCustomScheme(const std::string& name, int options) {
+    std::lock_guard<std::mutex> lock(g_custom_schemes_mu);
+    for (auto& e : g_custom_schemes) {
+        if (e.name == name) { e.options = options; return; }
+    }
+    g_custom_schemes.push_back({name, options});
 }
 
 void Exclr8CefApp::OnContextInitialized() {
     CEF_REQUIRE_UI_THREAD();
     g_context_initialized = true;
+
+    // Hook custom-scheme factories now that the global context is up.
+    // OnRegisterCustomSchemes ran earlier (per-process); this binds the
+    // resource-handler factory to those scheme names browser-side.
+    RegisterAllSchemeFactories();
 
     for (const auto& url : g_pending_urls) {
         CreateBrowserOnUI(url);

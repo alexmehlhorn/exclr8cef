@@ -687,6 +687,63 @@ typedef void (*excef_render_process_gone_cb_t)(int browser_id,
                                                  const char* error_string);
 EXCEF_API void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb);
 
+// ---- Custom scheme + resource handler ----------------------------------
+//
+// Register a URL scheme (e.g. "app") that routes through a host-side
+// callback. The host returns full response bytes for each request — no
+// streaming in v1, just a single buffer per response.
+//
+// Workflow:
+//   1. Host calls excef_register_custom_scheme(...) BEFORE init for every
+//      scheme it wants to handle. The scheme is registered with Chromium
+//      and (if `register_factory` is non-zero) hooked to our internal
+//      resource-handler factory.
+//   2. Host calls excef_set_scheme_request_callback() to receive requests.
+//   3. When a page navigates to `app://...` or fetches `app://...`, the
+//      callback fires with a fresh token + the URL + the HTTP method.
+//   4. Host calls excef_resolve_scheme_request(token, ...) with the
+//      response (status code, mime type, headers, body bytes).
+//
+// All buffers are copied; callers do not need to keep them alive past the
+// resolve call. To return a 404, pass status_code=404 with empty body.
+
+// is_standard:        1 = treat URLs as standard (have host, path, etc.);
+//                     0 = opaque (everything after "scheme:" is the path)
+// is_local:           1 = local (file-like) — blocks XHR from non-local
+// is_display_isolated:1 = can only be displayed in <iframe> from same origin
+// is_secure:          1 = treated as "secure context" (enables crypto APIs)
+// is_cors_enabled:    1 = allow CORS requests
+// is_csp_bypassing:   1 = exempt from Content-Security-Policy
+//
+// Returns 0 on success, non-zero on failure.
+EXCEF_API int excef_register_custom_scheme(const char* scheme_name,
+                                            int is_standard,
+                                            int is_local,
+                                            int is_display_isolated,
+                                            int is_secure,
+                                            int is_cors_enabled,
+                                            int is_csp_bypassing);
+
+typedef void (*excef_scheme_request_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    const char* url,
+    const char* method);
+
+EXCEF_API void excef_set_scheme_request_callback(excef_scheme_request_cb_t cb);
+
+// Resolve a pending scheme request with the response body + metadata.
+// `mime_type` is optional (NULL/empty → CEF infers from the URL).
+// `body` may be NULL when `body_length == 0`. Multiple resolves on the
+// same token are no-ops (idempotent).
+EXCEF_API void excef_resolve_scheme_request(
+    unsigned long long token,
+    int status_code,
+    const char* status_text,
+    const char* mime_type,
+    const unsigned char* body,
+    int body_length);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

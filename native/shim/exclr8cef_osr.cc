@@ -1,17 +1,24 @@
 #include "exclr8cef_osr.h"
 
 #include <atomic>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "include/base/cef_callback.h"
 #include "include/cef_browser.h"
 #include "include/cef_cookie.h"
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
+#include "include/cef_resource_handler.h"
+#include "include/cef_response.h"
+#include "include/cef_scheme.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_closure_task.h"
+
+#include "exclr8cef_app.h"  // GetRegisteredSchemeNames
 
 namespace exclr8cef {
 
@@ -47,6 +54,7 @@ excef_download_progress_cb_t g_download_progress_cb = nullptr;
 excef_auth_request_cb_t g_auth_request_cb = nullptr;
 excef_find_result_cb_t g_find_result_cb = nullptr;
 excef_render_process_gone_cb_t g_render_process_gone_cb = nullptr;
+excef_scheme_request_cb_t g_scheme_request_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -76,6 +84,16 @@ struct PendingAuth {
     int browser_id;
     CefRefPtr<CefAuthCallback> callback;
 };
+
+// Scheme-request handler state. The resource handler instance lives across
+// Open() / GetResponseHeaders() / Read() — the host's resolve fills in
+// status_code / mime / body, then unblocks the CefCallback so CEF asks
+// for headers + body.
+class SchemeResourceHandler;
+struct PendingSchemeRequest {
+    int browser_id;
+    CefRefPtr<SchemeResourceHandler> handler;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
@@ -89,6 +107,164 @@ std::mutex g_download_progress_mu;
 std::map<uint64_t, PendingDownloadProgress> g_download_progress_pending;
 std::mutex g_auth_mu;
 std::map<uint64_t, PendingAuth> g_auth_pending;
+std::mutex g_scheme_mu;
+std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
+
+class SchemeResourceHandler;  // forward decl for the notify task
+
+// Posted from Open() so the host event handler runs after Open returns.
+class NotifyHostSchemeTask : public CefTask {
+public:
+    explicit NotifyHostSchemeTask(CefRefPtr<SchemeResourceHandler> h) : h_(std::move(h)) {}
+    void Execute() override;  // defined out-of-line below the handler class
+private:
+    CefRefPtr<SchemeResourceHandler> h_;
+    IMPLEMENT_REFCOUNTING(NotifyHostSchemeTask);
+};
+
+// Resource handler for our custom schemes. One instance per request.
+// Open() defers via CefCallback while the host computes the response;
+// the host's resolve fills body/status/mime and Continue()s the callback,
+// at which point CEF calls GetResponseHeaders() then Read() repeatedly.
+class SchemeResourceHandler : public CefResourceHandler {
+public:
+    SchemeResourceHandler(int browser_id, std::string url, std::string method)
+        : browser_id_(browser_id),
+          url_(std::move(url)),
+          method_(std::move(method)),
+          token_(g_next_token.fetch_add(1, std::memory_order_relaxed)) {}
+
+    bool Open(CefRefPtr<CefRequest> /*request*/,
+              bool& handle_request,
+              CefRefPtr<CefCallback> callback) override {
+        // Always defer. The host's event handler often runs synchronously
+        // (file I/O, simple lookups) and would call our resolve fn BEFORE
+        // Open() returns. CEF's state machine cancels the request if
+        // Continue() fires while still inside Open — observed as
+        // net::ERR_ABORTED. Posting the host notification ensures Open
+        // returns first; the host's Continue() lands in a fresh stack
+        // frame on the IO thread.
+        handle_request = false;
+        callback_ = callback;
+        if (!g_scheme_request_cb) {
+            status_code_ = 404; status_text_ = "Not Found";
+            mime_type_ = "text/plain";
+            // Even for 404 we have to defer — same reason.
+            CefRefPtr<SchemeResourceHandler> self(this);
+            CefPostTask(TID_IO, CefRefPtr<CefTask>(new NotifyHostSchemeTask(self)));
+            return true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_scheme_mu);
+            g_scheme_pending[token_] = PendingSchemeRequest{browser_id_, this};
+        }
+        CefRefPtr<SchemeResourceHandler> self(this);
+        CefPostTask(TID_IO, CefRefPtr<CefTask>(new NotifyHostSchemeTask(self)));
+        return true;
+    }
+
+    // Called from the posted task once Open has returned. Fires the host
+    // callback (which may call Resolve() synchronously — fine now, we're
+    // outside Open).
+    void NotifyHost() {
+        if (!g_scheme_request_cb) {
+            // 404 path: just unblock CEF.
+            if (callback_) { callback_->Continue(); callback_ = nullptr; }
+            return;
+        }
+        g_scheme_request_cb(browser_id_, token_, url_.c_str(), method_.c_str());
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response,
+                            int64_t& response_length,
+                            CefString& /*redirectUrl*/) override {
+        response->SetStatus(status_code_);
+        if (!status_text_.empty())
+            response->SetStatusText(status_text_);
+        if (!mime_type_.empty())
+            response->SetMimeType(mime_type_);
+        // -1 = unknown length; CEF reads until Read returns false. Setting
+        // an explicit Content-Length triggered net::ERR_ABORTED in CEF 147
+        // even though our Read returned exactly that many bytes — likely a
+        // mismatch between SetStatus/length expectations.
+        response_length = -1;
+    }
+
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read,
+              CefRefPtr<CefResourceReadCallback> /*callback*/) override {
+        if (read_pos_ >= body_.size()) { bytes_read = 0; return false; }
+        size_t avail = body_.size() - read_pos_;
+        size_t copy = std::min<size_t>(avail, static_cast<size_t>(bytes_to_read));
+        std::memcpy(data_out, body_.data() + read_pos_, copy);
+        read_pos_ += copy;
+        bytes_read = static_cast<int>(copy);
+        return true;
+    }
+
+    void Cancel() override {
+        std::lock_guard<std::mutex> lock(g_scheme_mu);
+        g_scheme_pending.erase(token_);
+    }
+
+    // Called by excef_resolve_scheme_request. Stash the response and unblock
+    // the deferred Open() callback so CEF asks us for headers + body.
+    void Resolve(int status_code, std::string status_text,
+                 std::string mime_type,
+                 std::vector<uint8_t> body) {
+        status_code_ = status_code;
+        status_text_ = std::move(status_text);
+        mime_type_ = std::move(mime_type);
+        body_ = std::move(body);
+        if (callback_) {
+            callback_->Continue();
+            callback_ = nullptr;
+        }
+    }
+
+    int browser_id() const { return browser_id_; }
+
+private:
+    int browser_id_;
+    std::string url_;
+    std::string method_;
+    uint64_t token_;
+    CefRefPtr<CefCallback> callback_;
+    int status_code_ = 200;
+    std::string status_text_ = "OK";
+    std::string mime_type_ = "text/plain";
+    std::vector<uint8_t> body_;
+    size_t read_pos_ = 0;
+
+    IMPLEMENT_REFCOUNTING(SchemeResourceHandler);
+};
+
+void NotifyHostSchemeTask::Execute() {
+    if (h_) h_->NotifyHost();
+}
+
+// Factory: one per scheme registered with CEF. Creates a fresh handler
+// per request.
+class SchemeFactory : public CefSchemeHandlerFactory {
+public:
+    CefRefPtr<CefResourceHandler> Create(CefRefPtr<CefBrowser> browser,
+                                          CefRefPtr<CefFrame> /*frame*/,
+                                          const CefString& /*scheme_name*/,
+                                          CefRefPtr<CefRequest> request) override {
+        int bid = 0;
+        if (browser) {
+            for (const auto& [id, handler] : g_osr_browsers) {
+                if (handler->browser() && handler->browser()->IsSame(browser)) {
+                    bid = id;
+                    break;
+                }
+            }
+        }
+        return new SchemeResourceHandler(bid,
+                                          request->GetURL().ToString(),
+                                          request->GetMethod().ToString());
+    }
+    IMPLEMENT_REFCOUNTING(SchemeFactory);
+};
 
 }  // namespace
 
@@ -463,6 +639,20 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Cancel();
                 it = g_auth_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        // Resolve any pending scheme requests for this browser with a 410
+        // so the CefCallback gets unblocked rather than leaking.
+        std::lock_guard<std::mutex> lock(g_scheme_mu);
+        for (auto it = g_scheme_pending.begin(); it != g_scheme_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.handler)
+                    it->second.handler->Resolve(410, "Gone", "text/plain", {});
+                it = g_scheme_pending.erase(it);
             } else {
                 ++it;
             }
@@ -919,6 +1109,62 @@ extern "C" void excef_set_download_progress_callback(excef_download_progress_cb_
 extern "C" void excef_set_auth_request_callback(excef_auth_request_cb_t cb) { exclr8cef::g_auth_request_cb = cb; }
 extern "C" void excef_set_find_result_callback(excef_find_result_cb_t cb) { exclr8cef::g_find_result_cb = cb; }
 extern "C" void excef_set_render_process_gone_callback(excef_render_process_gone_cb_t cb) { exclr8cef::g_render_process_gone_cb = cb; }
+extern "C" void excef_set_scheme_request_callback(excef_scheme_request_cb_t cb) { exclr8cef::g_scheme_request_cb = cb; }
+
+extern "C" int excef_register_custom_scheme(const char* scheme_name,
+                                              int is_standard,
+                                              int is_local,
+                                              int is_display_isolated,
+                                              int is_secure,
+                                              int is_cors_enabled,
+                                              int is_csp_bypassing) {
+    if (!scheme_name || !*scheme_name) return 1;
+    int options = 0;
+    if (is_standard)          options |= CEF_SCHEME_OPTION_STANDARD;
+    if (is_local)             options |= CEF_SCHEME_OPTION_LOCAL;
+    if (is_display_isolated)  options |= CEF_SCHEME_OPTION_DISPLAY_ISOLATED;
+    if (is_secure)            options |= CEF_SCHEME_OPTION_SECURE;
+    if (is_cors_enabled)      options |= CEF_SCHEME_OPTION_CORS_ENABLED;
+    if (is_csp_bypassing)     options |= CEF_SCHEME_OPTION_CSP_BYPASSING;
+    exclr8cef::AddCustomScheme(scheme_name, options);
+    return 0;
+}
+
+extern "C" void excef_resolve_scheme_request(uint64_t token,
+                                               int status_code,
+                                               const char* status_text,
+                                               const char* mime_type,
+                                               const unsigned char* body,
+                                               int body_length) {
+    CefRefPtr<exclr8cef::SchemeResourceHandler> handler;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_scheme_mu);
+        auto it = exclr8cef::g_scheme_pending.find(token);
+        if (it == exclr8cef::g_scheme_pending.end()) return;
+        handler = it->second.handler;
+        exclr8cef::g_scheme_pending.erase(it);
+    }
+    if (!handler) return;
+    std::string text = (status_text && *status_text) ? status_text : "";
+    std::string mime = (mime_type && *mime_type) ? mime_type : "";
+    std::vector<uint8_t> bytes;
+    if (body && body_length > 0)
+        bytes.assign(body, body + body_length);
+    handler->Resolve(status_code, std::move(text), std::move(mime), std::move(bytes));
+}
+
+namespace exclr8cef {
+// Called from Exclr8CefApp::OnContextInitialized once CEF is up. Registers
+// our factory for every scheme the host registered before init.
+void RegisterAllSchemeFactories() {
+    auto names = GetRegisteredSchemeNames();
+    if (names.empty()) return;
+    CefRefPtr<SchemeFactory> factory = new SchemeFactory();
+    for (const auto& name : names) {
+        CefRegisterSchemeHandlerFactory(name, /*domain=*/CefString(), factory);
+    }
+}
+}  // namespace exclr8cef
 
 namespace {
 class AuthResolveTask : public CefTask {

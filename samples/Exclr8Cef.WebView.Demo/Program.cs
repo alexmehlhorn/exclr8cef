@@ -64,6 +64,12 @@ internal static class Program
             LogSeverity = Cef.CefLogSeverity.Warning,
         });
 
+        // Register `app://` custom scheme so the demo's static assets can be
+        // served from disk via a real host/path URL (instead of file:// with
+        // its origin-isolation quirks). MUST happen before init.
+        Cef.RegisterCustomScheme("app", standard: true, secure: true, corsEnabled: true);
+        Cef.SchemeRequest += OnSchemeRequest;
+
         // CEF in OSR mode (windowless rendering + external pump).
         Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
 
@@ -84,6 +90,41 @@ internal static class Program
     private static void SchedulePumpWork(long delayMs)
     {
         // No-op: the AfterSetup timer drives CEF unconditionally.
+    }
+
+    /// <summary>
+    /// Resolve <c>app://</c> URLs from the bundle's MacOS dir. Acts like a
+    /// minimal static-file server — production hosts would map URLs to
+    /// embedded resources (<c>EmbeddedResource</c> in the csproj) or a
+    /// custom asset bundle instead of disk.
+    /// </summary>
+    private static void OnSchemeRequest(object? sender, Cef.SchemeRequestEventArgs e)
+    {
+        // URL shape: app://demo/<path>. Anything else → 404.
+        if (!e.Url.StartsWith("app://demo/", StringComparison.Ordinal))
+        {
+            e.NotFound();
+            return;
+        }
+        var rel = e.Url["app://demo/".Length..];
+        var path = Path.Combine(AppContext.BaseDirectory, rel);
+        if (!File.Exists(path)) { e.NotFound(); return; }
+
+        var body = File.ReadAllBytes(path);
+        var mime = Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".html" or ".htm" => "text/html; charset=utf-8",
+            ".css"            => "text/css; charset=utf-8",
+            ".js"             => "application/javascript; charset=utf-8",
+            ".json"           => "application/json; charset=utf-8",
+            ".png"            => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".svg"            => "image/svg+xml",
+            ".woff2"          => "font/woff2",
+            ".woff"           => "font/woff",
+            _                 => "application/octet-stream",
+        };
+        e.Continue(body, mime);
     }
 
     public static AppBuilder BuildAvaloniaApp()

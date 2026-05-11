@@ -266,6 +266,15 @@ internal static unsafe partial class Excef
     public static extern void excef_set_render_process_gone_callback([NativeTypeName("excef_render_process_gone_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_register_custom_scheme([NativeTypeName("const char *")] sbyte* scheme_name, int is_standard, int is_local, int is_display_isolated, int is_secure, int is_cors_enabled, int is_csp_bypassing);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_scheme_request_callback([NativeTypeName("excef_scheme_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_scheme_request([NativeTypeName("unsigned long long")] ulong token, int status_code, [NativeTypeName("const char *")] sbyte* status_text, [NativeTypeName("const char *")] sbyte* mime_type, [NativeTypeName("const unsigned char *")] byte* body, int body_length);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

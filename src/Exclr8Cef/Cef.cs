@@ -148,6 +148,49 @@ public static class Cef
     }
 
     /// <summary>
+    /// Register a custom URL scheme (e.g. "app") that routes through
+    /// <see cref="SchemeRequest"/>. MUST be called before
+    /// <see cref="Initialize"/> / <see cref="InitializeForOsr"/> — late
+    /// registration has no effect this process.
+    /// </summary>
+    /// <param name="name">Scheme name without the colon (e.g. "app", "myapp").</param>
+    /// <param name="standard">URLs have host/path structure like http (recommended).</param>
+    /// <param name="secure">Page is a "secure context" (enables crypto / service workers).</param>
+    /// <param name="corsEnabled">Allow CORS requests to/from this scheme.</param>
+    /// <param name="local">Local (file-like) — blocks XHR from non-local origins.</param>
+    /// <param name="displayIsolated">Can only render in same-origin iframes.</param>
+    /// <param name="cspBypassing">Exempt from Content-Security-Policy.</param>
+    public static void RegisterCustomScheme(
+        string name,
+        bool standard = true, bool secure = true, bool corsEnabled = true,
+        bool local = false, bool displayIsolated = false, bool cspBypassing = false)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
+            try
+            {
+                int rc = Excef.excef_register_custom_scheme(p,
+                    standard ? 1 : 0, local ? 1 : 0, displayIsolated ? 1 : 0,
+                    secure ? 1 : 0, corsEnabled ? 1 : 0, cspBypassing ? 1 : 0);
+                if (rc != 0) throw new InvalidOperationException($"register_custom_scheme failed (rc={rc})");
+            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>
+    /// Fires once per incoming request to a custom scheme registered via
+    /// <see cref="RegisterCustomScheme"/>. The host MUST call
+    /// <see cref="SchemeRequestEventArgs.Continue"/> or
+    /// <see cref="SchemeRequestEventArgs.NotFound"/> to dismiss the request;
+    /// leaving it unresolved hangs the renderer waiting for the response.
+    /// </summary>
+    public static event EventHandler<SchemeRequestEventArgs>? SchemeRequest;
+    internal static bool HasSchemeRequestSubscriber => SchemeRequest is not null;
+
+    /// <summary>
     /// Apply host-provided init settings. Call before any
     /// <see cref="Initialize"/> / <see cref="InitializeForOsr"/> /
     /// <see cref="InitializeExternalPump"/>; settings later than the
@@ -432,6 +475,57 @@ public static class Cef
     public enum DownloadState { InProgress = 0, Complete = 1, Canceled = 2 }
 
     /// <summary>
+    /// Args for <see cref="SchemeRequest"/>. Host MUST call exactly one of
+    /// <see cref="Continue"/> / <see cref="NotFound"/>.
+    /// </summary>
+    public sealed class SchemeRequestEventArgs : EventArgs
+    {
+        private readonly ulong _token;
+        private int _resolved;
+
+        /// <summary>The CefBrowser id that initiated the request (0 for non-browser-originated).</summary>
+        public int BrowserId { get; }
+        public string Url { get; }
+        /// <summary>HTTP method — "GET", "POST", etc.</summary>
+        public string Method { get; }
+
+        internal SchemeRequestEventArgs(ulong token, int browserId, string url, string method)
+        {
+            _token = token; BrowserId = browserId; Url = url; Method = method;
+        }
+
+        /// <summary>
+        /// Resolve the request with body bytes + status. <paramref name="mimeType"/>
+        /// is required so the renderer parses the body correctly (HTML pages, JS,
+        /// images, etc. all need a sensible Content-Type).
+        /// </summary>
+        public void Continue(byte[] body,
+                              string mimeType = "application/octet-stream",
+                              int statusCode = 200,
+                              string statusText = "OK")
+        {
+            if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+            ArgumentNullException.ThrowIfNull(body);
+            unsafe
+            {
+                sbyte* text = (sbyte*)Marshal.StringToCoTaskMemUTF8(statusText ?? "");
+                sbyte* mime = (sbyte*)Marshal.StringToCoTaskMemUTF8(mimeType ?? "");
+                fixed (byte* bp = body)
+                {
+                    try { Excef.excef_resolve_scheme_request(_token, statusCode, text, mime, bp, body.Length); }
+                    finally { Marshal.FreeCoTaskMem((IntPtr)text); Marshal.FreeCoTaskMem((IntPtr)mime); }
+                }
+            }
+        }
+
+        public void NotFound()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+            unsafe { Excef.excef_resolve_scheme_request(_token, 404, null, null, null, 0); }
+        }
+    }
+
+    /// <summary>
     /// Why a renderer subprocess terminated. Mirrors cef_termination_status_t.
     /// </summary>
     public enum TerminationStatus
@@ -580,6 +674,7 @@ public static class Cef
                 Excef.excef_set_auth_request_callback(&AuthRequestTrampoline);
                 Excef.excef_set_find_result_callback(&FindResultTrampoline);
                 Excef.excef_set_render_process_gone_callback(&RenderProcessGoneTrampoline);
+                Excef.excef_set_scheme_request_callback(&SchemeRequestTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -758,6 +853,22 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void SchemeRequestTrampoline(int browserId, ulong token, sbyte* url, sbyte* method)
+    {
+        if (!HasSchemeRequestSubscriber)
+        {
+            // No host listener: 404. Otherwise the renderer hangs waiting.
+            Excef.excef_resolve_scheme_request(token, 404, null, null, null, 0);
+            return;
+        }
+        var args = new SchemeRequestEventArgs(
+            token, browserId,
+            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)method) ?? "GET");
+        SchemeRequest?.Invoke(null, args);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

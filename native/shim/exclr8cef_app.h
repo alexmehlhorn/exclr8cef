@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "include/cef_app.h"
 #include "include/cef_render_process_handler.h"
@@ -30,6 +31,9 @@ public:
     void OnBeforeCommandLineProcessing(
         const CefString& process_type,
         CefRefPtr<CefCommandLine> command_line) override;
+
+    void OnRegisterCustomSchemes(
+        CefRawPtr<CefSchemeRegistrar> registrar) override;
 
     // CefBrowserProcessHandler
     void OnContextInitialized() override;
@@ -60,6 +64,13 @@ void SetSchedulePumpCallback(ScheduleMessagePumpWorkCallback cb);
 // calling any init function. Each init path (Windows/Linux + macOS) calls
 // this helper after setting the shim-controlled fields.
 void ApplyHostInitSettings(CefSettings& settings);
+
+// Custom-scheme registry shared with exclr8cef.cc (where the C ABI lives).
+void AddCustomScheme(const std::string& name, int options);
+std::vector<std::string> GetRegisteredSchemeNames();
+// Implemented in exclr8cef_osr.cc; called from OnContextInitialized to hook
+// our resource-handler factory to every registered custom scheme.
+void RegisterAllSchemeFactories();
 
 }  // namespace exclr8cef
 
