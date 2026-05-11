@@ -8,9 +8,9 @@ namespace Exclr8Cef.Print;
 /// <c>CefPdfPrintSettings</c> surface: header / footer HTML templates,
 /// paper size, margins, scale, page ranges, etc.
 ///
-/// <para>Hosts that only need a default-styled PDF should use the core
-/// <c>Cef.PrintToPdfAsync(browserId, path)</c> directly and don't need
-/// to reference this package.</para>
+/// <para>Hosts that only need a default-styled PDF should call
+/// <c>browser.PrintToPdfAsync(path)</c> on the <see cref="CefBrowser"/>
+/// directly and don't need to reference this package.</para>
 /// </summary>
 public static class CefPrint
 {
@@ -59,11 +59,13 @@ public static class CefPrint
     /// with explicit print settings. Returns a task that completes with
     /// <c>true</c> on success.
     /// </summary>
-    public static Task<bool> PrintToPdfAsync(int browserId, string path, PdfPrintOptions options)
+    public static Task<bool> PrintToPdfAsync(CefBrowser browser, string path, PdfPrintOptions options)
     {
+        ArgumentNullException.ThrowIfNull(browser);
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(options);
 
+        int browserId = browser.Id;
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         s_pdfCallbacks[browserId] = (_, ok) => tcs.TrySetResult(ok != 0);
 

@@ -43,16 +43,16 @@ internal sealed class WebViewTextInputMethodClient : TextInputMethodClient
 
     public override void SetPreeditText(string? preeditText)
     {
-        var id = _owner.BrowserId;
-        if (id <= 0) return;
+        var browser = _owner.Browser;
+        if (browser is null) return;
 
         if (string.IsNullOrEmpty(preeditText))
         {
-            Cef.ImeFinishComposing(id);
+            browser.ImeFinishComposing();
         }
         else
         {
-            Cef.ImeSetComposition(id, preeditText,
+            browser.ImeSetComposition(preeditText,
                 replacementRangeStart: 0,
                 replacementRangeLength: 0,
                 selectionStart: 0,

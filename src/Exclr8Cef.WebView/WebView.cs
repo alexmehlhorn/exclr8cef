@@ -13,26 +13,17 @@ namespace Exclr8Cef.WebView;
 
 /// <summary>
 /// Avalonia control hosting an embedded Chromium browser via Exclr8CEF's
-/// off-screen rendering (OSR) path. Forwards pointer/keyboard input to
-/// CEF, surfaces address/title/loading-state changes as Avalonia
-/// properties, and reflects CSS-driven cursor changes through Avalonia's
-/// <see cref="Control.Cursor"/>.
+/// off-screen rendering path. Owns a <see cref="CefBrowser"/> instance
+/// (exposed via the <see cref="Browser"/> property) — hosts that need the
+/// full per-browser event surface (console messages, downloads, dialogs,
+/// …) subscribe to events on <c>webView.Browser</c> directly rather than
+/// duplicating each event on the control.
 ///
-/// Pointer events: mouse, touch, and pen are all routed through the
-/// OnPointer* overrides. Touch and pen are forwarded as left-button
-/// mouse events with no gesture support (no pinch-zoom, no two-finger
-/// scroll). Suitable for desktop-first hosts.
-///
-/// HiDPI: the browser is configured with a device scale factor matching
-/// the host TopLevel's <see cref="TopLevel.RenderScaling"/>. CEF lays
-/// the page out at DIP/CSS-pixel size and renders into a buffer at
-/// physical-pixel size; the resulting bitmap is drawn 1:1 at the
-/// control's bounds with no upscale.
-///
-/// Lifecycle: the underlying CEF browser is created lazily on the first
-/// arrange with non-zero size and held for the control's lifetime. It is
-/// closed automatically when the host <see cref="Window"/> closes; call
-/// <see cref="Close"/> to release it earlier.
+/// The control owns the Avalonia-side concerns: paint → WriteableBitmap
+/// → Render(), pointer / keyboard / IME forwarding, cursor mapping. The
+/// underlying browser lifecycle (creation, resize, close) is also driven
+/// from here for ergonomics, but the <see cref="CefBrowser"/> instance is
+/// itself tech-neutral.
 /// </summary>
 public class WebView : Control
 {
@@ -89,13 +80,21 @@ public class WebView : Control
         private set => SetAndRaise(CanGoForwardProperty, ref _canGoForward, value);
     }
 
-    /// <summary>Browser id assigned by Exclr8Cef (0 if not yet created or closed).</summary>
-    public int BrowserId => _browserId;
+    /// <summary>
+    /// The underlying tech-neutral browser. Null until the first arrange
+    /// with non-zero size creates it, and after <see cref="Close"/>.
+    /// Hosts that need the full event/command surface should bind to this
+    /// directly — the control exposes only Avalonia-friendly slices.
+    /// </summary>
+    public CefBrowser? Browser => _browser;
 
-    private int _browserId;
-    // Browser dimensions in DIPs / CSS pixels. The native shim multiplies these
-    // by `_renderScale` (passed via SetDeviceScaleFactor + the create call) to
-    // get the physical-pixel paint buffer size.
+    /// <summary>Browser id (0 if not yet created or closed). Convenience.</summary>
+    public int BrowserId => _browser?.Id ?? 0;
+
+    private CefBrowser? _browser;
+    // Browser dimensions in DIPs / CSS pixels. The native shim multiplies
+    // these by _renderScale (passed via SetDeviceScaleFactor + the create
+    // call) to get the physical-pixel paint buffer size.
     private int _browserWidth;
     private int _browserHeight;
     private double _renderScale = 1.0;
@@ -114,11 +113,7 @@ public class WebView : Control
 
         // Disable Avalonia's tab-navigation involvement on the WebView. Tab
         // key handling belongs to the embedded Chromium page; without this,
-        // Avalonia's KeyboardNavigationHandler ALSO processes Tab (moves
-        // Avalonia focus to the next sibling control), so each Tab press
-        // produces two effective Tab actions: the page navigates one input,
-        // and Avalonia moves focus out — but the focus then re-enters the
-        // WebView, the page sees a fresh Tab, and skips ahead.
+        // Avalonia's KeyboardNavigationHandler ALSO processes Tab.
         KeyboardNavigation.SetTabNavigation(this, KeyboardNavigationMode.None);
 
         TextInputMethodClientRequested += (_, e) =>
@@ -127,27 +122,23 @@ public class WebView : Control
             e.Client = _imeClient;
         };
 
-        // KeyDown forwarding runs in the Tunnel phase: we need to claim the
-        // event (for Tab, Enter, etc.) before any class handler — chiefly
-        // KeyboardNavigationHandler — also processes it, otherwise the
-        // page's Tab handling and Avalonia's focus shift fire concurrently.
+        // KeyDown forwarding runs in the Tunnel phase so we claim the event
+        // (for Tab, Enter, etc.) before any class handler — chiefly
+        // KeyboardNavigationHandler — also processes it.
         AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel, handledEventsToo: true);
     }
 
     // Set when OnKeyDownTunnel forwards a RawKeyDown to the browser; cleared
     // by OnKeyUp. OnTextInput consults this to decide whether to synthesize a
     // RawKeyDown ahead of its Char dispatch — required on macOS, where
-    // Avalonia routes printable keys (letters, digits, Space) through the
-    // text-input system only, never firing KeyDownEvent. Without a matching
-    // RawKeyDown the renderer can't run keydown-anchored default actions
-    // (e.g. HTMLButtonElement::defaultEventHandler activates a focused
-    // button on Space *keydown* and only dispatches click on keyup if the
-    // button was activated).
+    // Avalonia routes printable keys through the text-input system only,
+    // never firing KeyDownEvent. Without a matching RawKeyDown the renderer
+    // can't run keydown-anchored default actions (button-active-on-Space, …).
     private bool _keyDownForwarded;
 
     private void OnKeyDownTunnel(object? sender, KeyEventArgs e)
     {
-        if (_browserId == 0) return;
+        if (_browser is null) return;
 
         ForwardKeyToBrowser(e, isKeyUp: false);
         _keyDownForwarded = true;
@@ -156,10 +147,7 @@ public class WebView : Control
         // RawKeyDown's default action (nav, function keys, Cmd shortcuts).
         // For printable keys with modifiers (e.g. Shift+letter) we MUST
         // leave Handled=false so Avalonia continues to its text-input
-        // pipeline (interpretKeyEvents on macOS) and OnTextInput fires
-        // with the character. Without that, the renderer gets RawKeyDown
-        // but no Char/keypress and the input element won't insert the
-        // typed character.
+        // pipeline (interpretKeyEvents on macOS) and OnTextInput fires.
         var accelMod = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
         bool isCmdShortcut = (e.KeyModifiers & accelMod) != 0;
         if (isCmdShortcut || IsNavigationKey(e.Key))
@@ -180,8 +168,10 @@ public class WebView : Control
 
     private void ForwardKeyToBrowser(KeyEventArgs e, bool isKeyUp)
     {
-        // Cmd / Ctrl shortcuts (zoom, clipboard) — handle here so they
-        // don't go to CEF as ordinary key events.
+        if (_browser is null) return;
+
+        // Cmd / Ctrl shortcuts (zoom, clipboard) — handle here so they don't
+        // go to CEF as ordinary key events.
         var accelMod = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
         if (!isKeyUp && (e.KeyModifiers & accelMod) != 0)
         {
@@ -194,14 +184,14 @@ public class WebView : Control
                 case Key.Subtract:   ZoomOut();   return;
                 case Key.D0:
                 case Key.NumPad0:    ResetZoom(); return;
-                case Key.C:          Copy();      return;
-                case Key.V:          Paste();     return;
-                case Key.X:          Cut();       return;
-                case Key.A:          SelectAll(); return;
+                case Key.C:          _browser.Copy();      return;
+                case Key.V:          _browser.Paste();     return;
+                case Key.X:          _browser.Cut();       return;
+                case Key.A:          _browser.SelectAll(); return;
                 case Key.Z:
-                    if (shiftAccel) Redo(); else Undo();
+                    if (shiftAccel) _browser.Redo(); else _browser.Undo();
                     return;
-                case Key.Y:          Redo();      return;
+                case Key.Y:          _browser.Redo();      return;
             }
         }
 
@@ -211,22 +201,12 @@ public class WebView : Control
         var modifiers = InputMapping.MapModifiers(e.KeyModifiers);
 
         bool shifted = (e.KeyModifiers & KeyModifiers.Shift) != 0;
-        // Compute keyChar for BOTH keydown and keyup. Chromium derives the
-        // DOM `event.key` from this; if keyup has character=0 while keydown
-        // had a real char, the renderer treats them as different keys, which
-        // breaks behaviors that match a press-release pair (e.g. Space
-        // activating a focused button: HTMLButtonElement::defaultEventHandler
-        // sets `active` on keydown with key=" " and only dispatches click on
-        // keyup if the key=" " matches).
         char keyChar = e.Key switch
         {
-            Key.Enter  => '\r',  // also Key.Return
+            Key.Enter  => '\r',
             Key.Space  => ' ',
             Key.Back   => '\b',
             Key.Escape => (char)27,
-            // Tab / arrows / function keys / Home/End/PgUp/PgDn / Delete:
-            // leave at 0. Chromium has hardcoded VK→DOM-key mapping for
-            // these and supplying '\t' / arrow chars confuses it.
             _ => '\0',
         };
         if (keyChar == '\0')
@@ -239,7 +219,7 @@ public class WebView : Control
                 keyChar = s[0];
         }
 
-        Cef.SendKeyEvent(_browserId,
+        _browser.SendKeyEvent(
             isKeyUp ? Cef.CefKeyEventType.KeyUp : Cef.CefKeyEventType.RawKeyDown,
             windowsKeyCode: vk, nativeKeyCode: nativeCode,
             modifiers: modifiers,
@@ -247,14 +227,12 @@ public class WebView : Control
             isSystemKey: false);
 
         // Enter needs a follow-up Char event for the renderer to dispatch a
-        // `keypress` and run HTMLInputElement::defaultEventHandler — that's
+        // keypress and run HTMLInputElement::defaultEventHandler — that's
         // what triggers form submission / button click. RawKeyDown alone
-        // fires the DOM keydown but does NOT run the input's default action.
-        // Tab does NOT need this (and including it caused literal '\t'
-        // insertion previously).
+        // fires keydown but does NOT run the input's default action.
         if (!isKeyUp && e.Key == Key.Enter)
         {
-            Cef.SendKeyEvent(_browserId, Cef.CefKeyEventType.Char,
+            _browser.SendKeyEvent(Cef.CefKeyEventType.Char,
                 windowsKeyCode: 0x0D, nativeKeyCode: nativeCode,
                 modifiers: modifiers,
                 character: '\r', unmodifiedCharacter: '\r',
@@ -262,44 +240,42 @@ public class WebView : Control
         }
     }
 
-    // ---- Public navigation methods ----------------------------------------
+    // ---- Avalonia-friendly delegating methods --------------------------
+    //
+    // Most hosts can use `webView.Browser.GoBack()` etc. directly; these
+    // shortcuts exist so XAML data-binding scenarios don't need a null
+    // check on Browser when the control isn't yet ready.
 
-    public void GoBack() { if (_browserId > 0) Cef.GoBack(_browserId); }
-    public void GoForward() { if (_browserId > 0) Cef.GoForward(_browserId); }
-    public void Reload(bool ignoreCache = false) { if (_browserId > 0) Cef.Reload(_browserId, ignoreCache); }
-    public void StopLoad() { if (_browserId > 0) Cef.StopLoad(_browserId); }
-    public void ShowDevTools() { if (_browserId > 0) Cef.ShowDevTools(_browserId); }
-    public void CloseDevTools() { if (_browserId > 0) Cef.CloseDevTools(_browserId); }
-    public void ExecuteJavaScript(string code) { if (_browserId > 0) Cef.ExecuteJavaScript(_browserId, code); }
+    public void GoBack()      => _browser?.GoBack();
+    public void GoForward()   => _browser?.GoForward();
+    public void Reload(bool ignoreCache = false) => _browser?.Reload(ignoreCache);
+    public void StopLoad()    => _browser?.StopLoad();
+    public void ShowDevTools()  => _browser?.ShowDevTools();
+    public void CloseDevTools() => _browser?.CloseDevTools();
+    public void ExecuteJavaScript(string code) => _browser?.ExecuteJavaScript(code);
 
-    // ---- Zoom ------------------------------------------------------------
-    // Zoom level is in CEF's convention: 0.0 == 100%, each +1.0 step is ~120%
-    // of the previous. We use a 0.5 step (≈ 110%) which roughly matches
-    // Chrome's discrete zoom levels.
     private const double ZoomStep = 0.5;
-    private double _zoomLevel;
     public double ZoomLevel
     {
-        get => _zoomLevel;
-        set { _zoomLevel = value; if (_browserId > 0) Cef.SetZoomLevel(_browserId, value); }
+        get => _browser?.ZoomLevel ?? 0;
+        set { if (_browser is not null) _browser.ZoomLevel = value; }
     }
-    public void ZoomIn() => ZoomLevel = _zoomLevel + ZoomStep;
-    public void ZoomOut() => ZoomLevel = _zoomLevel - ZoomStep;
+    public void ZoomIn()    => ZoomLevel = ZoomLevel + ZoomStep;
+    public void ZoomOut()   => ZoomLevel = ZoomLevel - ZoomStep;
     public void ResetZoom() => ZoomLevel = 0;
 
-    // ---- Clipboard / editing -------------------------------------------
-    public void Copy()      { if (_browserId > 0) Cef.Copy(_browserId); }
-    public void Paste()     { if (_browserId > 0) Cef.Paste(_browserId); }
-    public void Cut()       { if (_browserId > 0) Cef.Cut(_browserId); }
-    public void SelectAll() { if (_browserId > 0) Cef.SelectAll(_browserId); }
-    public void Undo()      { if (_browserId > 0) Cef.Undo(_browserId); }
-    public void Redo()      { if (_browserId > 0) Cef.Redo(_browserId); }
+    public void Copy()      => _browser?.Copy();
+    public void Paste()     => _browser?.Paste();
+    public void Cut()       => _browser?.Cut();
+    public void SelectAll() => _browser?.SelectAll();
+    public void Undo()      => _browser?.Undo();
+    public void Redo()      => _browser?.Redo();
 
     public Task<string> EvaluateJavaScriptAsync(string code)
-        => _browserId <= 0 ? Task.FromResult("null") : Cef.EvaluateJavaScriptAsync(_browserId, code);
+        => _browser is null ? Task.FromResult("null") : _browser.EvaluateJavaScriptAsync(code);
 
     public Task<bool> PrintToPdfAsync(string path)
-        => _browserId <= 0 ? Task.FromResult(false) : Cef.PrintToPdfAsync(_browserId, path);
+        => _browser is null ? Task.FromResult(false) : _browser.PrintToPdfAsync(path);
 
     /// <summary>
     /// Close the underlying CEF browser and release the bitmap. Idempotent.
@@ -307,31 +283,23 @@ public class WebView : Control
     /// </summary>
     public void Close()
     {
-        if (_browserId > 0)
+        if (_browser is not null)
         {
-            Cef.CloseBrowser(_browserId, forceClose: true);
-            _browserId = 0;
+            UnsubscribeBrowserEvents(_browser);
+            _browser.Close(force: true);
+            _browser = null;
         }
         _bitmap?.Dispose();
         _bitmap = null;
     }
 
-    // ---- Avalonia integration ---------------------------------------------
+    // ---- Avalonia integration ------------------------------------------
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
         _attached = true;
-
-        // Subscribe to global Cef events here (not in ctor) so a control that
-        // gets created and then dropped without ever attaching doesn't keep
-        // itself alive via the static event handler.
-        Cef.AddressChanged += OnGlobalAddressChanged;
-        Cef.TitleChanged += OnGlobalTitleChanged;
-        Cef.LoadingStateChanged += OnGlobalLoadingStateChanged;
-        Cef.CursorChanged += OnGlobalCursorChanged;
-
-        if (_browserId > 0) Cef.WasHidden(_browserId, false);
+        _browser?.WasHidden(false);
 
         if (e.Root is Window win)
         {
@@ -342,13 +310,8 @@ public class WebView : Control
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        Cef.AddressChanged -= OnGlobalAddressChanged;
-        Cef.TitleChanged -= OnGlobalTitleChanged;
-        Cef.LoadingStateChanged -= OnGlobalLoadingStateChanged;
-        Cef.CursorChanged -= OnGlobalCursorChanged;
-
         _attached = false;
-        if (_browserId > 0) Cef.WasHidden(_browserId, true);
+        _browser?.WasHidden(true);
 
         if (_hostedWindow is not null)
         {
@@ -370,26 +333,30 @@ public class WebView : Control
         int w = Math.Max(1, (int)finalSize.Width);
         int h = Math.Max(1, (int)finalSize.Height);
 
-        if (_browserId == 0)
+        if (_browser is null)
         {
             _browserWidth = w;
             _browserHeight = h;
             _renderScale = scale;
-            _browserId = Cef.CreateOffscreenBrowser(w, h, (float)scale,
-                                                     Url ?? "about:blank", OnCefPaint);
+            var browser = Cef.CreateOffscreenBrowser(w, h, (float)scale, Url ?? "about:blank");
+            if (browser is not null)
+            {
+                _browser = browser;
+                SubscribeBrowserEvents(browser);
+            }
         }
         else
         {
             if (scale != _renderScale)
             {
-                Cef.SetDeviceScaleFactor(_browserId, (float)scale);
+                _browser.SetDeviceScaleFactor((float)scale);
                 _renderScale = scale;
             }
             if (w != _browserWidth || h != _browserHeight)
             {
                 _browserWidth = w;
                 _browserHeight = h;
-                Cef.ResizeOffscreenBrowser(_browserId, w, h);
+                _browser.Resize(w, h);
             }
         }
 
@@ -399,45 +366,82 @@ public class WebView : Control
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == UrlProperty && !_suppressUrlChange && _browserId > 0)
+        if (change.Property == UrlProperty && !_suppressUrlChange && _browser is not null)
         {
             var newUrl = change.GetNewValue<string?>();
-            if (!string.IsNullOrEmpty(newUrl)) Cef.LoadUrl(_browserId, newUrl);
+            if (!string.IsNullOrEmpty(newUrl)) _browser.LoadUrl(newUrl);
         }
     }
 
-    // ---- Paint pipeline ---------------------------------------------------
+    // ---- Browser event routing -----------------------------------------
 
-    private void OnCefPaint(int id, IntPtr buffer, int width, int height)
+    private void SubscribeBrowserEvents(CefBrowser b)
     {
-        if (id != _browserId) return;
+        b.AddressChanged       += OnBrowserAddressChanged;
+        b.TitleChanged         += OnBrowserTitleChanged;
+        b.LoadingStateChanged  += OnBrowserLoadingStateChanged;
+        b.CursorChanged        += OnBrowserCursorChanged;
+        b.Painted              += OnBrowserPainted;
+    }
 
-        int byteCount = width * height * 4;
+    private void UnsubscribeBrowserEvents(CefBrowser b)
+    {
+        b.AddressChanged       -= OnBrowserAddressChanged;
+        b.TitleChanged         -= OnBrowserTitleChanged;
+        b.LoadingStateChanged  -= OnBrowserLoadingStateChanged;
+        b.CursorChanged        -= OnBrowserCursorChanged;
+        b.Painted              -= OnBrowserPainted;
+    }
+
+    private void OnBrowserAddressChanged(object? sender, string url)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            _suppressUrlChange = true;
+            try { SetCurrentValue(UrlProperty, url); }
+            finally { _suppressUrlChange = false; }
+        });
+    }
+
+    private void OnBrowserTitleChanged(object? sender, string title)
+        => Dispatcher.UIThread.Post(() => Title = title);
+
+    private void OnBrowserLoadingStateChanged(object? sender, LoadingState s)
+        => Dispatcher.UIThread.Post(() =>
+        {
+            IsLoading = s.IsLoading;
+            CanGoBack = s.CanGoBack;
+            CanGoForward = s.CanGoForward;
+        });
+
+    private void OnBrowserCursorChanged(object? sender, Cef.CefCursorType type)
+    {
+        // Construct the Avalonia Cursor on the UI thread — Cursor wraps a
+        // platform handle that is created lazily on first use, and creating
+        // it on a CEF worker thread can produce a handle that doesn't render.
+        Dispatcher.UIThread.Post(() => Cursor = MapCursor(type));
+    }
+
+    // ---- Paint pipeline ------------------------------------------------
+
+    private void OnBrowserPainted(object? sender, PaintEventArgs e)
+    {
+        int byteCount = e.Width * e.Height * 4;
         // Per-paint pooled buffer captured into the dispatcher closure. Avoids
         // a race where CEF could overwrite a shared staging buffer before the
         // prior dispatcher post completes.
         byte[] snapshot = ArrayPool<byte>.Shared.Rent(byteCount);
-        Marshal.Copy(buffer, snapshot, 0, byteCount);
+        Marshal.Copy(e.Buffer, snapshot, 0, byteCount);
 
-        // Snapshot the render scale alongside the buffer — the bitmap's DPI
-        // vector must match the scale that CEF actually rendered at, even if
-        // ApplyPendingResize has already updated _renderScale for the next
-        // size pass.
-        int w = width, h = height;
+        int w = e.Width, h = e.Height;
         Dispatcher.UIThread.Post(() =>
         {
             try
             {
-                if (_browserId == 0) return;
+                if (_browser is null) return;
                 if (_bitmap is null || _bitmapWidth != w || _bitmapHeight != h)
                 {
                     _bitmap?.Dispose();
-                    // Bitmap holds the raw paint buffer at its actual pixel
-                    // dimensions. DPI=96 means bitmap.Size in DIPs equals its
-                    // pixel size; Render() stretches to Bounds.Size, but with
-                    // enough source pixels (= physical-pixel buffer) to map
-                    // 1:1 to physical on HiDPI. Sharp without DPI metadata
-                    // tricks.
                     _bitmap = new WriteableBitmap(
                         new PixelSize(w, h),
                         new Vector(96, 96),
@@ -465,12 +469,6 @@ public class WebView : Control
         base.Render(context);
         if (_bitmap is not null)
         {
-            // Stretch the bitmap to fill the control's bounds. During a fast
-            // drag the bitmap may briefly be at the previous size (CEF's
-            // paint latency is ~30-100ms after WasResized); stretching means
-            // content always visually fills the window at the cost of brief
-            // transient distortion. Once the new paint lands, the bitmap is
-            // recreated at the right pixel size and the distortion clears.
             context.DrawImage(_bitmap, new Rect(Bounds.Size));
         }
         else
@@ -479,51 +477,8 @@ public class WebView : Control
         }
     }
 
-    // ---- Browser event routing --------------------------------------------
+    // ---- Cursor cache --------------------------------------------------
 
-    private void OnGlobalAddressChanged(object? sender, Cef.BrowserStringEventArgs e)
-    {
-        if (e.BrowserId != _browserId) return;
-        Dispatcher.UIThread.Post(() =>
-        {
-            _suppressUrlChange = true;
-            try { SetCurrentValue(UrlProperty, e.Value); }
-            finally { _suppressUrlChange = false; }
-        });
-    }
-
-    private void OnGlobalTitleChanged(object? sender, Cef.BrowserStringEventArgs e)
-    {
-        if (e.BrowserId != _browserId) return;
-        Dispatcher.UIThread.Post(() => Title = e.Value);
-    }
-
-    private void OnGlobalLoadingStateChanged(object? sender, Cef.LoadingStateEventArgs e)
-    {
-        if (e.BrowserId != _browserId) return;
-        Dispatcher.UIThread.Post(() =>
-        {
-            IsLoading = e.IsLoading;
-            CanGoBack = e.CanGoBack;
-            CanGoForward = e.CanGoForward;
-        });
-    }
-
-    private void OnGlobalCursorChanged(object? sender, Cef.CursorChangedEventArgs e)
-    {
-        if (e.BrowserId != _browserId) return;
-        // Construct the Avalonia Cursor on the UI thread — Cursor wraps a
-        // platform handle that is created lazily on first use, and creating
-        // it on a CEF worker thread can produce a handle that doesn't render
-        // (manifests as an invisible cursor when hovering over page controls).
-        var t = e.Type;
-        Dispatcher.UIThread.Post(() => Cursor = MapCursor(t));
-    }
-
-    // Cache cursors so we don't allocate a new platform handle on every
-    // pointer move when the page rapidly toggles between two cursor types
-    // (very common on UI with many small controls). Cursors are cheap but
-    // the cache prevents handle thrashing.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Cef.CefCursorType, Cursor> s_cursorCache = new();
 
     private static Cursor MapCursor(Cef.CefCursorType t) =>
@@ -584,16 +539,15 @@ public class WebView : Control
         _                                          => new Cursor(StandardCursorType.Arrow),
     };
 
-    // ---- Input forwarding -------------------------------------------------
-    // Coordinates are in DIPs / CSS pixels — CEF's view rect is in DIPs and
-    // the device scale factor handles the physical-pixel mapping internally.
+    // ---- Input forwarding ----------------------------------------------
+    // Coordinates are in DIPs / CSS pixels.
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
         var p = e.GetCurrentPoint(this);
-        Cef.SendMouseMove(_browserId,
+        _browser.SendMouseMove(
             (int)p.Position.X, (int)p.Position.Y,
             InputMapping.MapModifiers(e.KeyModifiers, p.Properties),
             mouseLeave: false);
@@ -602,9 +556,9 @@ public class WebView : Control
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
         var p = e.GetCurrentPoint(this);
-        Cef.SendMouseMove(_browserId,
+        _browser.SendMouseMove(
             (int)p.Position.X, (int)p.Position.Y,
             InputMapping.MapModifiers(e.KeyModifiers, p.Properties),
             mouseLeave: true);
@@ -613,16 +567,15 @@ public class WebView : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
         Focus();
-        // Re-assert browser focus on every click. OnGotFocus only fires for
-        // the initial focus transition into the control; a click that moves
-        // the page-internal focus from one input to another doesn't trigger
-        // it, leaving CEF's caret-blink state stalled. SetFocus(true) is
-        // idempotent so calling it repeatedly is fine.
-        Cef.SetBrowserFocus(_browserId, true);
+        // Re-assert browser focus on every click. OnGotFocus only fires
+        // for the initial focus transition into the control; a click that
+        // moves the page-internal focus between elements doesn't trigger
+        // it, leaving CEF's caret-blink stalled.
+        _browser.SetFocus(true);
         var p = e.GetCurrentPoint(this);
-        Cef.SendMouseClick(_browserId,
+        _browser.SendMouseClick(
             (int)p.Position.X, (int)p.Position.Y,
             InputMapping.MapPointerUpdateKind(p.Properties.PointerUpdateKind),
             mouseUp: false, e.ClickCount,
@@ -632,9 +585,9 @@ public class WebView : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
         var p = e.GetCurrentPoint(this);
-        Cef.SendMouseClick(_browserId,
+        _browser.SendMouseClick(
             (int)p.Position.X, (int)p.Position.Y,
             InputMapping.MapInitiatingButton(e.InitialPressMouseButton),
             mouseUp: true, 1,
@@ -644,10 +597,10 @@ public class WebView : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
         var p = e.GetCurrentPoint(this);
         const int linePixels = 40;
-        Cef.SendMouseWheel(_browserId,
+        _browser.SendMouseWheel(
             (int)p.Position.X, (int)p.Position.Y,
             (int)(e.Delta.X * linePixels),
             (int)(e.Delta.Y * linePixels),
@@ -657,38 +610,30 @@ public class WebView : Control
     protected override void OnGotFocus(GotFocusEventArgs e)
     {
         base.OnGotFocus(e);
-        if (_browserId > 0) Cef.SetBrowserFocus(_browserId, true);
+        _browser?.SetFocus(true);
     }
 
     protected override void OnLostFocus(RoutedEventArgs e)
     {
         base.OnLostFocus(e);
-        if (_browserId > 0)
+        if (_browser is not null)
         {
-            Cef.ImeCancel(_browserId);
-            Cef.SetBrowserFocus(_browserId, false);
+            _browser.ImeCancel();
+            _browser.SetFocus(false);
         }
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
-        if (_browserId == 0) return;
+        if (_browser is null) return;
 
-        // Tab moves focus to a new element on KeyDown. Sending the KeyUp to
-        // the renderer afterwards makes Chromium *synthesize a KeyDown* on
-        // the now-focused element (so the keyup has a matching keydown),
-        // and that synthesized keydown's default action fires Tab navigation
-        // a second time. Net: one Tab press = two focus moves. Suppress
-        // the KeyUp for Tab specifically. Other keys (Enter, arrows, etc.)
-        // typically don't move focus, so their KeyUp is needed for the
-        // default action to complete (e.g. Enter activating a button click).
+        // Tab moves focus on KeyDown. Sending the KeyUp afterwards makes
+        // Chromium synthesize a KeyDown on the now-focused element, doubling
+        // navigation. Suppress KeyUp for Tab specifically; other keys' KeyUp
+        // is needed for the default action to complete (Enter→click etc.).
         if (e.Key == Key.Tab)
         {
-            // Tab's RawKeyDown was forwarded in OnKeyDownTunnel; reset the
-            // flag here so the next printable key in OnTextInput correctly
-            // synthesizes its own RawKeyDown (otherwise the first char after
-            // a Tab is sent as Char-only and Chromium drops it).
             _keyDownForwarded = false;
             e.Handled = true;
             return;
@@ -702,25 +647,25 @@ public class WebView : Control
     protected override void OnTextInput(TextInputEventArgs e)
     {
         base.OnTextInput(e);
-        if (_browserId == 0 || string.IsNullOrEmpty(e.Text)) return;
+        if (_browser is null || string.IsNullOrEmpty(e.Text)) return;
+
         foreach (char c in e.Text)
         {
-            // Skip control characters (Tab '\t', Enter '\r'/'\n', Escape, etc.)
-            // — Avalonia on macOS fires OnTextInput for these as well as
-            // OnKeyDown, but Chromium will run their editor commands twice if
-            // we send both a RawKeyDown and a Char. We rely on OnKeyDown
-            // alone for those.
+            // Skip control chars (Tab '\t', Enter '\r', Escape, …) — Avalonia
+            // on macOS fires OnTextInput for these as well as OnKeyDown, but
+            // sending both RawKeyDown and Char makes Chromium run editor
+            // commands twice. We rely on OnKeyDown for those.
             if (char.IsControl(c)) continue;
 
-            // If Avalonia didn't fire KeyDown for this key (the macOS path for
-            // printable chars), synthesize a RawKeyDown so the renderer pairs
-            // a keydown with the upcoming keyup. Required for default actions
-            // anchored on keydown (button-active-on-Space, etc.).
+            // If Avalonia didn't fire KeyDown for this key (the macOS path
+            // for printable chars), synthesize a RawKeyDown so the renderer
+            // pairs a keydown with the upcoming keyup. Required for default
+            // actions anchored on keydown (button-active-on-Space, …).
             if (!_keyDownForwarded)
             {
                 int synthVk = (c >= 'a' && c <= 'z') ? c - 32 : c;
                 int synthNative = OperatingSystem.IsMacOS() ? CharToMacKeyCode(c) : 0;
-                Cef.SendKeyEvent(_browserId, Cef.CefKeyEventType.RawKeyDown,
+                _browser.SendKeyEvent(Cef.CefKeyEventType.RawKeyDown,
                     windowsKeyCode: synthVk, nativeKeyCode: synthNative,
                     Cef.CefModifiers.None,
                     character: c, unmodifiedCharacter: c,
@@ -728,7 +673,7 @@ public class WebView : Control
                 _keyDownForwarded = true;
             }
 
-            Cef.SendKeyEvent(_browserId, Cef.CefKeyEventType.Char,
+            _browser.SendKeyEvent(Cef.CefKeyEventType.Char,
                 windowsKeyCode: c, nativeKeyCode: 0,
                 Cef.CefModifiers.None,
                 character: c, unmodifiedCharacter: c,
@@ -739,11 +684,10 @@ public class WebView : Control
 
     /// <summary>
     /// Map a printable character to its macOS Carbon HIToolbox keycode for
-    /// use as <c>CefKeyEvent.native_key_code</c>. Used when synthesizing a
-    /// RawKeyDown from OnTextInput, where Avalonia hasn't given us a Key.
-    /// Without a correct native_key_code, Chromium's NSEventKeyCodeToDomKey
-    /// returns the wrong DOM <c>code</c> (e.g. <c>code=KeyA</c> for every
-    /// letter, since native_key_code=0 == kVK_ANSI_A).
+    /// CefKeyEvent.native_key_code. Used when synthesizing a RawKeyDown from
+    /// OnTextInput; without a correct native_key_code, Chromium's
+    /// NSEventKeyCodeToDomKey returns the wrong DOM <c>code</c>
+    /// (e.g. <c>code=KeyA</c> for every letter, since native=0 == kVK_ANSI_A).
     /// </summary>
     private static int CharToMacKeyCode(char c)
     {

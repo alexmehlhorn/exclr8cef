@@ -6,10 +6,13 @@ using Exclr8Cef.Native;
 namespace Exclr8Cef;
 
 /// <summary>
-/// Static facade for the Exclr8CEF lifecycle. Use from any .NET host —
-/// console, WPF, MAUI, ASP.NET, services. Avalonia hosts can use this
-/// directly or compose the <c>WebView</c> control from
-/// <c>Exclr8Cef.WebView</c>.
+/// Static facade for the Exclr8CEF process-wide lifecycle: init / shutdown,
+/// message-loop pumping, top-level browser creation, the off-screen browser
+/// factory, and the global cookie manager. Use from any .NET host —
+/// console, WPF, MAUI, ASP.NET, services. UI-framework integrations
+/// (<c>Exclr8Cef.WebView</c> for Avalonia, future WPF / MAUI variants)
+/// build on the per-browser <see cref="CefBrowser"/> instance returned by
+/// <see cref="CreateOffscreenBrowser"/>.
 /// </summary>
 public static class Cef
 {
@@ -17,8 +20,8 @@ public static class Cef
 
     /// <summary>
     /// Returns the linked shim, CEF, and Chromium versions. Safe to call
-    /// before <see cref="Initialize"/>; this only reads compile-time constants
-    /// from the shim.
+    /// before <see cref="Initialize"/>; reads compile-time constants from
+    /// the shim.
     /// </summary>
     public static CefVersions GetVersions()
     {
@@ -41,8 +44,7 @@ public static class Cef
     /// with that code, otherwise (-1) it's the main process and continues.
     ///
     /// On macOS the subprocess lives in a separate <c>Helper.app</c> bundle
-    /// so this returns -1 immediately and is effectively a no-op (the
-    /// helper bundle calls into the shim directly).
+    /// so this returns -1 immediately and is effectively a no-op.
     /// </summary>
     public static int ExecuteProcess(string[]? args = null)
     {
@@ -51,26 +53,18 @@ public static class Cef
         unsafe
         {
             sbyte** argv = AllocArgv(args, out int argc);
-            try
-            {
-                return Excef.excef_execute_process(argc, argv);
-            }
-            finally
-            {
-                FreeArgv(argv, argc);
-            }
+            try { return Excef.excef_execute_process(argc, argv); }
+            finally { FreeArgv(argv, argc); }
         }
     }
 
     /// <summary>
     /// Initialize CEF with its own internal message loop. Call once, then
-    /// <see cref="RunMessageLoop"/>. Suited for console / non-UI hosts that
-    /// don't already have a platform message loop.
+    /// <see cref="RunMessageLoop"/>. Suited for console / non-UI hosts.
     /// </summary>
     public static void Initialize(string[]? args = null, string? subprocessPath = null)
     {
         args ??= Environment.GetCommandLineArgs();
-
         unsafe
         {
             sbyte** argv = AllocArgv(args, out int argc);
@@ -78,11 +72,7 @@ public static class Cef
             try
             {
                 int rc = Excef.excef_initialize(argc, argv, subprocPtr);
-                if (rc != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"excef_initialize failed with code {rc}");
-                }
+                if (rc != 0) throw new InvalidOperationException($"excef_initialize failed with code {rc}");
             }
             finally
             {
@@ -93,10 +83,10 @@ public static class Cef
     }
 
     /// <summary>
-    /// Initialize CEF with an external message pump. Use from UI hosts that
-    /// already own the platform message loop (Avalonia, WPF). The host must
-    /// call <see cref="DoMessageLoopWork"/> from its UI thread whenever the
-    /// <paramref name="schedulePumpWork"/> callback fires.
+    /// Initialize CEF with an external message pump. Use from UI hosts
+    /// that already own the platform message loop (Avalonia, WPF). The
+    /// host must call <see cref="DoMessageLoopWork"/> from its UI thread
+    /// whenever <paramref name="schedulePumpWork"/> fires.
     /// </summary>
     public static void InitializeExternalPump(
         string[]? args,
@@ -105,9 +95,6 @@ public static class Cef
     {
         ArgumentNullException.ThrowIfNull(schedulePumpWork);
         args ??= Environment.GetCommandLineArgs();
-
-        // Hold the callback alive — UnmanagedCallersOnly trampoline reads it
-        // from a static field.
         s_scheduleCallback = schedulePumpWork;
 
         unsafe
@@ -118,11 +105,7 @@ public static class Cef
             {
                 delegate* unmanaged[Cdecl]<long, void> trampoline = &SchedulePumpWorkTrampoline;
                 int rc = Excef.excef_initialize_external_pump(argc, argv, subprocPtr, trampoline);
-                if (rc != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"excef_initialize_external_pump failed with code {rc}");
-                }
+                if (rc != 0) throw new InvalidOperationException($"excef_initialize_external_pump failed with code {rc}");
             }
             finally
             {
@@ -132,17 +115,12 @@ public static class Cef
         }
     }
 
-    /// <summary>
-    /// Drive CEF's pending work. Host should call this from its UI thread
-    /// when the schedule callback's delay has elapsed.
-    /// </summary>
     public static void DoMessageLoopWork() => Excef.excef_do_message_loop_work();
 
     /// <summary>
-    /// Open a top-level Chromium browser window pointed at <paramref name="url"/>.
-    /// Safe to call before or after <see cref="Initialize"/>: URLs requested
-    /// before init complete are queued and opened automatically when CEF is
-    /// ready.
+    /// Open a top-level Chromium browser window. Safe before or after
+    /// <see cref="Initialize"/>; URLs requested pre-init are queued.
+    /// Use <see cref="CreateOffscreenBrowser"/> for embedded OSR scenarios.
     /// </summary>
     public static void CreateBrowser(string url)
     {
@@ -153,24 +131,15 @@ public static class Cef
             try
             {
                 int rc = Excef.excef_create_browser(ptr);
-                if (rc != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"excef_create_browser failed with code {rc}");
-                }
+                if (rc != 0) throw new InvalidOperationException($"excef_create_browser failed with code {rc}");
             }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)ptr);
-            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)ptr); }
         }
     }
 
     /// <summary>
     /// Create a native host view containing a CEF browser. Returns a handle
-    /// to an <c>NSView</c> on macOS (other platforms TBD). Caller takes
-    /// ownership; the UI framework hosting the handle is responsible for
-    /// release/positioning.
+    /// to an <c>NSView</c> on macOS. Caller takes ownership.
     /// </summary>
     public static IntPtr CreateBrowserView(int width, int height, string url)
     {
@@ -183,18 +152,15 @@ public static class Cef
                 void* viewPtr = Excef.excef_create_browser_view(width, height, ptr);
                 return (IntPtr)viewPtr;
             }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)ptr);
-            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)ptr); }
         }
     }
 
     /// <summary>
     /// Initialize CEF in off-screen-rendering mode with an external message
     /// pump. Use from UI hosts that want to embed Chromium without giving
-    /// CEF a native window — typical for Avalonia integration. Combine with
-    /// <see cref="CreateOffscreenBrowser"/> and a <c>WriteableBitmap</c>.
+    /// CEF a native window — typical for Avalonia / WPF integration.
+    /// Combine with <see cref="CreateOffscreenBrowser"/>.
     /// </summary>
     public static void InitializeForOsr(
         string[]? args,
@@ -214,11 +180,7 @@ public static class Cef
             {
                 delegate* unmanaged[Cdecl]<long, void> trampoline = &SchedulePumpWorkTrampoline;
                 int rc = Excef.excef_initialize_offscreen(argc, argv, subprocPtr, trampoline);
-                if (rc != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"excef_initialize_offscreen failed with code {rc}");
-                }
+                if (rc != 0) throw new InvalidOperationException($"excef_initialize_offscreen failed with code {rc}");
             }
             finally
             {
@@ -229,27 +191,16 @@ public static class Cef
     }
 
     /// <summary>
-    /// Paint callback for off-screen browsers. <paramref name="buffer"/> is
-    /// BGRA8888 (32-bit, top-left origin, stride = width × 4) and is only
-    /// valid for the duration of the call — copy what you need.
-    /// </summary>
-    public delegate void PaintHandler(int browserId, IntPtr buffer, int width, int height);
-
-    /// <summary>
     /// Create an off-screen browser whose view rect is <paramref name="width"/> ×
-    /// <paramref name="height"/> DIPs. <paramref name="deviceScaleFactor"/> controls
-    /// HiDPI rendering: CEF allocates a paint buffer of (width × scale) ×
-    /// (height × scale) physical pixels, while the page is laid out at the DIP
-    /// size. Pass <c>1.0f</c> for non-HiDPI hosts.
-    ///
-    /// Returns a browser id (≥ 1) on success, 0 on failure. The
-    /// <paramref name="onPaint"/> handler is invoked whenever CEF has new pixels;
-    /// the (width, height) reported there are in physical pixels.
+    /// <paramref name="height"/> DIPs. <paramref name="deviceScaleFactor"/> drives
+    /// HiDPI: CEF allocates a paint buffer of (w × scale) × (h × scale) physical
+    /// pixels while the page lays out at DIP size. Pass <c>1.0f</c> for non-HiDPI.
+    /// Returns a <see cref="CefBrowser"/> with the full per-browser event/command
+    /// surface, or <c>null</c> if creation failed.
     /// </summary>
-    public static int CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url, PaintHandler onPaint)
+    public static CefBrowser? CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url)
     {
         ArgumentNullException.ThrowIfNull(url);
-        ArgumentNullException.ThrowIfNull(onPaint);
 
         unsafe
         {
@@ -258,314 +209,19 @@ public static class Cef
             {
                 delegate* unmanaged[Cdecl]<int, void*, int, int, void> trampoline = &PaintTrampoline;
                 int id = Excef.excef_create_offscreen_browser(width, height, deviceScaleFactor, urlPtr, trampoline);
-                if (id > 0) s_paintHandlers[id] = onPaint;
-                return id;
+                if (id <= 0) return null;
+                var browser = new CefBrowser(id);
+                s_browsers[id] = browser;
+                return browser;
             }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)urlPtr);
-            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)urlPtr); }
         }
     }
 
-    /// <summary>Notify CEF that an off-screen browser was resized (DIP size).</summary>
-    public static void ResizeOffscreenBrowser(int browserId, int width, int height)
-        => Excef.excef_resize_offscreen_browser(browserId, width, height);
+    /// <summary>Iterates the currently-live OSR browsers.</summary>
+    public static IEnumerable<CefBrowser> Browsers => s_browsers.Values;
 
-    /// <summary>
-    /// Update the device scale factor for an off-screen browser, e.g. when the
-    /// host control is dragged across monitors with different DPI. CEF will
-    /// re-layout and emit a fresh paint at the new physical-pixel size.
-    /// </summary>
-    public static void SetDeviceScaleFactor(int browserId, float scale)
-        => Excef.excef_set_device_scale_factor(browserId, scale);
-
-    /// <summary>
-    /// Set the page zoom level. <c>0.0</c> = 100% (default). Each <c>+1.0</c>
-    /// step is ~120% of the previous (CEF/Chromium convention:
-    /// <c>percentage = 100 × pow(1.2, level)</c>).
-    /// </summary>
-    public static void SetZoomLevel(int browserId, double level)
-        => Excef.excef_set_zoom_level(browserId, level);
-
-    /// <summary>Get the current zoom level. <c>0.0</c> = 100%.</summary>
-    public static double GetZoomLevel(int browserId)
-        => Excef.excef_get_zoom_level(browserId);
-
-    // ---- Clipboard / editing primitives -----------------------------------
-    // Operate on the browser's focused frame. CEF in OSR mode does not
-    // auto-execute these from keyboard accelerators — the host calls them
-    // when Cmd/Ctrl + C / V / X / A / Z / Y is pressed.
-
-    public static void Copy(int browserId)      => Excef.excef_copy(browserId);
-    public static void Paste(int browserId)     => Excef.excef_paste(browserId);
-    public static void Cut(int browserId)       => Excef.excef_cut(browserId);
-    public static void SelectAll(int browserId) => Excef.excef_select_all(browserId);
-    public static void Undo(int browserId)      => Excef.excef_undo(browserId);
-    public static void Redo(int browserId)      => Excef.excef_redo(browserId);
-
-    // ---- Input forwarding -------------------------------------------------
-
-    [Flags]
-    public enum CefModifiers : uint
-    {
-        None = 0,
-        CapsLock = 1u << 0,
-        Shift = 1u << 1,
-        Control = 1u << 2,
-        Alt = 1u << 3,
-        LeftMouseButton = 1u << 4,
-        MiddleMouseButton = 1u << 5,
-        RightMouseButton = 1u << 6,
-        Command = 1u << 7,
-    }
-
-    public enum CefMouseButton
-    {
-        Left = 0,
-        Middle = 1,
-        Right = 2,
-    }
-
-    public enum CefKeyEventType
-    {
-        RawKeyDown = 0,
-        KeyDown = 1,
-        KeyUp = 2,
-        Char = 3,
-    }
-
-    public static void SendMouseMove(int browserId, int x, int y, CefModifiers modifiers, bool mouseLeave)
-        => Excef.excef_send_mouse_move(browserId, x, y, (int)modifiers, mouseLeave ? 1 : 0);
-
-    public static void SendMouseClick(int browserId, int x, int y, CefMouseButton button, bool mouseUp, int clickCount, CefModifiers modifiers)
-        => Excef.excef_send_mouse_click(browserId, x, y, (int)button, mouseUp ? 1 : 0, clickCount, (int)modifiers);
-
-    public static void SendMouseWheel(int browserId, int x, int y, int deltaX, int deltaY, CefModifiers modifiers)
-        => Excef.excef_send_mouse_wheel(browserId, x, y, deltaX, deltaY, (int)modifiers);
-
-    public static void SendKeyEvent(
-        int browserId,
-        CefKeyEventType type,
-        int windowsKeyCode,
-        int nativeKeyCode,
-        CefModifiers modifiers,
-        char character,
-        char unmodifiedCharacter,
-        bool isSystemKey)
-        => Excef.excef_send_key_event(
-            browserId, (int)type,
-            windowsKeyCode, nativeKeyCode,
-            (int)modifiers,
-            character, unmodifiedCharacter,
-            isSystemKey ? 1 : 0);
-
-    public static void SetBrowserFocus(int browserId, bool focus)
-        => Excef.excef_set_browser_focus(browserId, focus ? 1 : 0);
-
-    // ---- Navigation -------------------------------------------------------
-
-    public static void LoadUrl(int browserId, string url)
-    {
-        ArgumentNullException.ThrowIfNull(url);
-        unsafe
-        {
-            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
-            try { Excef.excef_load_url(browserId, p); }
-            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
-        }
-    }
-
-    public static void GoBack(int browserId) => Excef.excef_go_back(browserId);
-    public static void GoForward(int browserId) => Excef.excef_go_forward(browserId);
-    public static void Reload(int browserId, bool ignoreCache = false)
-        => Excef.excef_reload(browserId, ignoreCache ? 1 : 0);
-    public static void StopLoad(int browserId) => Excef.excef_stop_load(browserId);
-
-    public static void CloseBrowser(int browserId, bool forceClose = false)
-        => Excef.excef_close_browser(browserId, forceClose ? 1 : 0);
-
-    public static void WasHidden(int browserId, bool hidden)
-        => Excef.excef_was_hidden(browserId, hidden ? 1 : 0);
-
-    // ---- JavaScript -------------------------------------------------------
-
-    public static void ExecuteJavaScript(int browserId, string code, string? scriptUrl = null)
-    {
-        ArgumentNullException.ThrowIfNull(code);
-        unsafe
-        {
-            sbyte* codePtr = (sbyte*)Marshal.StringToCoTaskMemUTF8(code);
-            sbyte* urlPtr = scriptUrl is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(scriptUrl);
-            try { Excef.excef_execute_javascript(browserId, codePtr, urlPtr); }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)codePtr);
-                if (urlPtr is not null) Marshal.FreeCoTaskMem((IntPtr)urlPtr);
-            }
-        }
-    }
-
-    // ---- DevTools ---------------------------------------------------------
-
-    public static void ShowDevTools(int browserId) => Excef.excef_show_dev_tools(browserId);
-    public static void CloseDevTools(int browserId) => Excef.excef_close_dev_tools(browserId);
-
-    // ---- Browser events ---------------------------------------------------
-
-    public sealed class BrowserStringEventArgs : EventArgs
-    {
-        public required int BrowserId { get; init; }
-        public required string Value { get; init; }
-    }
-
-    public sealed class LoadingStateEventArgs : EventArgs
-    {
-        public required int BrowserId { get; init; }
-        public required bool IsLoading { get; init; }
-        public required bool CanGoBack { get; init; }
-        public required bool CanGoForward { get; init; }
-    }
-
-    private static EventHandler<BrowserStringEventArgs>? s_addressChanged;
-    private static EventHandler<BrowserStringEventArgs>? s_titleChanged;
-    private static EventHandler<LoadingStateEventArgs>? s_loadingStateChanged;
-    private static EventHandler<int>? s_browserClosed;
-    private static EventHandler<CursorChangedEventArgs>? s_cursorChanged;
-
-    /// <summary>
-    /// CEF's <c>cef_cursor_type_t</c>. Maps directly to the values reported by
-    /// CefDisplayHandler::OnCursorChange.
-    /// </summary>
-    public enum CefCursorType
-    {
-        Pointer = 0,
-        Cross = 1,
-        Hand = 2,
-        IBeam = 3,
-        Wait = 4,
-        Help = 5,
-        EastResize = 6,
-        NorthResize = 7,
-        NorthEastResize = 8,
-        NorthWestResize = 9,
-        SouthResize = 10,
-        SouthEastResize = 11,
-        SouthWestResize = 12,
-        WestResize = 13,
-        NorthSouthResize = 14,
-        EastWestResize = 15,
-        NorthEastSouthWestResize = 16,
-        NorthWestSouthEastResize = 17,
-        ColumnResize = 18,
-        RowResize = 19,
-        MiddlePanning = 20,
-        EastPanning = 21,
-        NorthPanning = 22,
-        NorthEastPanning = 23,
-        NorthWestPanning = 24,
-        SouthPanning = 25,
-        SouthEastPanning = 26,
-        SouthWestPanning = 27,
-        WestPanning = 28,
-        Move = 29,
-        VerticalText = 30,
-        Cell = 31,
-        ContextMenu = 32,
-        Alias = 33,
-        Progress = 34,
-        NoDrop = 35,
-        Copy = 36,
-        None = 37,
-        NotAllowed = 38,
-        ZoomIn = 39,
-        ZoomOut = 40,
-        Grab = 41,
-        Grabbing = 42,
-        MiddlePanningVertical = 43,
-        MiddlePanningHorizontal = 44,
-        Custom = 45,
-        DndNone = 46,
-        DndMove = 47,
-        DndCopy = 48,
-        DndLink = 49,
-    }
-
-    public sealed class CursorChangedEventArgs : EventArgs
-    {
-        public required int BrowserId { get; init; }
-        public required CefCursorType Type { get; init; }
-    }
-
-    /// <summary>Fires when a browser's main-frame URL changes.</summary>
-    public static event EventHandler<BrowserStringEventArgs>? AddressChanged
-    {
-        add { RegisterEventCallbacks(); s_addressChanged += value; }
-        remove { s_addressChanged -= value; }
-    }
-
-    /// <summary>Fires when a browser's page title changes.</summary>
-    public static event EventHandler<BrowserStringEventArgs>? TitleChanged
-    {
-        add { RegisterEventCallbacks(); s_titleChanged += value; }
-        remove { s_titleChanged -= value; }
-    }
-
-    /// <summary>Fires when loading state (isLoading / canGoBack / canGoForward) changes.</summary>
-    public static event EventHandler<LoadingStateEventArgs>? LoadingStateChanged
-    {
-        add { RegisterEventCallbacks(); s_loadingStateChanged += value; }
-        remove { s_loadingStateChanged -= value; }
-    }
-
-    /// <summary>Fires after a browser has fully closed (CefLifeSpanHandler::OnBeforeClose).</summary>
-    public static event EventHandler<int>? BrowserClosed
-    {
-        add { RegisterEventCallbacks(); s_browserClosed += value; }
-        remove { s_browserClosed -= value; }
-    }
-
-    /// <summary>Fires when the page requests a different cursor type (CSS <c>cursor:</c>).</summary>
-    public static event EventHandler<CursorChangedEventArgs>? CursorChanged
-    {
-        add { RegisterEventCallbacks(); s_cursorChanged += value; }
-        remove { s_cursorChanged -= value; }
-    }
-
-    // ---- JavaScript with result -------------------------------------------
-
-    /// <summary>
-    /// Evaluate JavaScript in the browser's main frame and return the result
-    /// as a JSON string. Throws on JS error or unknown browser id.
-    /// </summary>
-    public static Task<string> EvaluateJavaScriptAsync(int browserId, string code)
-    {
-        ArgumentNullException.ThrowIfNull(code);
-        int reqId = Interlocked.Increment(ref s_nextEvalRequestId);
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        s_evalRequests[reqId] = tcs;
-
-        unsafe
-        {
-            sbyte* codePtr = (sbyte*)Marshal.StringToCoTaskMemUTF8(code);
-            try
-            {
-                int scheduled = Excef.excef_eval_javascript(browserId, reqId, codePtr);
-                if (scheduled == 0)
-                {
-                    s_evalRequests.TryRemove(reqId, out _);
-                    tcs.TrySetException(new InvalidOperationException("eval not scheduled (unknown browser id)"));
-                }
-            }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)codePtr);
-            }
-        }
-        return tcs.Task;
-    }
-
-    // ---- Cookies ----------------------------------------------------------
+    // ---- Cookies (process-wide cookie manager) -------------------------
 
     public sealed record CookieInfo(
         string Name,
@@ -576,7 +232,7 @@ public static class Cef
         bool HttpOnly);
 
     /// <summary>
-    /// Get cookies. Pass an empty/null <paramref name="url"/> to get all cookies.
+    /// Get cookies. Pass empty/null <paramref name="url"/> to get all cookies.
     /// </summary>
     public static Task<List<CookieInfo>> GetCookiesAsync(string? url = null)
     {
@@ -648,62 +304,69 @@ public static class Cef
         }
     }
 
-    // ---- IME --------------------------------------------------------------
+    // ---- Process lifecycle ---------------------------------------------
 
-    public static void ImeSetComposition(int browserId, string text,
-                                          int replacementRangeStart = 0,
-                                          int replacementRangeLength = 0,
-                                          int selectionStart = 0,
-                                          int selectionLength = 0)
+    public static void RunMessageLoop() => Excef.excef_run_message_loop();
+    public static void QuitMessageLoop() => Excef.excef_quit_message_loop();
+
+    public static void Shutdown()
     {
-        ArgumentNullException.ThrowIfNull(text);
-        unsafe
-        {
-            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(text);
-            try
-            {
-                Excef.excef_ime_set_composition(browserId, p,
-                    replacementRangeStart, replacementRangeLength,
-                    selectionStart, selectionLength);
-            }
-            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
-        }
+        Excef.excef_shutdown();
+        s_scheduleCallback = null;
+        s_browsers.Clear();
+        s_evalRequests.Clear();
+        s_cookieRequests.Clear();
     }
 
-    public static void ImeCommitText(int browserId, string text,
-                                      int replacementRangeStart = 0,
-                                      int replacementRangeLength = 0,
-                                      int relativeCursorPos = 0)
+    // ---- Shared enums (used by CefBrowser methods + native ABI) --------
+
+    [Flags]
+    public enum CefModifiers : uint
     {
-        ArgumentNullException.ThrowIfNull(text);
-        unsafe
-        {
-            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(text);
-            try
-            {
-                Excef.excef_ime_commit_text(browserId, p,
-                    replacementRangeStart, replacementRangeLength,
-                    relativeCursorPos);
-            }
-            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
-        }
+        None = 0,
+        CapsLock = 1u << 0,
+        Shift = 1u << 1,
+        Control = 1u << 2,
+        Alt = 1u << 3,
+        LeftMouseButton = 1u << 4,
+        MiddleMouseButton = 1u << 5,
+        RightMouseButton = 1u << 6,
+        Command = 1u << 7,
     }
 
-    public static void ImeFinishComposing(int browserId, bool keepSelection = false)
-        => Excef.excef_ime_finish_composing(browserId, keepSelection ? 1 : 0);
+    public enum CefMouseButton { Left = 0, Middle = 1, Right = 2 }
 
-    public static void ImeCancel(int browserId)
-        => Excef.excef_ime_cancel(browserId);
+    public enum CefKeyEventType { RawKeyDown = 0, KeyDown = 1, KeyUp = 2, Char = 3 }
+
+    /// <summary>CEF's <c>cef_cursor_type_t</c>. Maps to OnCursorChange values.</summary>
+    public enum CefCursorType
+    {
+        Pointer = 0, Cross = 1, Hand = 2, IBeam = 3, Wait = 4, Help = 5,
+        EastResize = 6, NorthResize = 7, NorthEastResize = 8, NorthWestResize = 9,
+        SouthResize = 10, SouthEastResize = 11, SouthWestResize = 12, WestResize = 13,
+        NorthSouthResize = 14, EastWestResize = 15,
+        NorthEastSouthWestResize = 16, NorthWestSouthEastResize = 17,
+        ColumnResize = 18, RowResize = 19,
+        MiddlePanning = 20, EastPanning = 21, NorthPanning = 22,
+        NorthEastPanning = 23, NorthWestPanning = 24, SouthPanning = 25,
+        SouthEastPanning = 26, SouthWestPanning = 27, WestPanning = 28,
+        Move = 29, VerticalText = 30, Cell = 31, ContextMenu = 32,
+        Alias = 33, Progress = 34, NoDrop = 35, Copy = 36, None = 37,
+        NotAllowed = 38, ZoomIn = 39, ZoomOut = 40, Grab = 41, Grabbing = 42,
+        MiddlePanningVertical = 43, MiddlePanningHorizontal = 44,
+        Custom = 45,
+        DndNone = 46, DndMove = 47, DndCopy = 48, DndLink = 49,
+    }
+
+    // ---- Native callback wiring ----------------------------------------
 
     private static bool s_eventsRegistered;
     private static readonly object s_eventsLock = new();
 
     /// <summary>
     /// Register the native event callbacks. Idempotent. Called automatically
-    /// on first subscription to <see cref="AddressChanged"/>, <see cref="TitleChanged"/>,
-    /// <see cref="LoadingStateChanged"/>, or <see cref="BrowserClosed"/>, and
-    /// also from <see cref="InitializeForOsr"/>. Exposed for hosts that want
-    /// to opt in eagerly before any subscription happens.
+    /// from <see cref="InitializeForOsr"/>; exposed for hosts that initialize
+    /// CEF themselves but still want events.
     /// </summary>
     public static void RegisterEventCallbacks()
     {
@@ -724,54 +387,43 @@ public static class Cef
         }
     }
 
+    // ---- Trampolines: demux per-browser native callbacks to instances --
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void AddressChangeTrampoline(int browserId, sbyte* url)
     {
-        var s = Marshal.PtrToStringUTF8((IntPtr)url) ?? "";
-        s_addressChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseAddressChanged(Marshal.PtrToStringUTF8((IntPtr)url) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void TitleChangeTrampoline(int browserId, sbyte* title)
     {
-        var s = Marshal.PtrToStringUTF8((IntPtr)title) ?? "";
-        s_titleChanged?.Invoke(null, new BrowserStringEventArgs { BrowserId = browserId, Value = s });
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseTitleChanged(Marshal.PtrToStringUTF8((IntPtr)title) ?? "");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void LoadingStateTrampoline(int browserId, int isLoading, int canGoBack, int canGoForward)
     {
-        s_loadingStateChanged?.Invoke(null, new LoadingStateEventArgs
-        {
-            BrowserId = browserId,
-            IsLoading = isLoading != 0,
-            CanGoBack = canGoBack != 0,
-            CanGoForward = canGoForward != 0,
-        });
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseLoadingStateChanged(isLoading != 0, canGoBack != 0, canGoForward != 0);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void CursorChangeTrampoline(int browserId, int cursorType)
     {
-        s_cursorChanged?.Invoke(null, new CursorChangedEventArgs
-        {
-            BrowserId = browserId,
-            Type = (CefCursorType)cursorType,
-        });
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseCursorChanged((CefCursorType)cursorType);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void BrowserClosedTrampoline(int browserId)
     {
-        s_paintHandlers.TryRemove(browserId, out _);
-        if (s_pdfCallbacks.TryRemove(browserId, out var pdfQueue))
+        if (s_browsers.TryRemove(browserId, out var b))
         {
-            // Fail any pending PDF callbacks so callers' Tasks complete instead of hanging.
-            Action<int, int>[] pending;
-            lock (pdfQueue) { pending = pdfQueue.ToArray(); pdfQueue.Clear(); }
-            foreach (var cb in pending) cb(browserId, 0);
+            b.RaiseClosed();
         }
-        s_browserClosed?.Invoke(null, browserId);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -808,107 +460,48 @@ public static class Cef
         }
     }
 
-    /// <summary>
-    /// Render the browser's current page as a PDF at <paramref name="path"/>.
-    /// Returns a task that completes with <c>true</c> on success.
-    /// </summary>
-    public static Task<bool> PrintToPdfAsync(int browserId, string path)
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    internal static void PdfDoneTrampoline(int browserId, int success)
     {
-        ArgumentNullException.ThrowIfNull(path);
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Action<int, int> cb = (_, ok) => tcs.TrySetResult(ok != 0);
-        var queue = s_pdfCallbacks.GetOrAdd(browserId, _ => new List<Action<int, int>>());
-
-        unsafe
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        Action<int, int>? cb = null;
+        lock (b.PdfQueue)
         {
-            sbyte* pathPtr = (sbyte*)Marshal.StringToCoTaskMemUTF8(path);
-            try
+            if (b.PdfQueue.Count > 0)
             {
-                delegate* unmanaged[Cdecl]<int, int, void> trampoline = &PdfDoneTrampoline;
-                lock (queue)
-                {
-                    queue.Add(cb);
-                    int scheduled = Excef.excef_print_to_pdf(browserId, pathPtr, trampoline);
-                    if (scheduled == 0)
-                    {
-                        // Roll back the just-added callback so it doesn't poison FIFO order
-                        // for subsequent successful prints.
-                        queue.RemoveAt(queue.Count - 1);
-                        tcs.TrySetResult(false);
-                    }
-                }
-            }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)pathPtr);
+                cb = b.PdfQueue[0];
+                b.PdfQueue.RemoveAt(0);
             }
         }
-        return tcs.Task;
-    }
-
-    /// <summary>
-    /// Run CEF's internal message loop. Blocks until all browsers close or
-    /// <see cref="QuitMessageLoop"/> is called. Use this if your host has no
-    /// existing message loop.
-    /// </summary>
-    public static void RunMessageLoop() => Excef.excef_run_message_loop();
-
-    /// <summary>Request the message loop to exit. Safe from any thread.</summary>
-    public static void QuitMessageLoop() => Excef.excef_quit_message_loop();
-
-    /// <summary>Shut CEF down. Call after the host's message loop ends.</summary>
-    public static void Shutdown()
-    {
-        Excef.excef_shutdown();
-        s_scheduleCallback = null;
-        s_paintHandlers.Clear();
-        s_pdfCallbacks.Clear();
-    }
-
-    // ---- Internals --------------------------------------------------------
-
-    private static Action<long>? s_scheduleCallback;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, PaintHandler> s_paintHandlers = new();
-    // PDF callbacks are stored as a per-browser list (locked) because the native
-    // shim's done-callback only carries (browserId, success) — there's no request
-    // id to disambiguate concurrent prints. CEF processes prints per-browser in
-    // submission order, so FIFO dequeue matches CEF's callback order.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, List<Action<int, int>>> s_pdfCallbacks = new();
-    private static int s_nextEvalRequestId;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> s_evalRequests = new();
-    private static int s_nextCookieRequestId;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, (List<CookieInfo> List, TaskCompletionSource<List<CookieInfo>> Tcs)> s_cookieRequests = new();
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void SchedulePumpWorkTrampoline(long delayMs)
-    {
-        s_scheduleCallback?.Invoke(delayMs);
+        cb?.Invoke(browserId, success);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void PaintTrampoline(int browserId, void* buffer, int width, int height)
     {
-        if (s_paintHandlers.TryGetValue(browserId, out var h))
+        if (s_browsers.TryGetValue(browserId, out var b))
         {
-            h(browserId, (IntPtr)buffer, width, height);
+            b.RaisePainted((IntPtr)buffer, width, height);
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void PdfDoneTrampoline(int browserId, int success)
-    {
-        if (!s_pdfCallbacks.TryGetValue(browserId, out var queue)) return;
-        Action<int, int>? cb = null;
-        lock (queue)
-        {
-            if (queue.Count > 0)
-            {
-                cb = queue[0];
-                queue.RemoveAt(0);
-            }
-        }
-        cb?.Invoke(browserId, success);
-    }
+    private static void SchedulePumpWorkTrampoline(long delayMs)
+        => s_scheduleCallback?.Invoke(delayMs);
+
+    // ---- Internals ------------------------------------------------------
+
+    private static Action<long>? s_scheduleCallback;
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, CefBrowser> s_browsers = new();
+
+    internal static int s_nextEvalRequestId;
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> s_evalRequests = new();
+
+    private static int s_nextCookieRequestId;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, (List<CookieInfo> List, TaskCompletionSource<List<CookieInfo>> Tcs)> s_cookieRequests = new();
+
+    // ---- argv / utf-8 helpers ------------------------------------------
 
     private static unsafe sbyte** AllocArgv(string[] args, out int argc)
     {
@@ -922,8 +515,6 @@ public static class Cef
         return argv;
     }
 
-    // CEF copies argv contents during init/exec (Chromium base::CommandLine
-    // uses its own storage), so freeing after the native call returns is safe.
     private static unsafe void FreeArgv(sbyte** argv, int argc)
     {
         if (argv == null) return;
