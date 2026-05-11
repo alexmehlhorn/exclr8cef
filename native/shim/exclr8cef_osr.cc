@@ -72,6 +72,8 @@ excef_accessibility_tree_cb_t g_a11y_tree_cb = nullptr;
 excef_accessibility_location_cb_t g_a11y_location_cb = nullptr;
 excef_start_drag_cb_t g_start_drag_cb = nullptr;
 excef_drag_image_cb_t g_drag_image_cb = nullptr;
+excef_permission_prompt_cb_t g_permission_prompt_cb = nullptr;
+excef_media_access_cb_t g_media_access_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -100,6 +102,15 @@ struct PendingDownloadProgress {
 struct PendingAuth {
     int browser_id;
     CefRefPtr<CefAuthCallback> callback;
+};
+struct PendingPermissionPrompt {
+    int browser_id;
+    CefRefPtr<CefPermissionPromptCallback> callback;
+};
+struct PendingMediaAccess {
+    int browser_id;
+    CefRefPtr<CefMediaAccessCallback> callback;
+    uint32_t requested;  // mask of requested perms, for clamping the response
 };
 
 // Scheme-request handler state. The resource handler instance lives across
@@ -132,6 +143,10 @@ std::mutex g_download_progress_mu;
 std::map<uint64_t, PendingDownloadProgress> g_download_progress_pending;
 std::mutex g_auth_mu;
 std::map<uint64_t, PendingAuth> g_auth_pending;
+std::mutex g_permission_prompt_mu;
+std::map<uint64_t, PendingPermissionPrompt> g_permission_prompt_pending;
+std::mutex g_media_access_mu;
+std::map<uint64_t, PendingMediaAccess> g_media_access_pending;
 std::mutex g_scheme_mu;
 std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
 std::mutex g_resource_request_mu;
@@ -452,6 +467,44 @@ bool Exclr8CefOsrHandler::GetAuthCredentials(CefRefPtr<CefBrowser> /*browser*/,
     g_auth_request_cb(id_, token, isProxy ? 1 : 0,
                       host_s.c_str(), port,
                       realm_s.c_str(), scheme_s.c_str());
+    return true;
+}
+
+bool Exclr8CefOsrHandler::OnRequestMediaAccessPermission(
+        CefRefPtr<CefBrowser> /*browser*/,
+        CefRefPtr<CefFrame> /*frame*/,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefMediaAccessCallback> callback) {
+    if (!g_media_access_cb) return false;  // default-deny with Alloy style
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_media_access_mu);
+        g_media_access_pending[token] = PendingMediaAccess{
+            id_, callback, requested_permissions};
+    }
+    std::string origin_s = requesting_origin.ToString();
+    g_media_access_cb(id_, token, origin_s.c_str(),
+                       static_cast<int>(requested_permissions));
+    return true;
+}
+
+bool Exclr8CefOsrHandler::OnShowPermissionPrompt(
+        CefRefPtr<CefBrowser> /*browser*/,
+        uint64_t prompt_id,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefPermissionPromptCallback> callback) {
+    if (!g_permission_prompt_cb) return false;  // default-deny
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_permission_prompt_mu);
+        g_permission_prompt_pending[token] = PendingPermissionPrompt{
+            id_, callback};
+    }
+    std::string origin_s = requesting_origin.ToString();
+    g_permission_prompt_cb(id_, token, prompt_id, origin_s.c_str(),
+                            static_cast<int>(requested_permissions));
     return true;
 }
 
@@ -800,6 +853,29 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Cancel();
                 it = g_resource_request_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_permission_prompt_mu);
+        for (auto it = g_permission_prompt_pending.begin(); it != g_permission_prompt_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback)
+                    it->second.callback->Continue(CEF_PERMISSION_RESULT_DISMISS);
+                it = g_permission_prompt_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_media_access_mu);
+        for (auto it = g_media_access_pending.begin(); it != g_media_access_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_media_access_pending.erase(it);
             } else {
                 ++it;
             }
@@ -1497,6 +1573,33 @@ private:
     CefString user_, pass_;
     IMPLEMENT_REFCOUNTING(AuthResolveTask);
 };
+
+class PermissionPromptResolveTask : public CefTask {
+public:
+    PermissionPromptResolveTask(CefRefPtr<CefPermissionPromptCallback> cb,
+                                cef_permission_request_result_t result)
+        : cb_(std::move(cb)), result_(result) {}
+    void Execute() override { if (cb_) cb_->Continue(result_); }
+private:
+    CefRefPtr<CefPermissionPromptCallback> cb_;
+    cef_permission_request_result_t result_;
+    IMPLEMENT_REFCOUNTING(PermissionPromptResolveTask);
+};
+
+class MediaAccessResolveTask : public CefTask {
+public:
+    MediaAccessResolveTask(CefRefPtr<CefMediaAccessCallback> cb, uint32_t granted)
+        : cb_(std::move(cb)), granted_(granted) {}
+    void Execute() override {
+        if (!cb_) return;
+        if (granted_) cb_->Continue(granted_);
+        else cb_->Cancel();
+    }
+private:
+    CefRefPtr<CefMediaAccessCallback> cb_;
+    uint32_t granted_;
+    IMPLEMENT_REFCOUNTING(MediaAccessResolveTask);
+};
 }  // namespace
 
 extern "C" void excef_resolve_auth(uint64_t token, const char* username, const char* password) {
@@ -1520,6 +1623,55 @@ extern "C" void excef_resolve_auth(uint64_t token, const char* username, const c
         else callback->Cancel();
     } else {
         CefPostTask(TID_UI, CefRefPtr<CefTask>(new AuthResolveTask(callback, ok, u, p)));
+    }
+}
+
+extern "C" void excef_set_permission_prompt_callback(excef_permission_prompt_cb_t cb) {
+    exclr8cef::g_permission_prompt_cb = cb;
+}
+
+extern "C" void excef_resolve_permission_prompt(uint64_t token, int result) {
+    CefRefPtr<CefPermissionPromptCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_permission_prompt_mu);
+        auto it = exclr8cef::g_permission_prompt_pending.find(token);
+        if (it == exclr8cef::g_permission_prompt_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_permission_prompt_pending.erase(it);
+    }
+    if (!callback) return;
+    auto r = static_cast<cef_permission_request_result_t>(result);
+    if (CefCurrentlyOn(TID_UI)) {
+        callback->Continue(r);
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(new PermissionPromptResolveTask(callback, r)));
+    }
+}
+
+extern "C" void excef_set_media_access_callback(excef_media_access_cb_t cb) {
+    exclr8cef::g_media_access_cb = cb;
+}
+
+extern "C" void excef_resolve_media_access(uint64_t token, int granted_permissions) {
+    CefRefPtr<CefMediaAccessCallback> callback;
+    uint32_t requested = 0;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_media_access_mu);
+        auto it = exclr8cef::g_media_access_pending.find(token);
+        if (it == exclr8cef::g_media_access_pending.end()) return;
+        callback = it->second.callback;
+        requested = it->second.requested;
+        exclr8cef::g_media_access_pending.erase(it);
+    }
+    if (!callback) return;
+    // Clamp granted to the set CEF actually requested — passing anything else
+    // would trip CEF's DCHECK on the alloy callback.
+    uint32_t granted = static_cast<uint32_t>(granted_permissions) & requested;
+    if (CefCurrentlyOn(TID_UI)) {
+        if (granted) callback->Continue(granted);
+        else callback->Cancel();
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(new MediaAccessResolveTask(callback, granted)));
     }
 }
 

@@ -88,6 +88,31 @@ public partial class MainWindow : Window
         b.AccessibilityTreeChange     += OnBrowserA11yTree;
         b.AccessibilityLocationChange += OnBrowserA11yLocation;
         b.DragStarted           += OnBrowserDragStarted;
+        b.PermissionRequest     += OnBrowserPermissionRequest;
+        b.MediaAccessRequest    += OnBrowserMediaAccessRequest;
+    }
+
+    private async void OnBrowserPermissionRequest(object? sender, Exclr8Cef.PermissionRequestEventArgs e)
+    {
+        LogEvent("permission", $"prompt: {e.RequestedPermissions} from {e.Origin}");
+        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+            this, Exclr8Cef.Cef.JsDialogType.Confirm,
+            $"{e.Origin} wants permission for: {e.RequestedPermissions}",
+            defaultPromptText: "");
+        var pr = result.Accepted ? Exclr8Cef.Cef.PermissionResult.Accept : Exclr8Cef.Cef.PermissionResult.Deny;
+        LogEvent("permission", $"→ {pr}");
+        e.Continue(pr);
+    }
+
+    private async void OnBrowserMediaAccessRequest(object? sender, Exclr8Cef.MediaAccessRequestEventArgs e)
+    {
+        LogEvent("media", $"getUserMedia: {e.RequestedPermissions} from {e.Origin}");
+        var result = await Exclr8Cef.WebView.Demo.JsDialogWindow.ShowAsync(
+            this, Exclr8Cef.Cef.JsDialogType.Confirm,
+            $"{e.Origin} wants camera/mic access: {e.RequestedPermissions}",
+            defaultPromptText: "");
+        if (result.Accepted) { e.AllowAll(); LogEvent("media", "→ Allow"); }
+        else                 { e.Deny();     LogEvent("media", "→ Deny");  }
     }
 
     private void OnBrowserDragStarted(object? sender, Exclr8Cef.DragStartedEventArgs e)

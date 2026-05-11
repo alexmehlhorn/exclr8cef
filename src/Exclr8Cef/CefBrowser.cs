@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 using Exclr8Cef.Native;
 
 namespace Exclr8Cef;
@@ -255,6 +256,25 @@ public sealed class CefBrowser : IDisposable
     /// for the duration of the handler — copy what you need.
     /// </summary>
     public event EventHandler<DragImageEventArgs>? DragImage;
+
+    /// <summary>
+    /// The page requested a permission (notifications, geolocation, etc.)
+    /// — CefPermissionHandler::OnShowPermissionPrompt. Host MUST call
+    /// <see cref="PermissionRequestEventArgs.Continue"/> /
+    /// <see cref="PermissionRequestEventArgs.Allow"/> /
+    /// <see cref="PermissionRequestEventArgs.Deny"/>. If no handler subscribes,
+    /// permissions are denied automatically (Alloy-style default).
+    /// </summary>
+    public event EventHandler<PermissionRequestEventArgs>? PermissionRequest;
+
+    /// <summary>
+    /// The page called <c>navigator.mediaDevices.getUserMedia</c> —
+    /// CefPermissionHandler::OnRequestMediaAccessPermission. Host MUST call
+    /// <see cref="MediaAccessRequestEventArgs.Continue"/> /
+    /// <see cref="MediaAccessRequestEventArgs.AllowAll"/> /
+    /// <see cref="MediaAccessRequestEventArgs.Deny"/>.
+    /// </summary>
+    public event EventHandler<MediaAccessRequestEventArgs>? MediaAccessRequest;
 
     /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
@@ -821,6 +841,14 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseDragImage(IntPtr buffer, int width, int height, int hotspotX, int hotspotY)
         => DragImage?.Invoke(this, new DragImageEventArgs(buffer, width, height, hotspotX, hotspotY));
 
+    internal bool HasPermissionRequestSubscriber => PermissionRequest is not null;
+    internal void RaisePermissionRequest(PermissionRequestEventArgs args)
+        => PermissionRequest?.Invoke(this, args);
+
+    internal bool HasMediaAccessRequestSubscriber => MediaAccessRequest is not null;
+    internal void RaiseMediaAccessRequest(MediaAccessRequestEventArgs args)
+        => MediaAccessRequest?.Invoke(this, args);
+
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
     /// default. With it enabled, <see cref="AccessibilityTreeChange"/>
@@ -1255,6 +1283,64 @@ public sealed class DragImageEventArgs : EventArgs
         HotspotX = hotspotX;
         HotspotY = hotspotY;
     }
+}
+
+/// <summary>Args for <see cref="CefBrowser.PermissionRequest"/>.</summary>
+public sealed class PermissionRequestEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    /// <summary>CEF prompt id, stable across re-prompts for the same page request.</summary>
+    public ulong PromptId { get; }
+    /// <summary>Origin (scheme + host + port) of the page requesting the permission.</summary>
+    public string Origin { get; }
+    /// <summary>Bitmask of requested permission types.</summary>
+    public Cef.PermissionRequestType RequestedPermissions { get; }
+
+    internal PermissionRequestEventArgs(ulong token, ulong promptId, string origin, Cef.PermissionRequestType requested)
+    {
+        _token = token;
+        PromptId = promptId;
+        Origin = origin;
+        RequestedPermissions = requested;
+    }
+
+    /// <summary>Resolve with the given result. Idempotent.</summary>
+    public void Continue(Cef.PermissionResult result)
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Excef.excef_resolve_permission_prompt(_token, (int)result);
+    }
+    public void Allow()   => Continue(Cef.PermissionResult.Accept);
+    public void Deny()    => Continue(Cef.PermissionResult.Deny);
+    public void Dismiss() => Continue(Cef.PermissionResult.Dismiss);
+}
+
+/// <summary>Args for <see cref="CefBrowser.MediaAccessRequest"/>.</summary>
+public sealed class MediaAccessRequestEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    public string Origin { get; }
+    public Cef.MediaAccessPermissions RequestedPermissions { get; }
+
+    internal MediaAccessRequestEventArgs(ulong token, string origin, Cef.MediaAccessPermissions requested)
+    {
+        _token = token;
+        Origin = origin;
+        RequestedPermissions = requested;
+    }
+
+    /// <summary>Resolve with a subset of <see cref="RequestedPermissions"/> granted, or <c>None</c> to deny.</summary>
+    public void Continue(Cef.MediaAccessPermissions granted)
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Excef.excef_resolve_media_access(_token, (int)granted);
+    }
+    public void AllowAll() => Continue(RequestedPermissions);
+    public void Deny()     => Continue(Cef.MediaAccessPermissions.None);
 }
 
 /// <summary>Args for <see cref="CefBrowser.DragStarted"/>.</summary>

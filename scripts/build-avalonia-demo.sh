@@ -73,6 +73,9 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
   <key>NSPrincipalClass</key>               <string>Exclr8CefApplication</string>
   <key>NSHighResolutionCapable</key>        <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>  <true/>
+  <key>NSCameraUsageDescription</key>       <string>Demonstrates CefPermissionHandler camera prompts.</string>
+  <key>NSMicrophoneUsageDescription</key>   <string>Demonstrates CefPermissionHandler microphone prompts.</string>
+  <key>NSLocationUsageDescription</key>     <string>Demonstrates CefPermissionHandler geolocation prompts.</string>
 </dict>
 </plist>
 PLIST

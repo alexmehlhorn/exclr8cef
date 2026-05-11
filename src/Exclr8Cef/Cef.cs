@@ -519,6 +519,64 @@ public static class Cef
     }
 
     /// <summary>
+    /// Permission categories the page can ask for (Notifications,
+    /// Geolocation, …). Bitmask; mirrors <c>cef_permission_request_types_t</c>.
+    /// </summary>
+    [Flags]
+    public enum PermissionRequestType : uint
+    {
+        None                       = 0,
+        ArSession                  = 1 << 0,
+        CameraPanTiltZoom          = 1 << 1,
+        CameraStream               = 1 << 2,
+        CapturedSurfaceControl     = 1 << 3,
+        Clipboard                  = 1 << 4,
+        TopLevelStorageAccess      = 1 << 5,
+        DiskQuota                  = 1 << 6,
+        LocalFonts                 = 1 << 7,
+        Geolocation                = 1 << 8,
+        HandTracking               = 1 << 9,
+        IdentityProvider           = 1 << 10,
+        IdleDetection              = 1 << 11,
+        MicStream                  = 1 << 12,
+        MidiSysex                  = 1 << 13,
+        MultipleDownloads          = 1 << 14,
+        Notifications              = 1 << 15,
+        KeyboardLock               = 1 << 16,
+        PointerLock                = 1 << 17,
+        ProtectedMediaIdentifier   = 1 << 18,
+        RegisterProtocolHandler    = 1 << 19,
+        StorageAccess              = 1 << 20,
+        VrSession                  = 1 << 21,
+        WebAppInstallation         = 1 << 22,
+        WindowManagement           = 1 << 23,
+        FileSystemAccess           = 1 << 24,
+    }
+
+    /// <summary>How a permission request was resolved. Mirrors <c>cef_permission_request_result_t</c>.</summary>
+    public enum PermissionResult
+    {
+        Accept = 0,
+        Deny = 1,
+        Dismiss = 2,
+        Ignore = 3,
+    }
+
+    /// <summary>
+    /// Sub-categories of media-access requests (getUserMedia). Bitmask;
+    /// mirrors <c>cef_media_access_permission_types_t</c>.
+    /// </summary>
+    [Flags]
+    public enum MediaAccessPermissions : uint
+    {
+        None                = 0,
+        DeviceAudioCapture  = 1 << 0,
+        DeviceVideoCapture  = 1 << 1,
+        DesktopAudioCapture = 1 << 2,
+        DesktopVideoCapture = 1 << 3,
+    }
+
+    /// <summary>
     /// Args for <see cref="SchemeRequest"/>. Host MUST call exactly one of
     /// <see cref="Continue"/> / <see cref="NotFound"/>.
     /// </summary>
@@ -757,6 +815,8 @@ public static class Cef
                 Excef.excef_set_accessibility_location_callback(&AccessibilityLocationTrampoline);
                 Excef.excef_set_start_drag_callback(&StartDragTrampoline);
                 Excef.excef_set_drag_image_callback(&DragImageTrampoline);
+                Excef.excef_set_permission_prompt_callback(&PermissionPromptTrampoline);
+                Excef.excef_set_media_access_callback(&MediaAccessTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -987,6 +1047,48 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseDragImage((IntPtr)buffer, width, height, hotspotX, hotspotY);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void PermissionPromptTrampoline(
+        int browserId, ulong token, ulong promptId, sbyte* origin, int requestedPermissions)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_permission_prompt(token, (int)PermissionResult.Deny);
+            return;
+        }
+        if (!b.HasPermissionRequestSubscriber)
+        {
+            Excef.excef_resolve_permission_prompt(token, (int)PermissionResult.Deny);
+            return;
+        }
+        var args = new PermissionRequestEventArgs(
+            token, promptId,
+            Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
+            (PermissionRequestType)requestedPermissions);
+        b.RaisePermissionRequest(args);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void MediaAccessTrampoline(
+        int browserId, ulong token, sbyte* origin, int requestedPermissions)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_media_access(token, 0);
+            return;
+        }
+        if (!b.HasMediaAccessRequestSubscriber)
+        {
+            Excef.excef_resolve_media_access(token, 0);
+            return;
+        }
+        var args = new MediaAccessRequestEventArgs(
+            token,
+            Marshal.PtrToStringUTF8((IntPtr)origin) ?? "",
+            (MediaAccessPermissions)requestedPermissions);
+        b.RaiseMediaAccessRequest(args);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

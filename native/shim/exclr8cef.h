@@ -682,6 +682,45 @@ typedef struct excef_init_settings {
 // to defaults. The struct is copied; pointers don't need to outlive the call.
 EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 
+// ---- Permission handler ------------------------------------------------
+//
+// Two distinct hooks. Both follow the deferred-response pattern.
+//
+// `_permission_prompt_cb_t` (CefPermissionHandler::OnShowPermissionPrompt)
+//   Generic permission asks — notifications, geolocation, clipboard, MIDI,
+//   pointer-lock, … `requested_permissions` is a bitmask from
+//   cef_permission_request_types_t (CEF_PERMISSION_TYPE_*). Resolve with
+//   excef_resolve_permission_prompt(token, result) where result is from
+//   cef_permission_request_result_t:
+//     0 = accept, 1 = deny, 2 = dismiss, 3 = ignore.
+//
+// `_media_access_cb_t` (CefPermissionHandler::OnRequestMediaAccessPermission)
+//   getUserMedia camera/microphone/screen requests. `requested_permissions`
+//   is a bitmask from cef_media_access_permission_types_t (CEF_MEDIA_*).
+//   Resolve with excef_resolve_media_access(token, granted_permissions),
+//   where granted is a subset of requested. Pass 0 to deny.
+
+typedef void (*excef_permission_prompt_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    unsigned long long prompt_id,
+    const char* requesting_origin,
+    int requested_permissions);
+
+EXCEF_API void excef_set_permission_prompt_callback(excef_permission_prompt_cb_t cb);
+
+EXCEF_API void excef_resolve_permission_prompt(unsigned long long token, int result);
+
+typedef void (*excef_media_access_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    const char* requesting_origin,
+    int requested_permissions);
+
+EXCEF_API void excef_set_media_access_callback(excef_media_access_cb_t cb);
+
+EXCEF_API void excef_resolve_media_access(unsigned long long token, int granted_permissions);
+
 // ---- Render-process termination ----------------------------------------
 //
 // CefRequestHandler::OnRenderProcessTerminated. The renderer subprocess

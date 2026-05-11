@@ -189,6 +189,7 @@
       <a href="#jsdialog">JS dialogs</a>
       <a href="#download">Downloads</a>
       <a href="#auth">Auth + Find</a>
+      <a href="#permissions">Permissions</a>
       <a href="#crash">Renderer crash</a>
       <a href="#config">Init settings</a>
     </div>
@@ -281,6 +282,26 @@
       <a href="https://example.com">example.com</a>
       <a href="https://duckduckgo.com">duckduckgo.com</a>
     </div>
+  </section>
+
+  <section id="permissions">
+    <h2>Permissions</h2>
+    <p class="lede"><code>CefPermissionHandler</code> is wired
+       (<code>OnShowPermissionPrompt</code> + <code>OnRequestMediaAccessPermission</code>)
+       and will fire for any permission type Chromium routes through it. In
+       Alloy + OSR mode (this demo's runtime), Chromium short-circuits most
+       common permissions to deny before reaching the handler — Notifications,
+       Geolocation, Camera/Microphone all hit this path. The handler ABI is
+       still exported for hosts using Chrome runtime or for permission types
+       (clipboard, pointer-lock, fullscreen) that do route through. Buttons
+       below show the actual page-side outcome.</p>
+    <div class="row">
+      <button id="pNotify">Notifications</button>
+      <button id="pGeo">Geolocation</button>
+      <button id="pMic">Microphone</button>
+      <button id="pCam">Camera</button>
+    </div>
+    <p><small id="permOut">(no result yet)</small></p>
   </section>
 
   <section id="crash">
@@ -624,6 +645,35 @@
       const el = document.getElementById(id);
       if (el) dz.appendChild(el);
     });
+  });
+
+  // Permissions
+  const permOut = document.getElementById('permOut');
+  const setPermOut = (label, ok, detail) => {
+    permOut.textContent = label + ': ' + (ok ? 'granted' : 'denied') + (detail ? ' — ' + detail : '');
+  };
+  $('#pNotify').addEventListener('click', async () => {
+    const p = await Notification.requestPermission();
+    setPermOut('Notifications', p === 'granted', p);
+  });
+  $('#pGeo').addEventListener('click', () => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setPermOut('Geolocation', true, pos.coords.latitude.toFixed(3) + ', ' + pos.coords.longitude.toFixed(3)),
+      (err) => setPermOut('Geolocation', false, err.message));
+  });
+  $('#pMic').addEventListener('click', async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({audio: true});
+      s.getTracks().forEach(t => t.stop());
+      setPermOut('Microphone', true);
+    } catch (e) { setPermOut('Microphone', false, e.message); }
+  });
+  $('#pCam').addEventListener('click', async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({video: true});
+      s.getTracks().forEach(t => t.stop());
+      setPermOut('Camera', true);
+    } catch (e) { setPermOut('Camera', false, e.message); }
   });
 </script>
 </body>

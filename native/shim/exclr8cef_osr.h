@@ -14,6 +14,7 @@
 #include "include/cef_life_span_handler.h"
 #include "include/cef_accessibility_handler.h"
 #include "include/cef_load_handler.h"
+#include "include/cef_permission_handler.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_resource_request_handler.h"
@@ -34,7 +35,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefRequestHandler,
                             public CefFindHandler,
                             public CefResourceRequestHandler,
-                            public CefAccessibilityHandler {
+                            public CefAccessibilityHandler,
+                            public CefPermissionHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -51,6 +53,7 @@ public:
     CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
     CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
     CefRefPtr<CefAccessibilityHandler> GetAccessibilityHandler() override { return this; }
+    CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -160,6 +163,21 @@ public:
                        const CefRect& selectionRect,
                        int activeMatchOrdinal,
                        bool finalUpdate) override;
+
+    // CefPermissionHandler
+    bool OnRequestMediaAccessPermission(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefMediaAccessCallback> callback) override;
+
+    bool OnShowPermissionPrompt(
+        CefRefPtr<CefBrowser> browser,
+        uint64_t prompt_id,
+        const CefString& requesting_origin,
+        uint32_t requested_permissions,
+        CefRefPtr<CefPermissionPromptCallback> callback) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

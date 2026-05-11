@@ -89,6 +89,18 @@ internal static unsafe partial class Excef
     public static extern void excef_set_drag_image_callback([NativeTypeName("excef_drag_image_cb_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, int, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_permission_prompt_callback([NativeTypeName("excef_permission_prompt_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, ulong, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_permission_prompt(ulong token, int result);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_media_access_callback([NativeTypeName("excef_media_access_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_media_access(ulong token, int granted_permissions);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_drag_source_ended_at(int browser_id, int x, int y, int op);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
