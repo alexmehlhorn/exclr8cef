@@ -12,6 +12,7 @@
 #include "include/cef_cookie.h"
 #include "include/cef_frame.h"
 #include "include/cef_process_message.h"
+#include "include/cef_request_context.h"
 #include "include/cef_resource_handler.h"
 #include "include/cef_response.h"
 #include "include/cef_scheme.h"
@@ -26,6 +27,12 @@ namespace {
 
 int g_next_id = 1;
 std::map<int, CefRefPtr<Exclr8CefOsrHandler>> g_osr_browsers;
+
+// Per-browser request contexts (multi-profile / incognito story).
+// Handle 0 is reserved for "use the global default context".
+std::atomic<int> g_next_context_handle{1};
+std::mutex g_request_contexts_mu;
+std::map<int, CefRefPtr<CefRequestContext>> g_request_contexts;
 
 excef_address_change_cb_t g_address_cb = nullptr;
 excef_title_change_cb_t g_title_cb = nullptr;
@@ -927,10 +934,15 @@ CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id) {
 
 // ---- C ABI implementations ------------------------------------------------
 
-extern "C" int excef_create_offscreen_browser(int width, int height,
-                                              float device_scale_factor,
-                                              const char* url,
-                                              excef_paint_callback_t paint) {
+namespace {
+// Shared browser-create core for both `excef_create_offscreen_browser`
+// (default global context) and `excef_create_offscreen_browser_in_context`
+// (host-supplied context).
+int CreateOffscreenBrowserImpl(int width, int height,
+                                float device_scale_factor,
+                                const char* url,
+                                excef_paint_callback_t paint,
+                                CefRefPtr<CefRequestContext> request_context) {
     if (!url || width <= 0 || height <= 0) return 0;
 
     int id = exclr8cef::g_next_id++;
@@ -947,11 +959,61 @@ extern "C" int excef_create_offscreen_browser(int width, int height,
     browser_settings.windowless_frame_rate = 30;
 
     if (!CefBrowserHost::CreateBrowser(window_info, handler.get(), url,
-                                       browser_settings, nullptr, nullptr)) {
+                                       browser_settings, /*extra_info=*/nullptr,
+                                       request_context)) {
         exclr8cef::g_osr_browsers.erase(id);
         return 0;
     }
     return id;
+}
+}  // namespace
+
+extern "C" int excef_create_offscreen_browser(int width, int height,
+                                              float device_scale_factor,
+                                              const char* url,
+                                              excef_paint_callback_t paint) {
+    return CreateOffscreenBrowserImpl(width, height, device_scale_factor,
+                                       url, paint, /*request_context=*/nullptr);
+}
+
+extern "C" int excef_create_offscreen_browser_in_context(
+        int width, int height, float device_scale_factor,
+        const char* url, excef_paint_callback_t paint,
+        int context_handle) {
+    CefRefPtr<CefRequestContext> ctx;
+    if (context_handle != 0) {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
+        auto it = exclr8cef::g_request_contexts.find(context_handle);
+        if (it == exclr8cef::g_request_contexts.end()) return 0;  // unknown handle
+        ctx = it->second;
+    }
+    return CreateOffscreenBrowserImpl(width, height, device_scale_factor,
+                                       url, paint, ctx);
+}
+
+extern "C" int excef_create_request_context(const char* cache_path) {
+    CefRequestContextSettings settings;
+    if (cache_path && *cache_path) {
+        CefString(&settings.cache_path).FromString(cache_path);
+    }
+    CefRefPtr<CefRequestContext> ctx = CefRequestContext::CreateContext(
+        settings, /*handler=*/nullptr);
+    if (!ctx) return 0;
+
+    int handle = exclr8cef::g_next_context_handle.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
+        exclr8cef::g_request_contexts[handle] = ctx;
+    }
+    return handle;
+}
+
+extern "C" void excef_release_request_context(int handle) {
+    if (handle == 0) return;
+    std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
+    exclr8cef::g_request_contexts.erase(handle);
+    // CEF keeps the context alive via the browsers using it; once they
+    // close, it gets torn down.
 }
 
 extern "C" void excef_resize_offscreen_browser(int browser_id,

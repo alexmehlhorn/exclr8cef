@@ -799,6 +799,43 @@ EXCEF_API void excef_set_popup_show_callback(excef_popup_show_cb_t cb);
 EXCEF_API void excef_set_popup_size_callback(excef_popup_size_cb_t cb);
 EXCEF_API void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb);
 
+// ---- Request context (per-browser isolation) ---------------------------
+//
+// CefRequestContext lets browsers share or partition cookies, cache,
+// localStorage, and other per-origin state. A browser created in context
+// A has a completely separate cookie jar / cache / storage from one in
+// context B — the pattern behind "incognito tabs", "multi-profile",
+// "container" extensions, etc.
+//
+// Usage:
+//   1. Host calls excef_create_request_context(cache_path) to get a
+//      context handle (>= 1). Pass NULL/empty cache_path for an
+//      in-memory (incognito-style) context.
+//   2. Host passes the handle to excef_create_offscreen_browser_in_context
+//      (or 0 for the global context, equivalent to the existing
+//      excef_create_offscreen_browser).
+//   3. Host calls excef_release_request_context when the context is no
+//      longer needed — outstanding browsers keep it alive; once the last
+//      browser closes, CEF tears the context down.
+//
+// Returns a positive handle on success, 0 on failure. The handle is
+// stable for the process lifetime; reuse it across many browsers if you
+// want them to share state.
+EXCEF_API int excef_create_request_context(const char* cache_path);
+
+// Drop our refcount on the context. The CEF instance is still kept alive
+// by any in-flight browsers using it.
+EXCEF_API void excef_release_request_context(int context_handle);
+
+// Variant of excef_create_offscreen_browser that creates the browser in
+// a specific request context. Pass context_handle=0 to use the global
+// default context (equivalent to excef_create_offscreen_browser).
+EXCEF_API int excef_create_offscreen_browser_in_context(
+    int width, int height, float device_scale_factor,
+    const char* url,
+    excef_paint_callback_t paint,
+    int context_handle);
+
 
 // ---- IME -----------------------------------------------------------------
 //

@@ -582,6 +582,12 @@ public partial class MainWindow : Window
     private void OnStopClick(object? sender, RoutedEventArgs e) => Browser.StopLoad();
     private void OnDevToolsClick(object? sender, RoutedEventArgs e) => Browser.ShowDevTools();
 
+    private void OnIsolatedClick(object? sender, RoutedEventArgs e)
+    {
+        var window = new IsolatedSessionWindow();
+        window.Show(this);
+    }
+
     private void OnZoomInClick(object? sender, RoutedEventArgs e)
     {
         Browser.ZoomIn();

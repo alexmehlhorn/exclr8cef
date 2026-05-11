@@ -314,10 +314,14 @@ public static class Cef
     /// <paramref name="height"/> DIPs. <paramref name="deviceScaleFactor"/> drives
     /// HiDPI: CEF allocates a paint buffer of (w × scale) × (h × scale) physical
     /// pixels while the page lays out at DIP size. Pass <c>1.0f</c> for non-HiDPI.
+    /// Passing a <paramref name="context"/> isolates this browser's cookies /
+    /// cache / storage from any other browser in a different context; pass
+    /// <c>null</c> for the global default context (shared with other no-context
+    /// browsers).
     /// Returns a <see cref="CefBrowser"/> with the full per-browser event/command
     /// surface, or <c>null</c> if creation failed.
     /// </summary>
-    public static CefBrowser? CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url)
+    public static CefBrowser? CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url, CefRequestContext? context = null)
     {
         ArgumentNullException.ThrowIfNull(url);
 
@@ -327,13 +331,36 @@ public static class Cef
             try
             {
                 delegate* unmanaged[Cdecl]<int, void*, int, int, void> trampoline = &PaintTrampoline;
-                int id = Excef.excef_create_offscreen_browser(width, height, deviceScaleFactor, urlPtr, trampoline);
+                int id = context is null
+                    ? Excef.excef_create_offscreen_browser(width, height, deviceScaleFactor, urlPtr, trampoline)
+                    : Excef.excef_create_offscreen_browser_in_context(width, height, deviceScaleFactor, urlPtr, trampoline, context.Handle);
                 if (id <= 0) return null;
                 var browser = new CefBrowser(id);
                 s_browsers[id] = browser;
                 return browser;
             }
             finally { Marshal.FreeCoTaskMem((IntPtr)urlPtr); }
+        }
+    }
+
+    /// <summary>
+    /// Create an isolated request context — its own cookie jar, cache,
+    /// and per-origin storage. Pass <paramref name="cachePath"/> to
+    /// persist to disk; pass <c>null</c> for an in-memory ("incognito")
+    /// context that disappears when the last browser using it closes.
+    /// </summary>
+    /// <returns>A <see cref="CefRequestContext"/> wrapper, or <c>null</c> on failure.</returns>
+    public static CefRequestContext? CreateRequestContext(string? cachePath = null)
+    {
+        unsafe
+        {
+            sbyte* p = cachePath is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(cachePath);
+            try
+            {
+                int handle = Excef.excef_create_request_context(p);
+                return handle > 0 ? new CefRequestContext(handle) : null;
+            }
+            finally { if (p is not null) Marshal.FreeCoTaskMem((IntPtr)p); }
         }
     }
 

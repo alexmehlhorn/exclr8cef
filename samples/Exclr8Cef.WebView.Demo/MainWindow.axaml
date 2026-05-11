@@ -34,6 +34,8 @@
                 <Button DockPanel.Dock="Left"   Name="StopButton"     Content="✕"        Click="OnStopClick"     Padding="10,4" Margin="0,0,8,0" />
                 <Button DockPanel.Dock="Right"  Name="SavePdfButton"  Content="Save PDF"   Click="OnSavePdfClick"  Padding="10,4" Margin="6,0,0,0" />
                 <Button DockPanel.Dock="Right"  Name="RunJsButton"    Content="Run JS"     Click="OnRunJsClick"    Padding="10,4" Margin="6,0,0,0" />
+                <Button DockPanel.Dock="Right"  Name="IsolatedButton" Content="Isolated session" Click="OnIsolatedClick" Padding="10,4" Margin="6,0,0,0"
+                        ToolTip.Tip="Open a second window with its own CefRequestContext — cookies + cache + storage are isolated from this one." />
                 <Button DockPanel.Dock="Right"  Name="DevToolsButton" Content="DevTools"   Click="OnDevToolsClick" Padding="10,4" Margin="6,0,0,0" />
                 <Button DockPanel.Dock="Right"  Name="ZoomOutButton"  Content="−"          Click="OnZoomOutClick"  Padding="8,4" />
                 <Button DockPanel.Dock="Right"  Name="ZoomResetButton" Content="100%"      Click="OnZoomResetClick" Padding="8,4" />

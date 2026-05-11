@@ -91,6 +91,14 @@ public class WebView : Control
     /// <summary>Browser id (0 if not yet created or closed). Convenience.</summary>
     public int BrowserId => _browser?.Id ?? 0;
 
+    /// <summary>
+    /// Optional isolated request context (separate cookies / cache /
+    /// storage from other browsers). MUST be set before the WebView is
+    /// arranged / attached for the first time — after the underlying
+    /// <see cref="CefBrowser"/> is created, this is read-only.
+    /// </summary>
+    public CefRequestContext? RequestContext { get; set; }
+
     private CefBrowser? _browser;
     // Browser dimensions in DIPs / CSS pixels. The native shim multiplies
     // these by _renderScale (passed via SetDeviceScaleFactor + the create
@@ -358,7 +366,7 @@ public class WebView : Control
             _browserWidth = w;
             _browserHeight = h;
             _renderScale = scale;
-            var browser = Cef.CreateOffscreenBrowser(w, h, (float)scale, Url ?? "about:blank");
+            var browser = Cef.CreateOffscreenBrowser(w, h, (float)scale, Url ?? "about:blank", RequestContext);
             if (browser is not null)
             {
                 _browser = browser;
