@@ -588,6 +588,56 @@ EXCEF_API void excef_set_download_progress_callback(excef_download_progress_cb_t
 // (the token is invalidated as soon as the event handler returns).
 EXCEF_API void excef_download_action(unsigned long long token, int action);
 
+// ---- Auth credentials handler ------------------------------------------
+//
+// CefRequestHandler::GetAuthCredentials. Fires when the server (or proxy)
+// returns 401/407 with an HTTP-Basic, Digest, or NTLM challenge. Host
+// supplies username + password via excef_resolve_auth, or cancels by
+// passing NULL for both.
+typedef void (*excef_auth_request_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int is_proxy,
+    const char* host,
+    int port,
+    const char* realm,
+    const char* scheme);
+
+EXCEF_API void excef_set_auth_request_callback(excef_auth_request_cb_t cb);
+
+// Resolve. NULL/empty username = cancel (the request fails with 401/407).
+EXCEF_API void excef_resolve_auth(unsigned long long token,
+                                    const char* username,
+                                    const char* password);
+
+// ---- Find handler -------------------------------------------------------
+//
+// CefFindHandler::OnFindResult. Fires once or more per Find() call to
+// report match count, ordinal of the active match, and whether this is
+// the final update for the search session. `identifier` is a CEF-internal
+// id tying results to a search.
+typedef void (*excef_find_result_cb_t)(
+    int browser_id,
+    int identifier,
+    int count,
+    int active_match_ordinal,
+    int final_update);
+
+EXCEF_API void excef_set_find_result_callback(excef_find_result_cb_t cb);
+
+// Begin (or update) an in-page search. `find_next` = 1 to jump to next
+// match while keeping the previous search alive; 0 starts a new search.
+// `forward` = direction; `match_case` = case sensitivity.
+EXCEF_API void excef_find(int browser_id,
+                           const char* search_text,
+                           int forward,
+                           int match_case,
+                           int find_next);
+
+// Stop the in-page search. `clear_selection` = 1 to also remove the
+// orange highlight on the last match.
+EXCEF_API void excef_stop_finding(int browser_id, int clear_selection);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these

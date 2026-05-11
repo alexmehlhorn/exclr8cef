@@ -45,7 +45,28 @@
         <!-- WebView on top, splitter, event console at bottom -->
         <Grid Grid.Row="2" Name="MainGrid" Background="#11111B"
               RowDefinitions="*,Auto,220">
-            <cef:WebView Grid.Row="0" Name="Browser" />
+            <Grid Grid.Row="0">
+                <cef:WebView Name="Browser" />
+                <!-- Find bar: appears top-right over the WebView when Cmd/Ctrl+F is pressed. -->
+                <Border Name="FindBar" IsVisible="False"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,8,12,0" Padding="8,4"
+                        Background="#1E1E2E" BorderBrush="#45475A" BorderThickness="1"
+                        CornerRadius="4">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBox Name="FindBox" Width="200" Padding="6,3" FontSize="12"
+                                 Background="#11111B" Foreground="#CDD6F4"
+                                 BorderBrush="#45475A"
+                                 Watermark="find on page"
+                                 KeyDown="OnFindBoxKeyDown" />
+                        <TextBlock Name="FindMatchCount" Foreground="#A6ADC8"
+                                   VerticalAlignment="Center" FontSize="11" MinWidth="60" />
+                        <Button Content="↑" Click="OnFindPrevClick"   Padding="6,2" FontSize="11" Background="Transparent" Foreground="#CDD6F4" />
+                        <Button Content="↓" Click="OnFindNextClick"   Padding="6,2" FontSize="11" Background="Transparent" Foreground="#CDD6F4" />
+                        <Button Content="✕" Click="OnFindCloseClick"  Padding="6,2" FontSize="11" Background="Transparent" Foreground="#CDD6F4" />
+                    </StackPanel>
+                </Border>
+            </Grid>
 
             <GridSplitter Grid.Row="1" Name="ConsoleSplitter" Height="4" Background="#181825"
                           HorizontalAlignment="Stretch"

@@ -150,6 +150,21 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<DownloadProgressEventArgs>? DownloadProgress;
 
     /// <summary>
+    /// Fires when the server (or proxy) returns a 401/407 with an
+    /// HTTP-Basic / Digest / NTLM challenge. Host MUST call
+    /// <see cref="AuthRequestEventArgs.Continue"/> with credentials,
+    /// or <see cref="AuthRequestEventArgs.Cancel"/>. Without a
+    /// subscriber the request fails.
+    /// </summary>
+    public event EventHandler<AuthRequestEventArgs>? AuthRequest;
+
+    /// <summary>
+    /// Fires once or more per <see cref="Find"/> call with the current
+    /// match count + ordinal. Observational only — no callback to dismiss.
+    /// </summary>
+    public event EventHandler<FindResultEventArgs>? FindResult;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -484,6 +499,31 @@ public sealed class CefBrowser : IDisposable
 
     public void ImeCancel() { if (!_closed) Excef.excef_ime_cancel(Id); }
 
+    // ---- Find in page ---------------------------------------------------
+
+    /// <summary>
+    /// Begin (or continue) an in-page search. Calling with
+    /// <paramref name="findNext"/> = true while a search is active jumps
+    /// to the next match without restarting; <paramref name="findNext"/>
+    /// = false starts a new search. Passing an empty <paramref name="searchText"/>
+    /// stops the search. Results stream back on <see cref="FindResult"/>.
+    /// </summary>
+    public void Find(string searchText, bool forward = true, bool matchCase = false, bool findNext = false)
+    {
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(searchText ?? "");
+            try { Excef.excef_find(Id, p, forward ? 1 : 0, matchCase ? 1 : 0, findNext ? 1 : 0); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    public void StopFinding(bool clearSelection = true)
+    {
+        if (!_closed) Excef.excef_stop_finding(Id, clearSelection ? 1 : 0);
+    }
+
     // ---- Close ----------------------------------------------------------
 
     /// <summary>Request the browser close. Idempotent.</summary>
@@ -576,6 +616,14 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseDownloadProgress(ulong token, int downloadId, int percent, long received, long total, long speed, Cef.DownloadState state, string fullPath)
         => DownloadProgress?.Invoke(this, new DownloadProgressEventArgs(token, downloadId, percent, received, total, speed, state, fullPath));
 
+    internal bool HasAuthRequestSubscriber => AuthRequest is not null;
+
+    internal void RaiseAuthRequest(ulong token, bool isProxy, string host, int port, string realm, string scheme)
+        => AuthRequest?.Invoke(this, new AuthRequestEventArgs(token, isProxy, host, port, realm, scheme));
+
+    internal void RaiseFindResult(int identifier, int count, int activeMatchOrdinal, bool finalUpdate)
+        => FindResult?.Invoke(this, new FindResultEventArgs(identifier, count, activeMatchOrdinal, finalUpdate));
+
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
@@ -656,6 +704,67 @@ public sealed class JsDialogEventArgs : EventArgs
     {
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_js_dialog(_token, 0, null); }
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.AuthRequest"/>. Host MUST call
+/// <see cref="Continue"/> with credentials or <see cref="Cancel"/>.
+/// </summary>
+public sealed class AuthRequestEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    public bool IsProxy { get; }
+    public string Host { get; }
+    public int Port { get; }
+    public string Realm { get; }
+    /// <summary>Auth scheme — "basic", "digest", "ntlm", "negotiate".</summary>
+    public string Scheme { get; }
+
+    internal AuthRequestEventArgs(ulong token, bool isProxy, string host, int port, string realm, string scheme)
+    {
+        _token = token; IsProxy = isProxy; Host = host; Port = port; Realm = realm; Scheme = scheme;
+    }
+
+    public void Continue(string username, string password)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* u = (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(username ?? "");
+            sbyte* p = (sbyte*)System.Runtime.InteropServices.Marshal.StringToCoTaskMemUTF8(password ?? "");
+            try { Native.Excef.excef_resolve_auth(_token, u, p); }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)u);
+                System.Runtime.InteropServices.Marshal.FreeCoTaskMem((IntPtr)p);
+            }
+        }
+    }
+
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe { Native.Excef.excef_resolve_auth(_token, null, null); }
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.FindResult"/>.</summary>
+public sealed class FindResultEventArgs : EventArgs
+{
+    /// <summary>CEF-internal search session id.</summary>
+    public int Identifier { get; }
+    /// <summary>Total match count.</summary>
+    public int Count { get; }
+    /// <summary>1-based ordinal of the currently-active (highlighted) match. 0 if no matches.</summary>
+    public int ActiveMatchOrdinal { get; }
+    /// <summary>True if this is the last update for the current Find session.</summary>
+    public bool FinalUpdate { get; }
+    internal FindResultEventArgs(int identifier, int count, int activeMatchOrdinal, bool finalUpdate)
+    {
+        Identifier = identifier; Count = count; ActiveMatchOrdinal = activeMatchOrdinal; FinalUpdate = finalUpdate;
     }
 }
 

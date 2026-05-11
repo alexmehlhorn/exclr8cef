@@ -44,6 +44,8 @@ excef_file_dialog_cb_t g_file_dialog_cb = nullptr;
 excef_context_menu_cb_t g_context_menu_cb = nullptr;
 excef_download_starting_cb_t g_download_starting_cb = nullptr;
 excef_download_progress_cb_t g_download_progress_cb = nullptr;
+excef_auth_request_cb_t g_auth_request_cb = nullptr;
+excef_find_result_cb_t g_find_result_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -69,6 +71,10 @@ struct PendingDownloadProgress {
     int browser_id;
     CefRefPtr<CefDownloadItemCallback> callback;
 };
+struct PendingAuth {
+    int browser_id;
+    CefRefPtr<CefAuthCallback> callback;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
@@ -80,6 +86,8 @@ std::mutex g_download_starting_mu;
 std::map<uint64_t, PendingDownloadStart> g_download_starting_pending;
 std::mutex g_download_progress_mu;
 std::map<uint64_t, PendingDownloadProgress> g_download_progress_pending;
+std::mutex g_auth_mu;
+std::map<uint64_t, PendingAuth> g_auth_pending;
 
 }  // namespace
 
@@ -185,6 +193,41 @@ bool Exclr8CefOsrHandler::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> /*browser*/
     std::string msg = message_text.ToString();
     g_js_dialog_cb(id_, token, /*dialog_type=*/3, msg.c_str(), "");
     return true;
+}
+
+bool Exclr8CefOsrHandler::GetAuthCredentials(CefRefPtr<CefBrowser> /*browser*/,
+                                              const CefString& /*origin_url*/,
+                                              bool isProxy,
+                                              const CefString& host,
+                                              int port,
+                                              const CefString& realm,
+                                              const CefString& scheme,
+                                              CefRefPtr<CefAuthCallback> callback) {
+    if (!g_auth_request_cb) return false;  // fall back: CEF cancels the request
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_auth_mu);
+        g_auth_pending[token] = PendingAuth{id_, callback};
+    }
+    std::string host_s = host.ToString();
+    std::string realm_s = realm.ToString();
+    std::string scheme_s = scheme.ToString();
+    g_auth_request_cb(id_, token, isProxy ? 1 : 0,
+                      host_s.c_str(), port,
+                      realm_s.c_str(), scheme_s.c_str());
+    return true;
+}
+
+void Exclr8CefOsrHandler::OnFindResult(CefRefPtr<CefBrowser> /*browser*/,
+                                        int identifier,
+                                        int count,
+                                        const CefRect& /*selectionRect*/,
+                                        int activeMatchOrdinal,
+                                        bool finalUpdate) {
+    if (g_find_result_cb) {
+        g_find_result_cb(id_, identifier, count, activeMatchOrdinal,
+                         finalUpdate ? 1 : 0);
+    }
 }
 
 bool Exclr8CefOsrHandler::OnBeforeDownload(CefRefPtr<CefBrowser> /*browser*/,
@@ -397,6 +440,17 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
         for (auto it = g_download_progress_pending.begin(); it != g_download_progress_pending.end(); ) {
             if (it->second.browser_id == closed_id) {
                 it = g_download_progress_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_auth_mu);
+        for (auto it = g_auth_pending.begin(); it != g_auth_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_auth_pending.erase(it);
             } else {
                 ++it;
             }
@@ -850,6 +904,65 @@ extern "C" void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb) { excl
 extern "C" void excef_set_context_menu_callback(excef_context_menu_cb_t cb) { exclr8cef::g_context_menu_cb = cb; }
 extern "C" void excef_set_download_starting_callback(excef_download_starting_cb_t cb) { exclr8cef::g_download_starting_cb = cb; }
 extern "C" void excef_set_download_progress_callback(excef_download_progress_cb_t cb) { exclr8cef::g_download_progress_cb = cb; }
+extern "C" void excef_set_auth_request_callback(excef_auth_request_cb_t cb) { exclr8cef::g_auth_request_cb = cb; }
+extern "C" void excef_set_find_result_callback(excef_find_result_cb_t cb) { exclr8cef::g_find_result_cb = cb; }
+
+namespace {
+class AuthResolveTask : public CefTask {
+public:
+    AuthResolveTask(CefRefPtr<CefAuthCallback> cb, bool ok, CefString user, CefString pass)
+        : cb_(std::move(cb)), ok_(ok), user_(std::move(user)), pass_(std::move(pass)) {}
+    void Execute() override {
+        if (!cb_) return;
+        if (ok_) cb_->Continue(user_, pass_);
+        else cb_->Cancel();
+    }
+private:
+    CefRefPtr<CefAuthCallback> cb_;
+    bool ok_;
+    CefString user_, pass_;
+    IMPLEMENT_REFCOUNTING(AuthResolveTask);
+};
+}  // namespace
+
+extern "C" void excef_resolve_auth(uint64_t token, const char* username, const char* password) {
+    CefRefPtr<CefAuthCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_auth_mu);
+        auto it = exclr8cef::g_auth_pending.find(token);
+        if (it == exclr8cef::g_auth_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_auth_pending.erase(it);
+    }
+    if (!callback) return;
+    bool ok = username && *username;
+    CefString u, p;
+    if (ok) {
+        u.FromString(username);
+        if (password) p.FromString(password);
+    }
+    if (CefCurrentlyOn(TID_UI)) {
+        if (ok) callback->Continue(u, p);
+        else callback->Cancel();
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(new AuthResolveTask(callback, ok, u, p)));
+    }
+}
+
+extern "C" void excef_find(int browser_id, const char* search_text,
+                            int forward, int match_case, int find_next) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return;
+    CefString s;
+    if (search_text) s.FromString(search_text);
+    b->GetHost()->Find(s, forward != 0, match_case != 0, find_next != 0);
+}
+
+extern "C" void excef_stop_finding(int browser_id, int clear_selection) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return;
+    b->GetHost()->StopFinding(clear_selection != 0);
+}
 
 namespace {
 class DownloadStartingResolveTask : public CefTask {

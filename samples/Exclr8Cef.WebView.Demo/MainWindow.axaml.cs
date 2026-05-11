@@ -82,6 +82,26 @@ public partial class MainWindow : Window
         b.ContextMenu           += OnBrowserContextMenu;
         b.DownloadStarting      += OnBrowserDownloadStarting;
         b.DownloadProgress      += OnBrowserDownloadProgress;
+        b.AuthRequest           += OnBrowserAuthRequest;
+        b.FindResult            += OnBrowserFindResult;
+    }
+
+    private async void OnBrowserAuthRequest(object? sender, Exclr8Cef.AuthRequestEventArgs e)
+    {
+        LogEvent("auth", $"{e.Scheme.ToUpperInvariant()} {e.Host}:{e.Port} realm=\"{e.Realm}\" proxy={e.IsProxy}");
+        var result = await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
+            () => AuthDialogWindow.ShowAsync(this, e.Scheme, e.Host, e.Port, e.Realm));
+        if (result is { } creds) e.Continue(creds.Username, creds.Password);
+        else e.Cancel();
+    }
+
+    private void OnBrowserFindResult(object? sender, Exclr8Cef.FindResultEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            FindMatchCount.Text = e.Count == 0 ? "no matches"
+                                : $"{e.ActiveMatchOrdinal} / {e.Count}";
+        });
     }
 
     private async void OnBrowserDownloadStarting(object? sender, Exclr8Cef.DownloadStartingEventArgs e)
@@ -416,6 +436,73 @@ public partial class MainWindow : Window
 
     private void OnClearEventsClick(object? sender, RoutedEventArgs e) => Events.Clear();
 
+    // ---- Find-in-page bar ---------------------------------------------
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        var accel = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+        if (e.Key == Key.F && (e.KeyModifiers & accel) != 0)
+        {
+            ShowFindBar();
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Escape && FindBar.IsVisible)
+        {
+            HideFindBar();
+            e.Handled = true;
+            return;
+        }
+        base.OnKeyDown(e);
+    }
+
+    private void ShowFindBar()
+    {
+        FindBar.IsVisible = true;
+        FindMatchCount.Text = "";
+        FindBox.Focus();
+        FindBox.SelectAll();
+    }
+
+    private void HideFindBar()
+    {
+        FindBar.IsVisible = false;
+        FindBox.Text = "";
+        FindMatchCount.Text = "";
+        Browser.Browser?.StopFinding(clearSelection: true);
+    }
+
+    private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter || e.Key == Key.Return)
+        {
+            var hasShift = (e.KeyModifiers & KeyModifiers.Shift) != 0;
+            DoFind(forward: !hasShift, findNext: !string.IsNullOrEmpty(_lastFindQuery)
+                                                 && FindBox.Text == _lastFindQuery);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape) { HideFindBar(); e.Handled = true; }
+    }
+
+    private string _lastFindQuery = "";
+    private void DoFind(bool forward, bool findNext)
+    {
+        var q = FindBox.Text ?? "";
+        if (string.IsNullOrEmpty(q))
+        {
+            Browser.Browser?.StopFinding(clearSelection: true);
+            FindMatchCount.Text = "";
+            return;
+        }
+        Browser.Browser?.Find(q, forward: forward, matchCase: false, findNext: findNext);
+        _lastFindQuery = q;
+        LogEvent("find", $"\"{q}\" forward={forward} next={findNext}");
+    }
+
+    private void OnFindPrevClick(object? sender, RoutedEventArgs e) => DoFind(false, true);
+    private void OnFindNextClick(object? sender, RoutedEventArgs e) => DoFind(true, true);
+    private void OnFindCloseClick(object? sender, RoutedEventArgs e) => HideFindBar();
+
     private void OnBrowserPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (e.Property == Exclr8Cef.WebView.WebView.UrlProperty)
@@ -580,6 +667,8 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["file-dialog"]     = SolidColorBrush.Parse("#cba6f7"),
         ["contextmenu"]     = SolidColorBrush.Parse("#cba6f7"),
         ["download"]        = SolidColorBrush.Parse("#f5c2e7"),
+        ["auth"]            = SolidColorBrush.Parse("#cba6f7"),
+        ["find"]            = SolidColorBrush.Parse("#94e2d5"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

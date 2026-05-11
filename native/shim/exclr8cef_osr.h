@@ -9,10 +9,12 @@
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_download_handler.h"
+#include "include/cef_find_handler.h"
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_render_handler.h"
+#include "include/cef_request_handler.h"
 
 #include "exclr8cef.h"
 
@@ -26,7 +28,9 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefJSDialogHandler,
                             public CefDialogHandler,
                             public CefContextMenuHandler,
-                            public CefDownloadHandler {
+                            public CefDownloadHandler,
+                            public CefRequestHandler,
+                            public CefFindHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -40,6 +44,8 @@ public:
     CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+    CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+    CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -100,6 +106,25 @@ public:
     void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
                             CefRefPtr<CefDownloadItem> download_item,
                             CefRefPtr<CefDownloadItemCallback> callback) override;
+
+    // CefRequestHandler — only GetAuthCredentials in this version; all
+    // other methods use the default (no-op) implementation.
+    bool GetAuthCredentials(CefRefPtr<CefBrowser> browser,
+                             const CefString& origin_url,
+                             bool isProxy,
+                             const CefString& host,
+                             int port,
+                             const CefString& realm,
+                             const CefString& scheme,
+                             CefRefPtr<CefAuthCallback> callback) override;
+
+    // CefFindHandler
+    void OnFindResult(CefRefPtr<CefBrowser> browser,
+                       int identifier,
+                       int count,
+                       const CefRect& selectionRect,
+                       int activeMatchOrdinal,
+                       bool finalUpdate) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

@@ -185,6 +185,7 @@
       <a href="#fullscreen">Fullscreen</a>
       <a href="#jsdialog">JS dialogs</a>
       <a href="#download">Downloads</a>
+      <a href="#auth">Auth + Find</a>
     </div>
   </nav>
 </aside>
@@ -308,6 +309,20 @@
       <input type="file" id="filePick" />
       <input type="file" id="fileMulti" multiple />
       <span id="fileOut" style="color:var(--muted)"></span>
+    </div>
+  </section>
+
+  <section id="auth">
+    <h2>HTTP auth + Find-in-page</h2>
+    <p class="lede">Click to load a URL guarded by HTTP-Basic auth —
+       host pops the credentials dialog. The endpoint expects
+       <code>user / passwd</code>; correct values render a JSON success.
+       Cmd/Ctrl+F over the page opens the in-page find bar; ↑/↓ or
+       Enter / Shift-Enter cycles matches.</p>
+    <div class="row">
+      <a href="https://httpbin.org/basic-auth/user/passwd">
+        httpbin: requires user / passwd
+      </a>
     </div>
   </section>
 

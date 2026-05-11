@@ -245,6 +245,21 @@ internal static unsafe partial class Excef
     public static extern void excef_download_action([NativeTypeName("unsigned long long")] ulong token, int action);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_auth_request_callback([NativeTypeName("excef_auth_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, int, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_auth([NativeTypeName("unsigned long long")] ulong token, [NativeTypeName("const char *")] sbyte* username, [NativeTypeName("const char *")] sbyte* password);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_find_result_callback([NativeTypeName("excef_find_result_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_find(int browser_id, [NativeTypeName("const char *")] sbyte* search_text, int forward, int match_case, int find_next);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_stop_finding(int browser_id, int clear_selection);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

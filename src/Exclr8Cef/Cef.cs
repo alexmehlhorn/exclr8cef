@@ -488,6 +488,8 @@ public static class Cef
                 Excef.excef_set_context_menu_callback(&ContextMenuTrampoline);
                 Excef.excef_set_download_starting_callback(&DownloadStartingTrampoline);
                 Excef.excef_set_download_progress_callback(&DownloadProgressTrampoline);
+                Excef.excef_set_auth_request_callback(&AuthRequestTrampoline);
+                Excef.excef_set_find_result_callback(&FindResultTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -638,6 +640,34 @@ public static class Cef
             (JsDialogType)dialogType,
             Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AuthRequestTrampoline(int browserId, ulong token, int isProxy, sbyte* host, int port, sbyte* realm, sbyte* scheme)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_auth(token, null, null);
+            return;
+        }
+        if (!b.HasAuthRequestSubscriber)
+        {
+            Excef.excef_resolve_auth(token, null, null);
+            return;
+        }
+        b.RaiseAuthRequest(
+            token, isProxy != 0,
+            Marshal.PtrToStringUTF8((IntPtr)host) ?? "",
+            port,
+            Marshal.PtrToStringUTF8((IntPtr)realm) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)scheme) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void FindResultTrampoline(int browserId, int identifier, int count, int activeMatchOrdinal, int finalUpdate)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
