@@ -87,7 +87,20 @@ public partial class MainWindow : Window
         b.JsInvoke              += OnBrowserJsInvoke;
         b.AccessibilityTreeChange     += OnBrowserA11yTree;
         b.AccessibilityLocationChange += OnBrowserA11yLocation;
+        b.DragStarted           += OnBrowserDragStarted;
     }
+
+    private void OnBrowserDragStarted(object? sender, Exclr8Cef.DragStartedEventArgs e)
+    {
+        var summary = !string.IsNullOrEmpty(e.LinkUrl) ? $"link {e.LinkUrl}"
+                    : e.FileNames.Count > 0          ? $"{e.FileNames.Count} file(s)"
+                    : !string.IsNullOrEmpty(e.Text)  ? $"text '{Truncate(e.Text, 32)}'"
+                    : "(empty)";
+        LogEvent("drag-out", $"page start drag: {summary} ops={e.AllowedOperations}");
+        // Leave Handled=false → shim self-targets (internal page DnD).
+    }
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…";
 
     // Bucket request logs so the event console stays usable on busy pages —
     // log main_frame / sub_frame / xhr / fetch traffic in full, the rest as

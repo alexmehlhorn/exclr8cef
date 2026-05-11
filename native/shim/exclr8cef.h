@@ -191,6 +191,20 @@ EXCEF_API void excef_drag_target_drop(int browser_id,
                                       int modifiers);
 EXCEF_API void excef_drag_target_drag_leave(int browser_id);
 
+// Drag-image (ghost) callback: when the page starts a drag, CEF gives us a
+// pre-rendered preview bitmap of the dragged element (CefDragData::GetImage).
+// In OSR mode the host MUST draw this as an overlay following the cursor —
+// CEF can't compose it onto the page itself. Buffer is BGRA8888, premultiplied
+// alpha, valid only for the duration of the call (copy what you need).
+// hotspot_{x,y} are the offset from the cursor to the image origin in DIPs.
+// Buffer is NULL with width=height=0 if no preview image is available — host
+// should fall back to a synthetic preview (e.g. the link text) or omit it.
+typedef void (*excef_drag_image_cb_t)(int browser_id,
+                                       const void* buffer,
+                                       int width, int height,
+                                       int hotspot_x, int hotspot_y);
+EXCEF_API void excef_set_drag_image_callback(excef_drag_image_cb_t cb);
+
 // Drag-source side: when the page initiates a drag, CEF calls this callback
 // (set via excef_set_start_drag_callback) so the host can start an OS-level
 // drag. Return 1 to indicate the host is handling it (host MUST eventually

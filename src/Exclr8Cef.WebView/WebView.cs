@@ -7,6 +7,7 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
 namespace Exclr8Cef.WebView;
@@ -116,6 +117,15 @@ public class WebView : Control
     private bool _popupVisible;
     // Popup rect in DIP / CSS pixels relative to the browser's main view.
     private int _popupX, _popupY, _popupW, _popupH;
+
+    // Drag-preview overlay state — the bitmap CEF gave us at StartDragging.
+    // Drawn under the cursor (offset by hotspot) until the drag ends.
+    private WriteableBitmap? _dragBitmap;
+    private int _dragBitmapWidthPx;   // physical pixels, may differ from DIP size
+    private int _dragBitmapHeightPx;
+    private int _dragHotspotX, _dragHotspotY;
+    private int _dragCursorX, _dragCursorY;   // last pointer position in DIPs
+    private bool _dragOverlayVisible;
     private bool _attached;
     private bool _suppressUrlChange;
     private WebViewTextInputMethodClient? _imeClient;
@@ -141,6 +151,75 @@ public class WebView : Control
         // (for Tab, Enter, etc.) before any class handler — chiefly
         // KeyboardNavigationHandler — also processes it.
         AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel, handledEventsToo: true);
+
+        // Drag-drop: forward OS-level drags into CEF so the page sees the
+        // drag-over / drop events. Setting AllowDrop here covers consumers
+        // that just want files-into-the-page to Just Work.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragEnterEvent, OnAvDragEnter);
+        AddHandler(DragDrop.DragOverEvent,  OnAvDragOver);
+        AddHandler(DragDrop.DragLeaveEvent, OnAvDragLeave);
+        AddHandler(DragDrop.DropEvent,      OnAvDrop);
+    }
+
+    // ---- Drag-drop forwarding (Avalonia → CEF) -------------------------
+
+    private static Cef.DragOperations ToCefOps(DragDropEffects e)
+    {
+        var ops = Cef.DragOperations.None;
+        if ((e & DragDropEffects.Copy) != 0) ops |= Cef.DragOperations.Copy;
+        if ((e & DragDropEffects.Move) != 0) ops |= Cef.DragOperations.Move;
+        if ((e & DragDropEffects.Link) != 0) ops |= Cef.DragOperations.Link;
+        return ops == Cef.DragOperations.None ? Cef.DragOperations.Every : ops;
+    }
+
+    private (int x, int y) DragPoint(DragEventArgs e)
+    {
+        var p = e.GetPosition(this);
+        return ((int)p.X, (int)p.Y);
+    }
+
+    private void OnAvDragEnter(object? sender, DragEventArgs e)
+    {
+        if (_browser is null) return;
+        var (x, y) = DragPoint(e);
+        string? text = e.Data.Contains(DataFormats.Text) ? e.Data.GetText() : null;
+        IReadOnlyList<string>? files = null;
+        if (e.Data.Contains(DataFormats.Files))
+        {
+            var items = e.Data.GetFiles();
+            if (items is not null)
+            {
+                var list = new List<string>();
+                foreach (var f in items)
+                {
+                    var path = f.TryGetLocalPath();
+                    if (!string.IsNullOrEmpty(path)) list.Add(path);
+                }
+                if (list.Count > 0) files = list;
+            }
+        }
+        _browser.DragTargetEnter(x, y, Cef.CefModifiers.None,
+            ToCefOps(e.DragEffects), text: text, filePaths: files);
+    }
+
+    private void OnAvDragOver(object? sender, DragEventArgs e)
+    {
+        if (_browser is null) return;
+        var (x, y) = DragPoint(e);
+        _browser.DragTargetOver(x, y, Cef.CefModifiers.None, ToCefOps(e.DragEffects));
+    }
+
+    private void OnAvDragLeave(object? sender, RoutedEventArgs e)
+    {
+        _browser?.DragTargetLeave();
+    }
+
+    private void OnAvDrop(object? sender, DragEventArgs e)
+    {
+        if (_browser is null) return;
+        var (x, y) = DragPoint(e);
+        _browser.DragTargetDrop(x, y, Cef.CefModifiers.None);
     }
 
     // Set when OnKeyDownTunnel forwards a RawKeyDown to the browser; cleared
@@ -413,6 +492,7 @@ public class WebView : Control
         b.PopupShow            += OnBrowserPopupShow;
         b.PopupSize            += OnBrowserPopupSize;
         b.PopupPainted         += OnBrowserPopupPainted;
+        b.DragImage            += OnBrowserDragImage;
     }
 
     private void UnsubscribeBrowserEvents(CefBrowser b)
@@ -425,6 +505,7 @@ public class WebView : Control
         b.PopupShow            -= OnBrowserPopupShow;
         b.PopupSize            -= OnBrowserPopupSize;
         b.PopupPainted         -= OnBrowserPopupPainted;
+        b.DragImage            -= OnBrowserDragImage;
     }
 
     private void OnBrowserAddressChanged(object? sender, string url)
@@ -517,6 +598,68 @@ public class WebView : Control
             context.DrawImage(_popupBitmap,
                 new Rect(_popupX, _popupY, _popupW, _popupH));
         }
+        // Drag preview overlay (CefDragData::GetImage). Draw the bitmap at
+        // the current cursor, offset by the hotspot. Bitmap is in physical
+        // pixels; convert to DIPs for the destination rect.
+        if (_dragOverlayVisible && _dragBitmap is not null)
+        {
+            double scale = _renderScale > 0 ? _renderScale : 1.0;
+            double wDip = _dragBitmapWidthPx  / scale;
+            double hDip = _dragBitmapHeightPx / scale;
+            double hsXDip = _dragHotspotX / scale;
+            double hsYDip = _dragHotspotY / scale;
+            context.DrawImage(_dragBitmap,
+                new Rect(_dragCursorX - hsXDip, _dragCursorY - hsYDip, wDip, hDip));
+        }
+    }
+
+    private void OnBrowserDragImage(object? sender, DragImageEventArgs e)
+    {
+        if (e.IsClear)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                _dragOverlayVisible = false;
+                _dragBitmap?.Dispose();
+                _dragBitmap = null;
+                _dragBitmapWidthPx = _dragBitmapHeightPx = 0;
+                InvalidateVisual();
+            });
+            return;
+        }
+        int byteCount = e.Width * e.Height * 4;
+        byte[] snapshot = ArrayPool<byte>.Shared.Rent(byteCount);
+        Marshal.Copy(e.Buffer, snapshot, 0, byteCount);
+        int w = e.Width, h = e.Height, hsx = e.HotspotX, hsy = e.HotspotY;
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (_dragBitmap is null || _dragBitmapWidthPx != w || _dragBitmapHeightPx != h)
+                {
+                    _dragBitmap?.Dispose();
+                    _dragBitmap = new WriteableBitmap(
+                        new PixelSize(w, h),
+                        new Vector(96, 96),
+                        PixelFormat.Bgra8888,
+                        AlphaFormat.Premul);
+                    _dragBitmapWidthPx = w;
+                    _dragBitmapHeightPx = h;
+                }
+                using (var locked = _dragBitmap.Lock())
+                {
+                    Marshal.Copy(snapshot, 0, locked.Address, byteCount);
+                }
+                _dragHotspotX = hsx;
+                _dragHotspotY = hsy;
+                _dragOverlayVisible = true;
+                InvalidateVisual();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(snapshot);
+            }
+        }, DispatcherPriority.Render);
     }
 
     // ---- Popup overlay handling ----------------------------------------
@@ -648,8 +791,14 @@ public class WebView : Control
         base.OnPointerMoved(e);
         if (_browser is null) return;
         var p = e.GetCurrentPoint(this);
+        int x = (int)p.Position.X, y = (int)p.Position.Y;
+        if (_dragOverlayVisible)
+        {
+            _dragCursorX = x; _dragCursorY = y;
+            InvalidateVisual();
+        }
         _browser.SendMouseMove(
-            (int)p.Position.X, (int)p.Position.Y,
+            x, y,
             InputMapping.MapModifiers(e.KeyModifiers, p.Properties),
             mouseLeave: false);
     }

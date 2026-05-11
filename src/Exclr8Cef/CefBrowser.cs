@@ -237,6 +237,26 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<AutoResizeEventArgs>? AutoResize;
 
     /// <summary>
+    /// The page wants to start dragging something (CefRenderHandler::StartDragging).
+    /// If no handler subscribes, the shim falls back to internal-only DnD
+    /// (self-targets the same browser as the drop target). A handler that
+    /// sets <see cref="DragStartedEventArgs.Handled"/> = true takes
+    /// responsibility for completing the drag and MUST eventually call
+    /// <see cref="DragSourceEndedAt"/> + <see cref="DragSourceSystemDragEnded"/>.
+    /// </summary>
+    public event EventHandler<DragStartedEventArgs>? DragStarted;
+
+    /// <summary>
+    /// Delivers the drag-preview ("ghost") bitmap CEF generated for the
+    /// active drag, so the host can overlay it under the cursor. Fires
+    /// once when the drag starts (with the bitmap, or width=height=0 if
+    /// no preview is available), and once when the drag ends (always
+    /// width=height=0). Buffer is BGRA8888 premultiplied, valid only
+    /// for the duration of the handler — copy what you need.
+    /// </summary>
+    public event EventHandler<DragImageEventArgs>? DragImage;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -417,6 +437,86 @@ public sealed class CefBrowser : IDisposable
     public void SetFocus(bool focus)
     {
         if (!_closed) Excef.excef_set_browser_focus(Id, focus ? 1 : 0);
+    }
+
+    // ---- Drag and drop --------------------------------------------------
+    //
+    // For OS-level drags arriving from outside the WebView (Finder file
+    // drop, browser link drag, etc.) the host's UI framework reports
+    // drag events; forward each to the matching DragTarget* method.
+
+    /// <summary>
+    /// Tell CEF an external drag has entered the view. Coordinates are in
+    /// DIPs relative to the view's top-left. Any of <paramref name="text"/>,
+    /// <paramref name="html"/>, <paramref name="url"/>, <paramref name="filePaths"/>
+    /// may be null or empty.
+    /// </summary>
+    public void DragTargetEnter(int x, int y,
+                                Cef.CefModifiers modifiers,
+                                Cef.DragOperations allowedOps,
+                                string? text = null,
+                                string? html = null,
+                                string? url = null,
+                                IReadOnlyList<string>? filePaths = null)
+    {
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* pText = text is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(text);
+            sbyte* pHtml = html is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(html);
+            sbyte* pUrl  = url  is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
+            int fileCount = filePaths?.Count ?? 0;
+            IntPtr* fileStorage = stackalloc IntPtr[fileCount > 0 ? fileCount : 1];
+            for (int i = 0; i < fileCount; ++i)
+                fileStorage[i] = Marshal.StringToCoTaskMemUTF8(filePaths![i]);
+            try
+            {
+                Excef.excef_drag_target_drag_enter(
+                    Id, x, y, (int)modifiers, (int)allowedOps,
+                    pText, pHtml, pUrl,
+                    fileCount > 0 ? (sbyte**)fileStorage : null,
+                    fileCount);
+            }
+            finally
+            {
+                if (pText != null) Marshal.FreeCoTaskMem((IntPtr)pText);
+                if (pHtml != null) Marshal.FreeCoTaskMem((IntPtr)pHtml);
+                if (pUrl  != null) Marshal.FreeCoTaskMem((IntPtr)pUrl);
+                for (int i = 0; i < fileCount; ++i)
+                    Marshal.FreeCoTaskMem(fileStorage[i]);
+            }
+        }
+    }
+
+    public void DragTargetOver(int x, int y, Cef.CefModifiers modifiers, Cef.DragOperations allowedOps)
+    {
+        if (!_closed) Excef.excef_drag_target_drag_over(Id, x, y, (int)modifiers, (int)allowedOps);
+    }
+
+    public void DragTargetDrop(int x, int y, Cef.CefModifiers modifiers)
+    {
+        if (!_closed) Excef.excef_drag_target_drop(Id, x, y, (int)modifiers);
+    }
+
+    public void DragTargetLeave()
+    {
+        if (!_closed) Excef.excef_drag_target_drag_leave(Id);
+    }
+
+    /// <summary>
+    /// Notify CEF the page-initiated drag has ended at the given coordinates
+    /// (in view DIPs) with the given completed operation. Must be paired with
+    /// <see cref="DragSourceSystemDragEnded"/>. Only call after handling a
+    /// <see cref="DragStarted"/> event with Handled=true.
+    /// </summary>
+    public void DragSourceEndedAt(int x, int y, Cef.DragOperations op)
+    {
+        if (!_closed) Excef.excef_drag_source_ended_at(Id, x, y, (int)op);
+    }
+
+    public void DragSourceSystemDragEnded()
+    {
+        if (!_closed) Excef.excef_drag_source_system_drag_ended(Id);
     }
 
     // ---- DevTools -------------------------------------------------------
@@ -709,6 +809,17 @@ public sealed class CefBrowser : IDisposable
         => AccessibilityTreeChange?.Invoke(this, json);
     internal void RaiseAccessibilityLocationChange(string json)
         => AccessibilityLocationChange?.Invoke(this, json);
+
+    internal bool HasDragStartedSubscriber => DragStarted is not null;
+
+    internal bool RaiseDragStarted(DragStartedEventArgs args)
+    {
+        DragStarted?.Invoke(this, args);
+        return args.Handled;
+    }
+
+    internal void RaiseDragImage(IntPtr buffer, int width, int height, int hotspotX, int hotspotY)
+        => DragImage?.Invoke(this, new DragImageEventArgs(buffer, width, height, hotspotX, hotspotY));
 
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
@@ -1121,6 +1232,68 @@ public sealed class AutoResizeEventArgs : EventArgs
     public int Width { get; }
     public int Height { get; }
     public AutoResizeEventArgs(int w, int h) { Width = w; Height = h; }
+}
+
+/// <summary>Args for <see cref="CefBrowser.DragImage"/>.</summary>
+public sealed class DragImageEventArgs : EventArgs
+{
+    /// <summary>BGRA8888 premultiplied pixel buffer. <see cref="IntPtr.Zero"/> + <c>Width=Height=0</c> means "clear the overlay".</summary>
+    public IntPtr Buffer { get; }
+    public int Width { get; }
+    public int Height { get; }
+    /// <summary>Offset in pixels from cursor to image top-left.</summary>
+    public int HotspotX { get; }
+    public int HotspotY { get; }
+    /// <summary>Convenience: true when this event clears the overlay.</summary>
+    public bool IsClear => Buffer == IntPtr.Zero || Width <= 0 || Height <= 0;
+
+    public DragImageEventArgs(IntPtr buffer, int width, int height, int hotspotX, int hotspotY)
+    {
+        Buffer = buffer;
+        Width = width;
+        Height = height;
+        HotspotX = hotspotX;
+        HotspotY = hotspotY;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.DragStarted"/>.</summary>
+public sealed class DragStartedEventArgs : EventArgs
+{
+    /// <summary>Drag operations the source allows.</summary>
+    public Cef.DragOperations AllowedOperations { get; }
+    /// <summary>Start position in view DIPs.</summary>
+    public int X { get; }
+    public int Y { get; }
+    /// <summary>Plain-text drag content. Empty if not provided.</summary>
+    public string Text { get; }
+    /// <summary>HTML fragment drag content. Empty if not provided.</summary>
+    public string Html { get; }
+    /// <summary>For link drags, the URL being dragged. Empty otherwise.</summary>
+    public string LinkUrl { get; }
+    /// <summary>For link drags, the displayed title. Empty otherwise.</summary>
+    public string LinkTitle { get; }
+    /// <summary>File paths being dragged (HTML <c>&lt;input type=file&gt;</c> drag-out).</summary>
+    public IReadOnlyList<string> FileNames { get; }
+    /// <summary>
+    /// Set to true to take ownership of the drag. The host must drive the
+    /// OS-level drag itself and call <see cref="CefBrowser.DragSourceEndedAt"/>
+    /// + <see cref="CefBrowser.DragSourceSystemDragEnded"/> when it ends.
+    /// Leave false to let the shim self-target (internal-only DnD).
+    /// </summary>
+    public bool Handled { get; set; }
+
+    public DragStartedEventArgs(
+        Cef.DragOperations allowedOps, int x, int y,
+        string text, string html, string linkUrl, string linkTitle,
+        IReadOnlyList<string> fileNames)
+    {
+        AllowedOperations = allowedOps;
+        X = x; Y = y;
+        Text = text; Html = html;
+        LinkUrl = linkUrl; LinkTitle = linkTitle;
+        FileNames = fileNames;
+    }
 }
 
 /// <summary>Args for <see cref="CefBrowser.LoadStart"/>.</summary>

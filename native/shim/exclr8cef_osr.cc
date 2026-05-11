@@ -70,6 +70,8 @@ excef_popup_paint_cb_t g_popup_paint_cb = nullptr;
 excef_js_invoke_cb_t g_js_invoke_cb = nullptr;
 excef_accessibility_tree_cb_t g_a11y_tree_cb = nullptr;
 excef_accessibility_location_cb_t g_a11y_location_cb = nullptr;
+excef_start_drag_cb_t g_start_drag_cb = nullptr;
+excef_drag_image_cb_t g_drag_image_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -939,9 +941,61 @@ bool Exclr8CefOsrHandler::StartDragging(CefRefPtr<CefBrowser> browser,
     drag_current_op_ = DRAG_OPERATION_NONE;
     in_drag_ = true;
 
-    // Self-target: tell CEF the drag has entered THIS view as a drop target.
-    // For internal-only DnD this is the same browser; full OS-level DnD
-    // would route through the host's window system instead.
+    // Ship the drag preview bitmap to the host so it can overlay it while
+    // the drag is in flight. CEF in OSR mode never paints this itself.
+    if (g_drag_image_cb) {
+        CefRefPtr<CefImage> img = drag_data->HasImage() ? drag_data->GetImage() : nullptr;
+        if (img && !img->IsEmpty()) {
+            int pw = 0, ph = 0;
+            CefRefPtr<CefBinaryValue> bin = img->GetAsBitmap(
+                device_scale_factor_, CEF_COLOR_TYPE_BGRA_8888,
+                CEF_ALPHA_TYPE_PREMULTIPLIED, pw, ph);
+            if (bin && pw > 0 && ph > 0) {
+                std::vector<unsigned char> buf(bin->GetSize());
+                bin->GetData(buf.data(), buf.size(), 0);
+                CefPoint hs = drag_data->GetImageHotspot();
+                g_drag_image_cb(id_, buf.data(), pw, ph, hs.x, hs.y);
+            } else {
+                g_drag_image_cb(id_, nullptr, 0, 0, 0, 0);
+            }
+        } else {
+            g_drag_image_cb(id_, nullptr, 0, 0, 0, 0);
+        }
+    }
+
+    // Give the host a chance to drive an OS-level drag. Decompose the drag
+    // data into individual fields — CefDragData doesn't cross the C ABI.
+    if (g_start_drag_cb) {
+        std::string text = drag_data->GetFragmentText().ToString();
+        std::string html = drag_data->GetFragmentHtml().ToString();
+        std::string link_url = drag_data->GetLinkURL().ToString();
+        std::string link_title = drag_data->GetLinkTitle().ToString();
+        std::vector<CefString> files;
+        drag_data->GetFileNames(files);
+        std::vector<std::string> file_storage;
+        file_storage.reserve(files.size());
+        std::vector<const char*> file_ptrs;
+        file_ptrs.reserve(files.size());
+        for (const auto& f : files) {
+            file_storage.push_back(f.ToString());
+            file_ptrs.push_back(file_storage.back().c_str());
+        }
+
+        int handled = g_start_drag_cb(
+            id_, static_cast<int>(allowed_ops), x, y,
+            text.c_str(), html.c_str(),
+            link_url.c_str(), link_title.c_str(),
+            file_ptrs.empty() ? nullptr : file_ptrs.data(),
+            static_cast<int>(file_ptrs.size()));
+        if (handled) {
+            // Host owns the drag. It MUST eventually call
+            // excef_drag_source_ended_at + excef_drag_source_system_drag_ended.
+            return true;
+        }
+    }
+
+    // Fallback: self-target. For internal-only DnD this is the same browser;
+    // full OS-level DnD would route through the host's window system.
     CefMouseEvent ev;
     ev.x = x;
     ev.y = y;
@@ -1167,6 +1221,9 @@ extern "C" void excef_send_mouse_click(int browser_id, int x, int y,
         host->DragSourceEndedAt(x, y, handler->drag_current_op());
         host->DragSourceSystemDragEnded();
         handler->clear_drag();
+        // Tell the host to drop the drag overlay (sentinel: zero-size image).
+        if (exclr8cef::g_drag_image_cb)
+            exclr8cef::g_drag_image_cb(handler->id(), nullptr, 0, 0, 0, 0);
     }
 
     b->GetHost()->SendMouseClickEvent(ev, type, mouse_up != 0, click_count);
@@ -1775,6 +1832,106 @@ extern "C" void excef_delete_cookies(const char* url, const char* name) {
     auto mgr = CefCookieManager::GetGlobalManager(nullptr);
     if (!mgr) return;
     mgr->DeleteCookies(url ? url : "", name ? name : "", nullptr);
+}
+
+// ---- Drag and drop --------------------------------------------------------
+//
+// The drag-target side (`_drag_target_*`) lets the host forward OS-level
+// drag events from the platform (Avalonia, WPF, Cocoa) into CEF so the page
+// sees real drag-over / drop interactions.
+//
+// The drag-source side (`_drag_source_*` + start-drag callback) lets the
+// host learn when CEF wants to start a drag (`<a draggable>`, file from
+// `<input type=file>`, etc.) and decide whether to launch an OS-level drag.
+
+extern "C" void excef_drag_target_drag_enter(int browser_id,
+                                              int x, int y,
+                                              int modifiers,
+                                              int allowed_ops,
+                                              const char* text,
+                                              const char* html,
+                                              const char* url,
+                                              const char** file_paths,
+                                              int file_path_count) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    CefRefPtr<CefDragData> data = CefDragData::Create();
+    if (text && *text) data->SetFragmentText(text);
+    if (html && *html) data->SetFragmentHtml(html);
+    if (url && *url) data->SetLinkURL(url);
+    if (file_paths && file_path_count > 0) {
+        for (int i = 0; i < file_path_count; ++i) {
+            const char* p = file_paths[i];
+            if (!p) continue;
+            // Display name = the basename; full path = the full string.
+            std::string s(p);
+            auto slash = s.find_last_of("/\\");
+            std::string base = (slash == std::string::npos) ? s : s.substr(slash + 1);
+            data->AddFile(p, base);
+        }
+    }
+    CefMouseEvent ev;
+    ev.x = x; ev.y = y;
+    ev.modifiers = static_cast<uint32_t>(modifiers);
+    b->GetHost()->DragTargetDragEnter(
+        data, ev,
+        static_cast<cef_drag_operations_mask_t>(allowed_ops));
+}
+
+extern "C" void excef_drag_target_drag_over(int browser_id,
+                                              int x, int y,
+                                              int modifiers,
+                                              int allowed_ops) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    CefMouseEvent ev;
+    ev.x = x; ev.y = y;
+    ev.modifiers = static_cast<uint32_t>(modifiers);
+    b->GetHost()->DragTargetDragOver(
+        ev, static_cast<cef_drag_operations_mask_t>(allowed_ops));
+}
+
+extern "C" void excef_drag_target_drop(int browser_id,
+                                        int x, int y,
+                                        int modifiers) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    CefMouseEvent ev;
+    ev.x = x; ev.y = y;
+    ev.modifiers = static_cast<uint32_t>(modifiers);
+    b->GetHost()->DragTargetDrop(ev);
+}
+
+extern "C" void excef_drag_target_drag_leave(int browser_id) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    b->GetHost()->DragTargetDragLeave();
+}
+
+extern "C" void excef_set_start_drag_callback(excef_start_drag_cb_t cb) {
+    exclr8cef::g_start_drag_cb = cb;
+}
+
+extern "C" void excef_set_drag_image_callback(excef_drag_image_cb_t cb) {
+    exclr8cef::g_drag_image_cb = cb;
+}
+
+extern "C" void excef_drag_source_ended_at(int browser_id,
+                                             int x, int y, int op) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    b->GetHost()->DragSourceEndedAt(
+        x, y, static_cast<cef_drag_operations_mask_t>(op));
+}
+
+extern "C" void excef_drag_source_system_drag_ended(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto handler = it->second;
+    auto b = handler->browser();
+    if (!b) return;
+    b->GetHost()->DragSourceSystemDragEnded();
+    handler->clear_drag();
 }
 
 // ---- IME ------------------------------------------------------------------

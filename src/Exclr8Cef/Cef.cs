@@ -502,6 +502,23 @@ public static class Cef
     public enum DownloadState { InProgress = 0, Complete = 1, Canceled = 2 }
 
     /// <summary>
+    /// Drag-and-drop operation mask. Mirrors <c>cef_drag_operations_mask_t</c>;
+    /// flag combinations are valid (e.g. <c>Copy | Move</c>).
+    /// </summary>
+    [Flags]
+    public enum DragOperations : uint
+    {
+        None    = 0,
+        Copy    = 1,
+        Link    = 2,
+        Generic = 4,
+        Private = 8,
+        Move    = 16,
+        Delete  = 32,
+        Every   = 0xFFFFFFFF,
+    }
+
+    /// <summary>
     /// Args for <see cref="SchemeRequest"/>. Host MUST call exactly one of
     /// <see cref="Continue"/> / <see cref="NotFound"/>.
     /// </summary>
@@ -738,6 +755,8 @@ public static class Cef
                 Excef.excef_set_js_invoke_callback(&JsInvokeTrampoline);
                 Excef.excef_set_accessibility_tree_callback(&AccessibilityTreeTrampoline);
                 Excef.excef_set_accessibility_location_callback(&AccessibilityLocationTrampoline);
+                Excef.excef_set_start_drag_callback(&StartDragTrampoline);
+                Excef.excef_set_drag_image_callback(&DragImageTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -960,6 +979,37 @@ public static class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         b.RaiseAccessibilityLocationChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void DragImageTrampoline(
+        int browserId, void* buffer, int width, int height, int hotspotX, int hotspotY)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseDragImage((IntPtr)buffer, width, height, hotspotX, hotspotY);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int StartDragTrampoline(
+        int browserId, int allowedOps, int x, int y,
+        sbyte* text, sbyte* html, sbyte* linkUrl, sbyte* linkTitle,
+        sbyte** fileNames, int fileNameCount)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
+        if (!b.HasDragStartedSubscriber) return 0;
+
+        string[] files = fileNameCount > 0 ? new string[fileNameCount] : Array.Empty<string>();
+        for (int i = 0; i < fileNameCount; ++i)
+            files[i] = Marshal.PtrToStringUTF8((IntPtr)fileNames[i]) ?? "";
+
+        var args = new DragStartedEventArgs(
+            (DragOperations)allowedOps, x, y,
+            Marshal.PtrToStringUTF8((IntPtr)text) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)html) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)linkUrl) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)linkTitle) ?? "",
+            files);
+        return b.RaiseDragStarted(args) ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

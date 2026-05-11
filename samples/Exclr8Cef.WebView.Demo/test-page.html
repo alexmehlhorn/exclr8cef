@@ -254,7 +254,8 @@
 
   <section id="dnd">
     <h2>Drag &amp; drop</h2>
-    <p class="lede">Verifies internal page drag-and-drop (CefRenderHandler::StartDragging path).</p>
+    <p class="lede">Two paths: internal page drag (between dzA and dzB) and OS drag-in
+       (drop files from Finder onto either zone).</p>
     <div class="row">
       <div class="dz" id="dzA">
         <div class="item" draggable="true">Apple 🍎</div>
@@ -263,6 +264,7 @@
       </div>
       <div class="dz" id="dzB"></div>
     </div>
+    <p><small id="dndDropped">Drop a file here to see <code>e.dataTransfer.files</code> populate.</small></p>
   </section>
 
   <section id="scroll">
@@ -612,6 +614,12 @@
     dz.addEventListener('drop', (e) => {
       e.preventDefault();
       dz.classList.remove('over');
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        const names = Array.from(files).map(f => f.name + ' (' + f.size + 'B)').join(', ');
+        document.getElementById('dndDropped').textContent = 'Dropped ' + files.length + ': ' + names;
+        return;
+      }
       const id = e.dataTransfer.getData('text/plain');
       const el = document.getElementById(id);
       if (el) dz.appendChild(el);
