@@ -79,6 +79,56 @@ public partial class MainWindow : Window
         b.AutoResize            += OnBrowserAutoResize;
         b.JsDialog              += OnBrowserJsDialog;
         b.FileDialog            += OnBrowserFileDialog;
+        b.ContextMenu           += OnBrowserContextMenu;
+    }
+
+    private void OnBrowserContextMenu(object? sender, Exclr8Cef.ContextMenuEventArgs e)
+    {
+        LogEvent("contextmenu", $"({e.X},{e.Y}) {e.Items.Count} items");
+
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var menu = new Avalonia.Controls.MenuFlyout();
+            bool resolved = false;
+            foreach (var it in e.Items)
+            {
+                if (it.IsSeparator)
+                {
+                    menu.Items.Add(new Avalonia.Controls.Separator());
+                    continue;
+                }
+                var label = it.Label.Replace("&", "");
+                var mi = new Avalonia.Controls.MenuItem { Header = label };
+                int id = it.CommandId;
+                mi.Click += (_, _) => { resolved = true; e.Continue(id); };
+                menu.Items.Add(mi);
+            }
+            // Dismiss without selection = cancel.
+            menu.Closed += (_, _) => { if (!resolved) e.Cancel(); };
+
+            // Position at click coords. ShowAt takes a placement target;
+            // we use the WebView itself with a small Popup placement
+            // workaround: an invisible Border at the click point.
+            var anchor = new Avalonia.Controls.Border
+            {
+                Width = 1, Height = 1,
+                Margin = new Avalonia.Thickness(e.X, e.Y, 0, 0),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
+                IsHitTestVisible = false,
+            };
+            // Add anchor to the WebView's parent panel temporarily.
+            if (Browser.Parent is Avalonia.Controls.Panel panel)
+            {
+                panel.Children.Add(anchor);
+                menu.ShowAt(anchor);
+                menu.Closed += (_, _) => panel.Children.Remove(anchor);
+            }
+            else
+            {
+                menu.ShowAt(Browser);
+            }
+        });
     }
 
     private async void OnBrowserFileDialog(object? sender, Exclr8Cef.FileDialogEventArgs e)
@@ -493,6 +543,7 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["autoresize"]      = SolidColorBrush.Parse("#fab387"),
         ["js-dialog"]       = SolidColorBrush.Parse("#cba6f7"),
         ["file-dialog"]     = SolidColorBrush.Parse("#cba6f7"),
+        ["contextmenu"]     = SolidColorBrush.Parse("#cba6f7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

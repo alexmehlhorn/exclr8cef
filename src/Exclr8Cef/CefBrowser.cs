@@ -124,6 +124,15 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<FileDialogEventArgs>? FileDialog;
 
     /// <summary>
+    /// Fires on right-click / long-press. In OSR mode CEF cannot render
+    /// the menu itself, so the host MUST render its own using the
+    /// supplied items and call <see cref="ContextMenuEventArgs.Continue"/>
+    /// with the chosen id, or <see cref="ContextMenuEventArgs.Cancel"/>.
+    /// Without a subscriber the menu is suppressed entirely.
+    /// </summary>
+    public event EventHandler<ContextMenuEventArgs>? ContextMenu;
+
+    /// <summary>
     /// Fires after the page's natural content size changes, but only when
     /// auto-resize is enabled (see <see cref="SetAutoResizeEnabled"/>).
     /// Width / height are in CSS pixels.
@@ -531,12 +540,16 @@ public sealed class CefBrowser : IDisposable
 
     internal bool HasJsDialogSubscriber => JsDialog is not null;
     internal bool HasFileDialogSubscriber => FileDialog is not null;
+    internal bool HasContextMenuSubscriber => ContextMenu is not null;
 
     internal void RaiseJsDialog(ulong token, Cef.JsDialogType type, string message, string defaultPrompt)
         => JsDialog?.Invoke(this, new JsDialogEventArgs(token, type, message, defaultPrompt));
 
     internal void RaiseFileDialog(ulong token, Cef.FileDialogMode mode, string title, string defaultPath, string[] filters)
         => FileDialog?.Invoke(this, new FileDialogEventArgs(token, mode, title, defaultPath, filters));
+
+    internal void RaiseContextMenu(ulong token, int x, int y, ContextMenuItem[] items)
+        => ContextMenu?.Invoke(this, new ContextMenuEventArgs(token, x, y, items));
 
     internal void RaisePainted(IntPtr buffer, int width, int height)
         => Painted?.Invoke(this, new PaintEventArgs(buffer, width, height));
@@ -618,6 +631,50 @@ public sealed class JsDialogEventArgs : EventArgs
     {
         if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
         unsafe { Native.Excef.excef_resolve_js_dialog(_token, 0, null); }
+    }
+}
+
+/// <summary>One entry in <see cref="ContextMenuEventArgs.Items"/>.</summary>
+/// <param name="CommandId">CEF's command id; 0 + empty label = separator.</param>
+/// <param name="Label">The display text (system locale).</param>
+public readonly record struct ContextMenuItem(int CommandId, string Label)
+{
+    public bool IsSeparator => CommandId == 0 && string.IsNullOrEmpty(Label);
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.ContextMenu"/>. Hosts MUST call exactly
+/// one of <see cref="Continue"/> / <see cref="Cancel"/>.
+/// </summary>
+public sealed class ContextMenuEventArgs : EventArgs
+{
+    private readonly ulong _token;
+    private int _resolved;
+
+    /// <summary>Click position in CSS pixels relative to the page.</summary>
+    public int X { get; }
+    /// <summary>Click position in CSS pixels relative to the page.</summary>
+    public int Y { get; }
+    /// <summary>The menu items CEF would have shown. Render these in the host UI.</summary>
+    public IReadOnlyList<ContextMenuItem> Items { get; }
+
+    internal ContextMenuEventArgs(ulong token, int x, int y, ContextMenuItem[] items)
+    {
+        _token = token; X = x; Y = y; Items = items;
+    }
+
+    /// <summary>Resolve with the chosen command id (must match one of <see cref="Items"/>).</summary>
+    public void Continue(int commandId)
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Native.Excef.excef_resolve_context_menu(_token, commandId);
+    }
+
+    /// <summary>Dismiss without executing any command.</summary>
+    public void Cancel()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        Native.Excef.excef_resolve_context_menu(_token, -1);
     }
 }
 

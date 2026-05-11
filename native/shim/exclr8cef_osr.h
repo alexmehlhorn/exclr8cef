@@ -5,6 +5,7 @@
 #define EXCLR8CEF_OSR_H_
 
 #include "include/cef_client.h"
+#include "include/cef_context_menu_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_jsdialog_handler.h"
@@ -22,7 +23,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefDisplayHandler,
                             public CefLoadHandler,
                             public CefJSDialogHandler,
-                            public CefDialogHandler {
+                            public CefDialogHandler,
+                            public CefContextMenuHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -34,6 +36,7 @@ public:
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
     CefRefPtr<CefDialogHandler> GetDialogHandler() override { return this; }
+    CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -77,6 +80,13 @@ public:
                        const std::vector<CefString>& accept_extensions,
                        const std::vector<CefString>& accept_descriptions,
                        CefRefPtr<CefFileDialogCallback> callback) override;
+
+    // CefContextMenuHandler
+    bool RunContextMenu(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame,
+                         CefRefPtr<CefContextMenuParams> params,
+                         CefRefPtr<CefMenuModel> model,
+                         CefRefPtr<CefRunContextMenuCallback> callback) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

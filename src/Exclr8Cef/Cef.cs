@@ -482,6 +482,7 @@ public static class Cef
                 Excef.excef_set_auto_resize_callback(&AutoResizeTrampoline);
                 Excef.excef_set_js_dialog_callback(&JsDialogTrampoline);
                 Excef.excef_set_file_dialog_callback(&FileDialogTrampoline);
+                Excef.excef_set_context_menu_callback(&ContextMenuTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -632,6 +633,43 @@ public static class Cef
             (JsDialogType)dialogType,
             Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ContextMenuTrampoline(int browserId, ulong token, int x, int y, sbyte* itemsJoined)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            Excef.excef_resolve_context_menu(token, -1);
+            return;
+        }
+        if (!b.HasContextMenuSubscriber)
+        {
+            Excef.excef_resolve_context_menu(token, -1);
+            return;
+        }
+        var raw = Marshal.PtrToStringUTF8((IntPtr)itemsJoined) ?? "";
+        var items = ParseContextMenuItems(raw);
+        b.RaiseContextMenu(token, x, y, items);
+    }
+
+    private static ContextMenuItem[] ParseContextMenuItems(string raw)
+    {
+        if (raw.Length == 0) return Array.Empty<ContextMenuItem>();
+        var lines = raw.Split('\n');
+        var result = new ContextMenuItem[lines.Length];
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var tab = lines[i].IndexOf('\t');
+            int id = 0; string label = "";
+            if (tab >= 0)
+            {
+                int.TryParse(lines[i].AsSpan(0, tab), out id);
+                label = lines[i][(tab + 1)..];
+            }
+            result[i] = new ContextMenuItem(id, label);
+        }
+        return result;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

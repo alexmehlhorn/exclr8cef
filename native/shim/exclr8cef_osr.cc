@@ -41,6 +41,7 @@ excef_scroll_offset_cb_t g_scroll_offset_cb = nullptr;
 excef_auto_resize_cb_t g_auto_resize_cb = nullptr;
 excef_js_dialog_cb_t g_js_dialog_cb = nullptr;
 excef_file_dialog_cb_t g_file_dialog_cb = nullptr;
+excef_context_menu_cb_t g_context_menu_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -54,11 +55,17 @@ struct PendingFileDialog {
     int browser_id;
     CefRefPtr<CefFileDialogCallback> callback;
 };
+struct PendingContextMenu {
+    int browser_id;
+    CefRefPtr<CefRunContextMenuCallback> callback;
+};
 std::atomic<uint64_t> g_next_token{1};
 std::mutex g_js_dialog_mu;
 std::map<uint64_t, PendingJsDialog> g_js_dialog_pending;
 std::mutex g_file_dialog_mu;
 std::map<uint64_t, PendingFileDialog> g_file_dialog_pending;
+std::mutex g_context_menu_mu;
+std::map<uint64_t, PendingContextMenu> g_context_menu_pending;
 
 }  // namespace
 
@@ -166,6 +173,44 @@ bool Exclr8CefOsrHandler::OnBeforeUnloadDialog(CefRefPtr<CefBrowser> /*browser*/
     return true;
 }
 
+bool Exclr8CefOsrHandler::RunContextMenu(CefRefPtr<CefBrowser> /*browser*/,
+                                          CefRefPtr<CefFrame> /*frame*/,
+                                          CefRefPtr<CefContextMenuParams> params,
+                                          CefRefPtr<CefMenuModel> model,
+                                          CefRefPtr<CefRunContextMenuCallback> callback) {
+    if (!g_context_menu_cb) return false;  // fall back: suppress (no menu in OSR)
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_context_menu_mu);
+        g_context_menu_pending[token] = PendingContextMenu{id_, callback};
+    }
+
+    // Serialize top-level command items only. Format: "<id>\t<label>" per
+    // line; separators encode as "0\t". Submenus / checks / radios are
+    // flattened to plain entries for v1.
+    std::string items;
+    size_t count = model->GetCount();
+    for (size_t i = 0; i < count; ++i) {
+        cef_menu_item_type_t t = model->GetTypeAt(i);
+        if (t == MENUITEMTYPE_SEPARATOR) {
+            if (!items.empty()) items += '\n';
+            items += "0\t";
+            continue;
+        }
+        // Treat COMMAND / CHECK / RADIO uniformly; skip submenus (their
+        // command id is 0 and selecting them would be ambiguous).
+        if (t == MENUITEMTYPE_SUBMENU) continue;
+        int id = model->GetCommandIdAt(i);
+        std::string label = model->GetLabelAt(i).ToString();
+        if (!items.empty()) items += '\n';
+        items += std::to_string(id);
+        items += '\t';
+        items += label;
+    }
+    g_context_menu_cb(id_, token, params->GetXCoord(), params->GetYCoord(), items.c_str());
+    return true;
+}
+
 bool Exclr8CefOsrHandler::OnFileDialog(CefRefPtr<CefBrowser> /*browser*/,
                                         FileDialogMode mode,
                                         const CefString& title,
@@ -252,6 +297,17 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->second.browser_id == closed_id) {
                 if (it->second.callback) it->second.callback->Cancel();
                 it = g_file_dialog_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_context_menu_mu);
+        for (auto it = g_context_menu_pending.begin(); it != g_context_menu_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.callback) it->second.callback->Cancel();
+                it = g_context_menu_pending.erase(it);
             } else {
                 ++it;
             }
@@ -702,6 +758,7 @@ extern "C" void excef_set_scroll_offset_callback(excef_scroll_offset_cb_t cb) { 
 extern "C" void excef_set_auto_resize_callback(excef_auto_resize_cb_t cb) { exclr8cef::g_auto_resize_cb = cb; }
 extern "C" void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb) { exclr8cef::g_js_dialog_cb = cb; }
 extern "C" void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb) { exclr8cef::g_file_dialog_cb = cb; }
+extern "C" void excef_set_context_menu_callback(excef_context_menu_cb_t cb) { exclr8cef::g_context_menu_cb = cb; }
 
 namespace {
 // CefPostTask in this CEF version doesn't take naked lambdas via base::BindOnce
@@ -728,6 +785,21 @@ private:
     CefRefPtr<CefFileDialogCallback> cb_;
     std::vector<CefString> paths_;
     IMPLEMENT_REFCOUNTING(FileDialogResolveTask);
+};
+
+class ContextMenuResolveTask : public CefTask {
+public:
+    ContextMenuResolveTask(CefRefPtr<CefRunContextMenuCallback> cb, int command_id)
+        : cb_(std::move(cb)), command_id_(command_id) {}
+    void Execute() override {
+        if (!cb_) return;
+        if (command_id_ < 0) cb_->Cancel();
+        else cb_->Continue(command_id_, EVENTFLAG_NONE);
+    }
+private:
+    CefRefPtr<CefRunContextMenuCallback> cb_;
+    int command_id_;
+    IMPLEMENT_REFCOUNTING(ContextMenuResolveTask);
 };
 }  // namespace
 
@@ -768,6 +840,27 @@ extern "C" void excef_resolve_file_dialog(uint64_t token, const char* paths) {
     } else {
         CefPostTask(TID_UI, CefRefPtr<CefTask>(
             new FileDialogResolveTask(callback, std::move(selected))));
+    }
+}
+
+// Resolve a pending context menu. -1 = cancel; otherwise the chosen
+// command id (must be one of the items we surfaced via the menu callback).
+extern "C" void excef_resolve_context_menu(uint64_t token, int command_id) {
+    CefRefPtr<CefRunContextMenuCallback> callback;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_context_menu_mu);
+        auto it = exclr8cef::g_context_menu_pending.find(token);
+        if (it == exclr8cef::g_context_menu_pending.end()) return;
+        callback = it->second.callback;
+        exclr8cef::g_context_menu_pending.erase(it);
+    }
+    if (!callback) return;
+    if (CefCurrentlyOn(TID_UI)) {
+        if (command_id < 0) callback->Cancel();
+        else callback->Continue(command_id, EVENTFLAG_NONE);
+    } else {
+        CefPostTask(TID_UI, CefRefPtr<CefTask>(
+            new ContextMenuResolveTask(callback, command_id)));
     }
 }
 

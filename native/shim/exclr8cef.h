@@ -517,6 +517,28 @@ EXCEF_API void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb);
 // NULL or empty string to cancel (the page sees an empty selection).
 EXCEF_API void excef_resolve_file_dialog(unsigned long long token, const char* paths);
 
+// ---- Context-menu handler ----------------------------------------------
+//
+// CefContextMenuHandler::RunContextMenu. Fires on right-click / long-press.
+// The page-side `params` includes the click coordinates and selection /
+// link / image info; we expose x,y here and serialize the model's command
+// items as "<id>\t<label>" per line (separators come through as id=0 with
+// empty label; submenus are flattened — first level only in v1).
+//
+// In OSR mode CEF cannot render the menu itself, so the host MUST render
+// its own and call excef_resolve_context_menu with the chosen command id
+// (or -1 to cancel). Without a host subscriber the menu is suppressed.
+typedef void (*excef_context_menu_cb_t)(
+    int browser_id,
+    unsigned long long token,
+    int x, int y,
+    const char* items_joined);
+
+EXCEF_API void excef_set_context_menu_callback(excef_context_menu_cb_t cb);
+
+// Resolve with the chosen command id, or -1 to dismiss without action.
+EXCEF_API void excef_resolve_context_menu(unsigned long long token, int command_id);
+
 // ---- IME -----------------------------------------------------------------
 //
 // Forwards composition events to CEF. Avalonia IME integration uses these
