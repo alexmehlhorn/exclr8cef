@@ -1,34 +1,62 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace Exclr8Cef.WebView.Demo;
 
 public partial class MainWindow : Window
 {
+    /// <summary>
+    /// Backing collection for the host-side event console pane. Every CEF
+    /// callback we surface to .NET (navigation, title, loading, cursor, …)
+    /// pushes a row through <see cref="LogEvent"/>. As phases land, more
+    /// categories (Console, Load, Download, Dialog, …) will appear here.
+    /// </summary>
+    public ObservableCollection<EventEntry> Events { get; } = new();
+
+    private const int MaxEvents = 500;
+
     public MainWindow()
     {
         InitializeComponent();
+        DataContext = this;
 
-        // Load the bundled test page from disk. data: URLs are too fragile
-        // for any non-trivial HTML/JS due to URI-reserved char escaping
-        // (`?`, `|`, etc. would silently break the parser).
         var htmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, "test-page.html");
         if (System.IO.File.Exists(htmlPath))
         {
             Browser.Url = "file://" + htmlPath;
         }
 
-        // Track WebView property changes to drive the address bar, title,
-        // and nav-button enablement.
         Browser.PropertyChanged += OnBrowserPropertyChanged;
 
-        // Initial state.
         AddressBox.Text = Browser.Url;
         BackButton.IsEnabled = Browser.CanGoBack;
         ForwardButton.IsEnabled = Browser.CanGoForward;
+
+        LogEvent("init", "Demo started");
     }
+
+    private void LogEvent(string category, string message)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => LogEvent(category, message));
+            return;
+        }
+
+        Events.Add(new EventEntry(DateTime.Now.ToString("HH:mm:ss.fff"), category, message));
+        while (Events.Count > MaxEvents) Events.RemoveAt(0);
+
+        EventScroller.ScrollToEnd();
+    }
+
+    private void OnClearEventsClick(object? sender, RoutedEventArgs e) => Events.Clear();
 
     private void OnBrowserPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
@@ -36,6 +64,7 @@ public partial class MainWindow : Window
         {
             var url = e.GetNewValue<string>();
             if (AddressBox.Text != url) AddressBox.Text = url;
+            LogEvent("url", url ?? "");
         }
         else if (e.Property == Exclr8Cef.WebView.WebView.TitleProperty)
         {
@@ -44,12 +73,14 @@ public partial class MainWindow : Window
             Title = string.IsNullOrEmpty(title)
                 ? "Exclr8CEF Avalonia Demo"
                 : $"{title} — Exclr8CEF Avalonia Demo";
+            LogEvent("title", title ?? "");
         }
         else if (e.Property == Exclr8Cef.WebView.WebView.IsLoadingProperty)
         {
             var loading = e.GetNewValue<bool>();
             ReloadButton.Content = loading ? "✕" : "⟳";
             StatusText.Text = loading ? "Loading…" : "";
+            LogEvent("loading", loading ? "started" : "finished");
         }
         else if (e.Property == Exclr8Cef.WebView.WebView.CanGoBackProperty)
         {
@@ -81,10 +112,12 @@ public partial class MainWindow : Window
                 "url: location.href, " +
                 "now: new Date().toISOString() })");
             StatusText.Text = $"JS → {result}";
+            LogEvent("js", result);
         }
         catch (Exception ex)
         {
             StatusText.Text = $"JS error: {ex.Message}";
+            LogEvent("js-err", ex.Message);
         }
     }
 
@@ -113,10 +146,41 @@ public partial class MainWindow : Window
         {
             bool ok = await Browser.PrintToPdfAsync(path);
             StatusText.Text = ok ? $"Saved: {path}" : "PDF export failed.";
+            LogEvent("pdf", ok ? path : "failed");
         }
         finally
         {
             SavePdfButton.IsEnabled = true;
         }
     }
+}
+
+/// <summary>A single row in the event console.</summary>
+public sealed record EventEntry(string Time, string Category, string Message);
+
+/// <summary>
+/// Maps an event category to a coloured badge background. Adding a new
+/// category? Add a colour here; unmapped categories fall back to the
+/// neutral pill colour.
+/// </summary>
+public sealed class CategoryToBrushConverter : IValueConverter
+{
+    private static readonly Dictionary<string, IBrush> Map = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["init"]      = SolidColorBrush.Parse("#94e2d5"),
+        ["url"]       = SolidColorBrush.Parse("#89b4fa"),
+        ["title"]     = SolidColorBrush.Parse("#cba6f7"),
+        ["loading"]   = SolidColorBrush.Parse("#f9e2af"),
+        ["js"]        = SolidColorBrush.Parse("#a6e3a1"),
+        ["js-err"]    = SolidColorBrush.Parse("#f38ba8"),
+        ["pdf"]       = SolidColorBrush.Parse("#fab387"),
+    };
+
+    private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");
+
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is string cat && Map.TryGetValue(cat, out var b) ? b : Fallback;
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
 }

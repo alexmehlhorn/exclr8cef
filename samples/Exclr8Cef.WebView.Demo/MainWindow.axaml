@@ -1,10 +1,17 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:cef="using:Exclr8Cef.WebView"
+        xmlns:demo="using:Exclr8Cef.WebView.Demo"
         x:Class="Exclr8Cef.WebView.Demo.MainWindow"
+        x:DataType="demo:MainWindow"
         Title="Exclr8CEF Avalonia Demo"
-        Width="1200" Height="800">
+        Width="1280" Height="900">
+    <Window.Resources>
+        <demo:CategoryToBrushConverter x:Key="CategoryBrush" />
+    </Window.Resources>
+
     <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <!-- Branding strip -->
         <Border Grid.Row="0" Background="#1E1E2E" Padding="16,8">
             <StackPanel Orientation="Vertical" Spacing="2">
                 <TextBlock Text="Exclr8Cef.WebView — embedded Chromium inside Avalonia (OSR)"
@@ -27,7 +34,51 @@
             </DockPanel>
         </Border>
 
-        <cef:WebView Grid.Row="2" Name="Browser" />
+        <!-- WebView on top, splitter, event console at bottom -->
+        <Grid Grid.Row="2" RowDefinitions="*,Auto,220">
+            <cef:WebView Grid.Row="0" Name="Browser" />
+
+            <GridSplitter Grid.Row="1" Height="4" Background="#181825"
+                          HorizontalAlignment="Stretch"
+                          ResizeDirection="Rows" />
+
+            <Border Grid.Row="2" Background="#11111B" BorderBrush="#313244" BorderThickness="0,1,0,0">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Grid.Row="0" Background="#181825" Padding="10,4">
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Right" Content="Clear" Click="OnClearEventsClick"
+                                    Padding="8,2" FontSize="11" Background="Transparent"
+                                    Foreground="#A6ADC8" />
+                            <TextBlock Text="Events" Foreground="#CDD6F4" FontWeight="SemiBold"
+                                       FontSize="12" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </Border>
+                    <ScrollViewer Grid.Row="1" Name="EventScroller" Padding="0">
+                        <ItemsControl Name="EventsList" ItemsSource="{Binding Events}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="demo:EventEntry">
+                                    <Grid ColumnDefinitions="80,90,*" Margin="10,2">
+                                        <TextBlock Grid.Column="0" Text="{Binding Time}"
+                                                   Foreground="#6C7086" FontFamily="ui-monospace,Menlo,Consolas,monospace"
+                                                   FontSize="11" />
+                                        <Border Grid.Column="1" CornerRadius="3" Padding="4,1"
+                                                Margin="0,0,8,0"
+                                                Background="{Binding Category, Converter={StaticResource CategoryBrush}}"
+                                                HorizontalAlignment="Left">
+                                            <TextBlock Text="{Binding Category}" FontSize="10"
+                                                       FontWeight="SemiBold" Foreground="#11111B" />
+                                        </Border>
+                                        <TextBlock Grid.Column="2" Text="{Binding Message}"
+                                                   Foreground="#CDD6F4" FontFamily="ui-monospace,Menlo,Consolas,monospace"
+                                                   FontSize="11" TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
 
         <Border Grid.Row="3" Background="#181825" Padding="12,4">
             <TextBlock Name="StatusText" Foreground="#A6E3A1" FontSize="11" />
