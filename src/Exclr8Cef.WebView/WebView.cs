@@ -352,6 +352,8 @@ public class WebView : Control
     // shortcuts exist so XAML data-binding scenarios don't need a null
     // check on Browser when the control isn't yet ready.
 
+    /// <summary>Load the given URL. Equivalent to setting <see cref="Url"/>.</summary>
+    public void LoadUrl(string url) => _browser?.LoadUrl(url);
     public void GoBack()      => _browser?.GoBack();
     public void GoForward()   => _browser?.GoForward();
     public void Reload(bool ignoreCache = false) => _browser?.Reload(ignoreCache);

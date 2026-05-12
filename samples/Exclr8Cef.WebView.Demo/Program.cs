@@ -23,11 +23,15 @@ internal static class Program
 
         // --mode=windowed: pure CEF Chrome-runtime browser window (no Avalonia, no OSR).
         // --mode=embedded: Avalonia hosts an embedded Alloy CEF browser via native NSView.
-        // Default: OSR Avalonia demo.
+        // --mode=compare:  side-by-side OSR + embedded in one window — proves both
+        //                  shipped controls coexist under a single CEF init.
+        // Default:         OSR Avalonia demo.
         if (args.Any(a => a.Equals("--mode=windowed", StringComparison.OrdinalIgnoreCase)))
             return RunWindowed(args);
         if (args.Any(a => a.Equals("--mode=embedded", StringComparison.OrdinalIgnoreCase)))
             return RunEmbedded(args);
+        if (args.Any(a => a.Equals("--mode=compare", StringComparison.OrdinalIgnoreCase)))
+            return RunCompare(args);
 
         Console.WriteLine($"Exclr8Cef {Cef.GetVersions().Shim} — OSR Avalonia demo");
 
@@ -165,6 +169,56 @@ internal static class Program
         // (our excef_create_browser_view uses SetAsChild + ALLOY).
         // The pump timer is created by BuildAvaloniaApp().AfterSetup —
         // no extra timer here.
+        Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
+
+        try { return lifetime.Start(avalArgs); }
+        finally { Cef.Shutdown(); }
+    }
+
+    // Side-by-side comparison: one window, one CEF init, both shipped
+    // controls (OSR WebView + embedded NativeWebView) rendering the same
+    // content via different paths. Demonstrates the mixed-mode contract:
+    // InitializeForOsr enables both rendering paths, the per-browser
+    // CefWindowInfo choice (windowless vs SetAsChild) is what differs.
+    private static int RunCompare(string[] args)
+    {
+        Console.WriteLine($"Exclr8Cef {Cef.GetVersions().Shim} — compare (OSR + embedded side by side)");
+
+        string? helperPath = null;
+        if (OperatingSystem.IsMacOS())
+        {
+            helperPath = Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory, "..", "Frameworks",
+                "exclr8cef_demo Helper.app", "Contents", "MacOS",
+                "exclr8cef_demo Helper"));
+        }
+
+        // Avalonia must come up before CEF on macOS for the obj-c class-
+        // collision reason — same as the embedded path.
+        App.MainWindowFactory = () => new CompareWindow();
+        var avalArgs = args.Where(a => !a.StartsWith("--mode=", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var lifetime = new ClassicDesktopStyleApplicationLifetime { Args = avalArgs };
+        BuildAvaloniaApp().SetupWithLifetime(lifetime);
+
+        var v = Cef.GetVersions();
+        var platform = OperatingSystem.IsMacOS()
+            ? "(Macintosh; Intel Mac OS X 10_15_7)"
+            : OperatingSystem.IsWindows()
+                ? "(Windows NT 10.0; Win64; x64)"
+                : "(X11; Linux x86_64)";
+        Cef.SetInitSettings(new Cef.CefSettings
+        {
+            CachePath = Path.Combine(AppContext.BaseDirectory, "cef-cache-compare"),
+            UserAgent = $"Mozilla/5.0 {platform} AppleWebKit/537.36 (KHTML, like Gecko) "
+                      + $"Chrome/{v.Chromium} Safari/537.36 Exclr8CefDemo/{v.Shim}",
+            PersistSessionCookies = true,
+            LogSeverity = Cef.CefLogSeverity.Warning,
+        });
+
+        // InitializeForOsr is the right pick: windowless_rendering_enabled
+        // = true ENABLES OSR (for cef:WebView) but does NOT forbid windowed
+        // Alloy browsers (cef:NativeWebView uses SetAsChild). Both controls
+        // in the CompareWindow create their browsers under this one init.
         Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
 
         try { return lifetime.Start(avalArgs); }
