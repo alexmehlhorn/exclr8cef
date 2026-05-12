@@ -221,6 +221,48 @@ internal static unsafe partial class Excef
     public static extern void excef_set_browser_focus(int browser_id, int focus);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_invalidate(int browser_id, int type);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_send_capture_lost_event(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_print(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_start_download(int browser_id, [NativeTypeName("const char *")] sbyte* url);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_windowless_frame_rate(int browser_id, int fps);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_windowless_frame_rate(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_send_touch_event(int browser_id, int id, float x, float y, float radius_x, float radius_y, float rotation_angle, float pressure, int type, int modifiers, int pointer_type);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_send_external_begin_frame(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_create_offscreen_browser_ex(int width, int height, float device_scale_factor, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("excef_paint_callback_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> paint, int context_handle, int flags);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_touch_handle_size_callback([NativeTypeName("excef_touch_handle_size_cb_t")] delegate* unmanaged[Cdecl]<int, int, int*, int*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_touch_handle_state_callback([NativeTypeName("excef_touch_handle_state_cb_t")] delegate* unmanaged[Cdecl]<int, int, uint, int, int, int, int, int, int, float, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_ime_composition_range_callback([NativeTypeName("excef_ime_composition_range_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_virtual_keyboard_callback([NativeTypeName("excef_virtual_keyboard_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_accelerated_paint_callback([NativeTypeName("excef_accelerated_paint_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, ulong, void*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_load_url(int browser_id, [NativeTypeName("const char *")] sbyte* url);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

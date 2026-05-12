@@ -491,6 +491,125 @@ EXCEF_API void excef_send_key_event(int browser_id, int type,
 
 EXCEF_API void excef_set_browser_focus(int browser_id, int focus);
 
+// ---- OSR low-level controls ----------------------------------------------
+//
+// All of these mirror CefBrowserHost methods. They mostly only make sense
+// in windowless (OSR) mode — windowed Alloy / Chrome runtime browsers
+// either ignore them or have their own paths.
+
+// Force CEF to repaint a region. type: 0 = main view (PET_VIEW),
+// 1 = popup (PET_POPUP).
+EXCEF_API void excef_invalidate(int browser_id, int type);
+
+// Tell CEF the OS captured the mouse away from the embedded page
+// (alt-tab, lock screen, modal dialog). Without this, an in-flight
+// drag can leave the page thinking the mouse is still pressed.
+EXCEF_API void excef_send_capture_lost_event(int browser_id);
+
+// Open the OS print dialog. PrintToPdfAsync is the other direction
+// (silent, fixed settings) — use this for user-driven print flows.
+EXCEF_API void excef_print(int browser_id);
+
+// Programmatically start a download for the given URL.
+EXCEF_API void excef_start_download(int browser_id, const char* url);
+
+// NB: SetMouseCursorChangeDisabled / IsMouseCursorChangeDisabled were
+// dropped from CefBrowserHost in CEF 147. For cursor-lock behaviour,
+// intercept the CursorChanged event on CefBrowser at the managed side
+// and override the host cursor — same effect, one layer up.
+
+// Runtime-adjust the windowless frame rate. The browser-creation default
+// is 30 fps; bump for media playback, drop to 1 for backgrounded tabs.
+EXCEF_API void excef_set_windowless_frame_rate(int browser_id, int fps);
+EXCEF_API int excef_get_windowless_frame_rate(int browser_id);
+
+// Touch event. type: 0=released, 1=pressed, 2=moved, 3=cancelled.
+// pointerType: 0=touch, 1=mouse, 2=pen, 3=eraser, 4=unknown.
+EXCEF_API void excef_send_touch_event(int browser_id,
+                                       int id,
+                                       float x, float y,
+                                       float radius_x, float radius_y,
+                                       float rotation_angle,
+                                       float pressure,
+                                       int type,
+                                       int modifiers,
+                                       int pointer_type);
+
+// Drive a single begin-frame to Chromium's compositor. Requires the
+// browser to have been created with external_begin_frame_enabled=1
+// (see excef_create_offscreen_browser_ex). Useful for deterministic
+// frame timing in record / replay / agent loops.
+EXCEF_API void excef_send_external_begin_frame(int browser_id);
+
+// ---- OSR render-handler events -----------------------------------------
+//
+// All four fire from the CEF UI thread. Hosts MUST hop to their UI
+// thread before touching managed UI state.
+
+// CEF asks the host for the touch-handle size (the little circles
+// drawn at selection endpoints on touch screens). orientation: 0=left,
+// 1=center, 2=right. Host writes *out_width / *out_height in DIPs.
+// Default-zero result means "use Chromium's default".
+typedef void (*excef_touch_handle_size_cb_t)(int browser_id,
+                                                int orientation,
+                                                int* out_width,
+                                                int* out_height);
+EXCEF_API void excef_set_touch_handle_size_callback(excef_touch_handle_size_cb_t cb);
+
+// Touch handle state update. Fields are flattened from CefTouchHandleState
+// — bit-test `flags` against cef_touch_handle_state_flags_t to know which
+// fields are set on this update.
+typedef void (*excef_touch_handle_state_cb_t)(int browser_id,
+                                                 int touch_handle_id,
+                                                 uint32_t flags,
+                                                 int enabled,
+                                                 int orientation,
+                                                 int mirror_vertical,
+                                                 int mirror_horizontal,
+                                                 int origin_x,
+                                                 int origin_y,
+                                                 float alpha);
+EXCEF_API void excef_set_touch_handle_state_callback(excef_touch_handle_state_cb_t cb);
+
+// IME composition range changed — Chromium telling the host where the
+// IME caret/composition rect is in view coordinates. Hosts wire this to
+// the OS IME candidate window so it positions correctly.
+// character_bounds is a flat array of 4*count ints (x,y,w,h per char) —
+// caller-owned, valid for the duration of the callback.
+typedef void (*excef_ime_composition_range_cb_t)(int browser_id,
+                                                   int selection_start,
+                                                   int selection_end,
+                                                   int character_count,
+                                                   const int* character_bounds);
+EXCEF_API void excef_set_ime_composition_range_callback(excef_ime_composition_range_cb_t cb);
+
+// On-screen keyboard request — page asked for a soft keyboard.
+// input_mode: cef_text_input_mode_t (0=default, 1=none, 2=text, 3=tel,
+// 4=url, 5=email, 6=numeric, 7=decimal, 8=search). 1 = hide.
+typedef void (*excef_virtual_keyboard_cb_t)(int browser_id, int input_mode);
+EXCEF_API void excef_set_virtual_keyboard_callback(excef_virtual_keyboard_cb_t cb);
+
+// ---- Accelerated paint (GPU shared-texture path) -----------------------
+//
+// Only fires when the browser was created with shared_texture_enabled=1
+// (excef_create_offscreen_browser_ex, flags & 0x2). Replaces the OnPaint
+// CPU buffer path. The handle is platform-specific:
+//   - macOS: IOSurfaceRef (cast the void* back to IOSurfaceRef)
+//   - Windows: NT shared handle (HANDLE)
+//   - Linux: gbm BO file descriptor (int via void*)
+//
+// The handle is owned by CEF and recycled — host code MUST copy / consume
+// before this callback returns. format is cef_color_type_t (0=BGRA8888,
+// 1=RGBA8888). timestamp_us is microseconds since capture start.
+typedef void (*excef_accelerated_paint_cb_t)(int browser_id,
+                                                int element_type,
+                                                int coded_width,
+                                                int coded_height,
+                                                int format,
+                                                uint64_t timestamp_us,
+                                                const void* shared_handle);
+EXCEF_API void excef_set_accelerated_paint_callback(excef_accelerated_paint_cb_t cb);
+
 // ---- Navigation / lifecycle ----------------------------------------------
 
 EXCEF_API void excef_load_url(int browser_id, const char* url);
@@ -1386,6 +1505,24 @@ EXCEF_API int excef_create_offscreen_browser_in_context(
     const char* url,
     excef_paint_callback_t paint,
     int context_handle);
+
+// Extended variant: combines _in_context with a flags bitmask for the
+// rarer CefWindowInfo toggles.
+//   bit 0 (0x1) = external_begin_frame_enabled — required for
+//                  excef_send_external_begin_frame; the standard
+//                  windowless_frame_rate timer stops driving frames.
+//   bit 1 (0x2) = shared_texture_enabled — CEF will deliver paints via
+//                  excef_accelerated_paint_cb_t (GPU shared-texture
+//                  handle) instead of the BGRA buffer in OnPaint.
+//                  The host must do platform-specific GPU interop to
+//                  consume the handle (IOSurface on macOS, NT handle on
+//                  Windows, dma-buf on Linux).
+EXCEF_API int excef_create_offscreen_browser_ex(
+    int width, int height, float device_scale_factor,
+    const char* url,
+    excef_paint_callback_t paint,
+    int context_handle,
+    int flags);
 
 
 // ---- IME -----------------------------------------------------------------

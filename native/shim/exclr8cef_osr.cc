@@ -108,6 +108,11 @@ excef_app_menu_visibility_cb_t g_app_menu_enabled_cb = nullptr;
 excef_page_action_visibility_cb_t g_page_action_visible_cb = nullptr;
 excef_toolbar_button_visibility_cb_t g_toolbar_button_visible_cb = nullptr;
 excef_should_handle_resource_cb_t g_should_handle_resource_cb = nullptr;
+excef_touch_handle_size_cb_t g_touch_handle_size_cb = nullptr;
+excef_touch_handle_state_cb_t g_touch_handle_state_cb = nullptr;
+excef_ime_composition_range_cb_t g_ime_composition_range_cb = nullptr;
+excef_virtual_keyboard_cb_t g_virtual_keyboard_cb = nullptr;
+excef_accelerated_paint_cb_t g_accelerated_paint_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -469,6 +474,75 @@ void Exclr8CefOsrHandler::OnPopupShow(CefRefPtr<CefBrowser> /*browser*/, bool sh
 
 void Exclr8CefOsrHandler::OnPopupSize(CefRefPtr<CefBrowser> /*browser*/, const CefRect& rect) {
     if (g_popup_size_cb) g_popup_size_cb(id_, rect.x, rect.y, rect.width, rect.height);
+}
+
+void Exclr8CefOsrHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> /*browser*/,
+                                              PaintElementType type,
+                                              const RectList& /*dirtyRects*/,
+                                              const CefAcceleratedPaintInfo& info) {
+    if (!g_accelerated_paint_cb) return;
+    // On macOS info.shared_texture_io_surface is the IOSurface handle.
+    // On Windows / Linux the corresponding field is on the same struct
+    // (compile-time selected by cef_types_<plat>.h). Either way it's a
+    // void* — the host casts back to the platform-specific type.
+    g_accelerated_paint_cb(id_,
+                            static_cast<int>(type),
+                            info.extra.coded_size.width,
+                            info.extra.coded_size.height,
+                            static_cast<int>(info.format),
+                            info.extra.timestamp,
+                            info.shared_texture_io_surface);
+}
+
+void Exclr8CefOsrHandler::GetTouchHandleSize(CefRefPtr<CefBrowser> /*browser*/,
+                                              cef_horizontal_alignment_t orientation,
+                                              CefSize& size) {
+    if (!g_touch_handle_size_cb) return;
+    int w = 0, h = 0;
+    g_touch_handle_size_cb(id_, static_cast<int>(orientation), &w, &h);
+    if (w > 0) size.width = w;
+    if (h > 0) size.height = h;
+}
+
+void Exclr8CefOsrHandler::OnTouchHandleStateChanged(CefRefPtr<CefBrowser> /*browser*/,
+                                                     const CefTouchHandleState& state) {
+    if (!g_touch_handle_state_cb) return;
+    g_touch_handle_state_cb(id_,
+                              state.touch_handle_id,
+                              state.flags,
+                              state.enabled,
+                              static_cast<int>(state.orientation),
+                              state.mirror_vertical,
+                              state.mirror_horizontal,
+                              state.origin.x,
+                              state.origin.y,
+                              state.alpha);
+}
+
+void Exclr8CefOsrHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> /*browser*/,
+                                                        const CefRange& selected_range,
+                                                        const RectList& character_bounds) {
+    if (!g_ime_composition_range_cb) return;
+    // Flatten character_bounds into a contiguous int array (4 ints per rect:
+    // x, y, width, height). Stack-allocated for typical small counts; the
+    // host copies what it needs inside the callback.
+    std::vector<int> flat;
+    flat.reserve(character_bounds.size() * 4);
+    for (const auto& r : character_bounds) {
+        flat.push_back(r.x);
+        flat.push_back(r.y);
+        flat.push_back(r.width);
+        flat.push_back(r.height);
+    }
+    g_ime_composition_range_cb(id_,
+                                 selected_range.from, selected_range.to,
+                                 static_cast<int>(character_bounds.size()),
+                                 flat.empty() ? nullptr : flat.data());
+}
+
+void Exclr8CefOsrHandler::OnVirtualKeyboardRequested(CefRefPtr<CefBrowser> /*browser*/,
+                                                      TextInputMode input_mode) {
+    if (g_virtual_keyboard_cb) g_virtual_keyboard_cb(id_, static_cast<int>(input_mode));
 }
 
 void Exclr8CefOsrHandler::OnAccessibilityTreeChange(CefRefPtr<CefValue> value) {
@@ -1681,14 +1755,15 @@ Exclr8CefOsrHandler* LookupOsrHandler(int browser_id) {
 // ---- C ABI implementations ------------------------------------------------
 
 namespace {
-// Shared browser-create core for both `excef_create_offscreen_browser`
-// (default global context) and `excef_create_offscreen_browser_in_context`
-// (host-supplied context).
+// Shared browser-create core for all OSR-create variants. `flags` is a
+// bitmask: bit 0 = external_begin_frame_enabled, bit 1 = shared_texture_enabled
+// (accelerated paint).
 int CreateOffscreenBrowserImpl(int width, int height,
                                 float device_scale_factor,
                                 const char* url,
                                 excef_paint_callback_t paint,
-                                CefRefPtr<CefRequestContext> request_context) {
+                                CefRefPtr<CefRequestContext> request_context,
+                                int flags) {
     if (!url || width <= 0 || height <= 0) return 0;
 
     int id = exclr8cef::g_next_id++;
@@ -1700,6 +1775,8 @@ int CreateOffscreenBrowserImpl(int width, int height,
     CefWindowInfo window_info;
     window_info.SetAsWindowless((CefWindowHandle)0);
     window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    if (flags & 0x1) window_info.external_begin_frame_enabled = true;
+    if (flags & 0x2) window_info.shared_texture_enabled = true;
 
     CefBrowserSettings browser_settings;
     browser_settings.windowless_frame_rate = 30;
@@ -1719,7 +1796,7 @@ extern "C" int excef_create_offscreen_browser(int width, int height,
                                               const char* url,
                                               excef_paint_callback_t paint) {
     return CreateOffscreenBrowserImpl(width, height, device_scale_factor,
-                                       url, paint, /*request_context=*/nullptr);
+                                       url, paint, /*request_context=*/nullptr, /*flags=*/0);
 }
 
 extern "C" int excef_create_offscreen_browser_in_context(
@@ -1734,7 +1811,22 @@ extern "C" int excef_create_offscreen_browser_in_context(
         ctx = it->second;
     }
     return CreateOffscreenBrowserImpl(width, height, device_scale_factor,
-                                       url, paint, ctx);
+                                       url, paint, ctx, /*flags=*/0);
+}
+
+extern "C" int excef_create_offscreen_browser_ex(
+        int width, int height, float device_scale_factor,
+        const char* url, excef_paint_callback_t paint,
+        int context_handle, int flags) {
+    CefRefPtr<CefRequestContext> ctx;
+    if (context_handle != 0) {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
+        auto it = exclr8cef::g_request_contexts.find(context_handle);
+        if (it == exclr8cef::g_request_contexts.end()) return 0;
+        ctx = it->second;
+    }
+    return CreateOffscreenBrowserImpl(width, height, device_scale_factor,
+                                       url, paint, ctx, flags);
 }
 
 extern "C" int excef_create_request_context(const char* cache_path) {
@@ -1966,6 +2058,21 @@ extern "C" void excef_set_toolbar_button_visible_callback(excef_toolbar_button_v
 extern "C" void excef_set_should_handle_resource_callback(excef_should_handle_resource_cb_t cb) {
     exclr8cef::g_should_handle_resource_cb = cb;
 }
+extern "C" void excef_set_touch_handle_size_callback(excef_touch_handle_size_cb_t cb) {
+    exclr8cef::g_touch_handle_size_cb = cb;
+}
+extern "C" void excef_set_touch_handle_state_callback(excef_touch_handle_state_cb_t cb) {
+    exclr8cef::g_touch_handle_state_cb = cb;
+}
+extern "C" void excef_set_ime_composition_range_callback(excef_ime_composition_range_cb_t cb) {
+    exclr8cef::g_ime_composition_range_cb = cb;
+}
+extern "C" void excef_set_virtual_keyboard_callback(excef_virtual_keyboard_cb_t cb) {
+    exclr8cef::g_virtual_keyboard_cb = cb;
+}
+extern "C" void excef_set_accelerated_paint_callback(excef_accelerated_paint_cb_t cb) {
+    exclr8cef::g_accelerated_paint_cb = cb;
+}
 
 extern "C" void excef_resolve_resource_handler_request(
         uint64_t token,
@@ -2173,6 +2280,76 @@ extern "C" void excef_send_key_event(int browser_id, int type,
 extern "C" void excef_set_browser_focus(int browser_id, int focus) {
     auto b = get_browser(browser_id);
     if (b) b->GetHost()->SetFocus(focus != 0);
+}
+
+// ---- OSR low-level controls (all on CefBrowserHost) -----------------------
+
+extern "C" void excef_invalidate(int browser_id, int type) {
+    auto b = get_browser(browser_id);
+    if (b) {
+        auto et = type == 1 ? PET_POPUP : PET_VIEW;
+        b->GetHost()->Invalidate(et);
+    }
+}
+
+extern "C" void excef_send_capture_lost_event(int browser_id) {
+    auto b = get_browser(browser_id);
+    if (b) b->GetHost()->SendCaptureLostEvent();
+}
+
+extern "C" void excef_print(int browser_id) {
+    auto b = get_browser(browser_id);
+    if (b) b->GetHost()->Print();
+}
+
+extern "C" void excef_start_download(int browser_id, const char* url) {
+    auto b = get_browser(browser_id);
+    if (b && url && *url) b->GetHost()->StartDownload(url);
+}
+
+// NB: CEF 147 dropped CefBrowserHost::SetMouseCursorChangeDisabled /
+// IsMouseCursorChangeDisabled. Kiosks wanting cursor-lock should
+// intercept the CursorChanged event on CefBrowser and ignore (or set
+// the host cursor back to whatever they want) — equivalent effect at
+// the host-side rather than at the CefBrowserHost layer.
+
+extern "C" void excef_set_windowless_frame_rate(int browser_id, int fps) {
+    auto b = get_browser(browser_id);
+    if (b) b->GetHost()->SetWindowlessFrameRate(fps);
+}
+
+extern "C" int excef_get_windowless_frame_rate(int browser_id) {
+    auto b = get_browser(browser_id);
+    return b ? b->GetHost()->GetWindowlessFrameRate() : 0;
+}
+
+extern "C" void excef_send_touch_event(int browser_id,
+                                        int id, float x, float y,
+                                        float radius_x, float radius_y,
+                                        float rotation_angle,
+                                        float pressure,
+                                        int type,
+                                        int modifiers,
+                                        int pointer_type) {
+    auto b = get_browser(browser_id);
+    if (!b) return;
+    CefTouchEvent ev{};
+    ev.id = id;
+    ev.x = x;
+    ev.y = y;
+    ev.radius_x = radius_x;
+    ev.radius_y = radius_y;
+    ev.rotation_angle = rotation_angle;
+    ev.pressure = pressure;
+    ev.type = static_cast<cef_touch_event_type_t>(type);
+    ev.modifiers = static_cast<uint32_t>(modifiers);
+    ev.pointer_type = static_cast<cef_pointer_type_t>(pointer_type);
+    b->GetHost()->SendTouchEvent(ev);
+}
+
+extern "C" void excef_send_external_begin_frame(int browser_id) {
+    auto b = get_browser(browser_id);
+    if (b) b->GetHost()->SendExternalBeginFrame();
 }
 
 // ---- Navigation -----------------------------------------------------------

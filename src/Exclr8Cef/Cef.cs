@@ -397,18 +397,51 @@ public static class Cef
     /// surface, or <c>null</c> if creation failed.
     /// </summary>
     public static CefBrowser? CreateOffscreenBrowser(int width, int height, float deviceScaleFactor, string url, CefRequestContext? context = null)
+        => CreateOffscreenBrowserEx(width, height, deviceScaleFactor, url, context, OffscreenFlags.None);
+
+    /// <summary>
+    /// Optional flags for <see cref="CreateOffscreenBrowserEx"/>. Map to
+    /// CefWindowInfo bits set at browser-creation time and can't be
+    /// toggled afterwards.
+    /// </summary>
+    [Flags]
+    public enum OffscreenFlags
+    {
+        None = 0,
+        /// <summary>
+        /// Set <c>external_begin_frame_enabled = true</c>. The host drives
+        /// frames via <see cref="CefBrowser.SendExternalBeginFrame"/>;
+        /// the normal windowless-frame-rate timer stops driving paints.
+        /// </summary>
+        ExternalBeginFrame = 0x1,
+        /// <summary>
+        /// Set <c>shared_texture_enabled = true</c>. CEF delivers paints
+        /// via <see cref="CefBrowser.AcceleratedPaint"/> with a
+        /// platform-specific shared-texture handle instead of the
+        /// <see cref="CefBrowser.Painted"/> CPU buffer. Consumer code must
+        /// do GPU interop to use the texture (IOSurface on macOS, NT
+        /// handle on Windows, dma-buf on Linux).
+        /// </summary>
+        SharedTexture = 0x2,
+    }
+
+    /// <summary>
+    /// Extended OSR browser factory — same as <see cref="CreateOffscreenBrowser"/>
+    /// plus <see cref="OffscreenFlags"/> for the rarer CefWindowInfo
+    /// toggles (external begin-frame, GPU shared-texture path).
+    /// </summary>
+    public static CefBrowser? CreateOffscreenBrowserEx(int width, int height, float deviceScaleFactor, string url, CefRequestContext? context, OffscreenFlags flags)
     {
         ArgumentNullException.ThrowIfNull(url);
-
         unsafe
         {
             sbyte* urlPtr = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
             try
             {
                 delegate* unmanaged[Cdecl]<int, void*, int, int, void> trampoline = &PaintTrampoline;
-                int id = context is null
-                    ? Excef.excef_create_offscreen_browser(width, height, deviceScaleFactor, urlPtr, trampoline)
-                    : Excef.excef_create_offscreen_browser_in_context(width, height, deviceScaleFactor, urlPtr, trampoline, context.Handle);
+                int id = Excef.excef_create_offscreen_browser_ex(
+                    width, height, deviceScaleFactor, urlPtr, trampoline,
+                    context?.Handle ?? 0, (int)flags);
                 if (id <= 0) return null;
                 var browser = new CefBrowser(id);
                 s_browsers[id] = browser;
@@ -837,6 +870,46 @@ public static class Cef
     /// <summary>CEF's <c>cef_zoom_command_t</c>; argument to <see cref="CefBrowser.CanZoom"/>.</summary>
     public enum CefZoomCommand { Out = 0, Reset = 1, In = 2 }
 
+    /// <summary>Which paint surface — main view or popup (e.g. dropdown overlay).</summary>
+    public enum PaintElementType { Main = 0, Popup = 1 }
+
+    /// <summary>CEF's <c>cef_touch_event_type_t</c>.</summary>
+    public enum CefTouchEventType { Released = 0, Pressed = 1, Moved = 2, Cancelled = 3 }
+
+    /// <summary>CEF's <c>cef_pointer_type_t</c>.</summary>
+    public enum CefPointerType { Touch = 0, Mouse = 1, Pen = 2, Eraser = 3, Unknown = 4 }
+
+    /// <summary>
+    /// CEF's <c>cef_text_input_mode_t</c> — argument to
+    /// <see cref="CefBrowser.VirtualKeyboardRequested"/>.
+    /// <see cref="None"/> means "hide any existing on-screen keyboard."
+    /// </summary>
+    public enum CefTextInputMode
+    {
+        Default = 0,
+        None = 1,
+        Text = 2,
+        Tel = 3,
+        Url = 4,
+        Email = 5,
+        Numeric = 6,
+        Decimal = 7,
+        Search = 8,
+    }
+
+    /// <summary>CEF's <c>cef_horizontal_alignment_t</c> — touch handle side.</summary>
+    public enum HorizontalAlignment { Left = 0, Center = 1, Right = 2 }
+
+    /// <summary>
+    /// CEF's <c>cef_color_type_t</c> — pixel format reported by
+    /// <see cref="CefBrowser.AcceleratedPaint"/>.
+    /// </summary>
+    public enum CefColorType
+    {
+        Bgra8888 = 0,
+        Rgba8888 = 1,
+    }
+
     /// <summary>
     /// Which JS dialog primitive triggered <see cref="CefBrowser.JsDialog"/>.
     /// Mirrors <c>cef_jsdialog_type_t</c>; <c>BeforeUnload</c> is our own
@@ -1216,6 +1289,11 @@ public static class Cef
                 Excef.excef_set_page_action_visible_callback(&PageActionVisibleTrampoline);
                 Excef.excef_set_toolbar_button_visible_callback(&ToolbarButtonVisibleTrampoline);
                 Excef.excef_set_should_handle_resource_callback(&ShouldHandleResourceTrampoline);
+                Excef.excef_set_touch_handle_size_callback(&TouchHandleSizeTrampoline);
+                Excef.excef_set_touch_handle_state_callback(&TouchHandleStateTrampoline);
+                Excef.excef_set_ime_composition_range_callback(&ImeCompositionRangeTrampoline);
+                Excef.excef_set_virtual_keyboard_callback(&VirtualKeyboardTrampoline);
+                Excef.excef_set_accelerated_paint_callback(&AcceleratedPaintTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -2070,6 +2148,84 @@ public static class Cef
             return fn(args) ? 1 : 0;
         }
         catch { return 0; }
+    }
+
+    // ---- OSR render-handler trampolines -------------------------------
+    //
+    // All fire from the CEF UI thread. Routed through s_browsers, then
+    // the browser raises a per-instance event. Consumers HOP to UI
+    // thread inside their handler if they want to touch UI state.
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void TouchHandleSizeTrampoline(int browserId, int orientation,
+                                                          int* outWidth, int* outHeight)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new TouchHandleSizeRequest((HorizontalAlignment)orientation);
+        try { b.RaiseTouchHandleSizeRequest(args); }
+        catch { return; }
+        if (outWidth  != null) *outWidth  = args.Width;
+        if (outHeight != null) *outHeight = args.Height;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void TouchHandleStateTrampoline(
+        int browserId, int handleId, uint flags, int enabled,
+        int orientation, int mirrorV, int mirrorH,
+        int originX, int originY, float alpha)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new TouchHandleStateEventArgs(
+            handleId, flags, enabled != 0,
+            (HorizontalAlignment)orientation, mirrorV != 0, mirrorH != 0,
+            originX, originY, alpha);
+        try { b.RaiseTouchHandleStateChanged(args); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ImeCompositionRangeTrampoline(
+        int browserId, int selectionStart, int selectionEnd,
+        int characterCount, int* characterBounds)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var rects = new System.Drawing.Rectangle[characterCount];
+        if (characterBounds != null)
+        {
+            for (int i = 0; i < characterCount; ++i)
+                rects[i] = new System.Drawing.Rectangle(
+                    characterBounds[i * 4 + 0],
+                    characterBounds[i * 4 + 1],
+                    characterBounds[i * 4 + 2],
+                    characterBounds[i * 4 + 3]);
+        }
+        var args = new ImeCompositionRangeEventArgs(selectionStart, selectionEnd, rects);
+        try { b.RaiseImeCompositionRangeChanged(args); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void VirtualKeyboardTrampoline(int browserId, int inputMode)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        try { b.RaiseVirtualKeyboardRequested((CefTextInputMode)inputMode); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AcceleratedPaintTrampoline(
+        int browserId, int elementType, int codedWidth, int codedHeight,
+        int format, ulong timestampUs, void* sharedHandle)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new AcceleratedPaintEventArgs(
+            (PaintElementType)elementType,
+            codedWidth, codedHeight,
+            (CefColorType)format,
+            (long)timestampUs,
+            (IntPtr)sharedHandle);
+        try { b.RaiseAcceleratedPaint(args); }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

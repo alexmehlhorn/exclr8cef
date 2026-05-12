@@ -95,6 +95,22 @@ public:
     void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
     void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
 
+    // OSR-specific render-handler events the host can subscribe to.
+    void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
+                              PaintElementType type,
+                              const RectList& dirtyRects,
+                              const CefAcceleratedPaintInfo& info) override;
+    void GetTouchHandleSize(CefRefPtr<CefBrowser> browser,
+                              cef_horizontal_alignment_t orientation,
+                              CefSize& size) override;
+    void OnTouchHandleStateChanged(CefRefPtr<CefBrowser> browser,
+                                     const CefTouchHandleState& state) override;
+    void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,
+                                        const CefRange& selected_range,
+                                        const RectList& character_bounds) override;
+    void OnVirtualKeyboardRequested(CefRefPtr<CefBrowser> browser,
+                                       TextInputMode input_mode) override;
+
     // CefAccessibilityHandler
     void OnAccessibilityTreeChange(CefRefPtr<CefValue> value) override;
     void OnAccessibilityLocationChange(CefRefPtr<CefValue> value) override;

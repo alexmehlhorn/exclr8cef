@@ -358,6 +358,50 @@ public sealed class CefBrowser : IDisposable
     /// <summary>CefAudioHandler::OnAudioStreamError — message describes the cause.</summary>
     public event EventHandler<string>? AudioStreamError;
 
+    // ---- OSR render-handler events (OSR-mode only) -----------------------
+    //
+    // None fire on the embedded NSView/HWND path — the platform widget owns
+    // its paint, touch, IME, etc. They're meaningful only when CefBrowser
+    // was created via CreateOffscreenBrowser / CreateOffscreenBrowserEx.
+
+    /// <summary>
+    /// CEF needs the size of a touch-selection handle in DIPs. Set
+    /// <see cref="TouchHandleSizeRequest.Width"/> and
+    /// <see cref="TouchHandleSizeRequest.Height"/> in the handler; default
+    /// (no subscriber or handler leaves zero) means "use Chromium's default."
+    /// </summary>
+    public event EventHandler<TouchHandleSizeRequest>? TouchHandleSizeRequested;
+
+    /// <summary>
+    /// Touch-selection handle state update — orientation, position, alpha.
+    /// Check <c>Flags</c> to know which fields are present on this update.
+    /// </summary>
+    public event EventHandler<TouchHandleStateEventArgs>? TouchHandleStateChanged;
+
+    /// <summary>
+    /// Chromium telling the host where the IME caret/composition rect is in
+    /// view coordinates. Wire to the OS IME so its candidate window
+    /// positions correctly.
+    /// </summary>
+    public event EventHandler<ImeCompositionRangeEventArgs>? ImeCompositionRangeChanged;
+
+    /// <summary>
+    /// Page requested an on-screen keyboard. Argument is the
+    /// <see cref="Cef.CefTextInputMode"/> (None = hide).
+    /// </summary>
+    public event EventHandler<Cef.CefTextInputMode>? VirtualKeyboardRequested;
+
+    /// <summary>
+    /// GPU shared-texture paint. Only fires when the browser was created
+    /// via <see cref="Cef.CreateOffscreenBrowserEx"/> with
+    /// <see cref="Cef.OffscreenFlags.SharedTexture"/>. The shared handle
+    /// in <see cref="AcceleratedPaintEventArgs.SharedHandle"/> is
+    /// platform-specific (IOSurfaceRef on macOS, NT handle on Windows,
+    /// dma-buf fd on Linux) and is only valid for the duration of the
+    /// handler — copy / consume before returning.
+    /// </summary>
+    public event EventHandler<AcceleratedPaintEventArgs>? AcceleratedPaint;
+
     /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
@@ -534,6 +578,91 @@ public sealed class CefBrowser : IDisposable
     public void WasHidden(bool hidden)
     {
         if (!_closed) Excef.excef_was_hidden(Id, hidden ? 1 : 0);
+    }
+
+    // ---- OSR low-level controls (mirror of CefBrowserHost::*) ---------
+
+    /// <summary>
+    /// Force CEF to repaint the given element. <see cref="Cef.PaintElementType.Main"/>
+    /// for the main view, <see cref="Cef.PaintElementType.Popup"/> for a
+    /// visible &lt;select&gt; / autocomplete / picker.
+    /// </summary>
+    public void Invalidate(Cef.PaintElementType type = Cef.PaintElementType.Main)
+    {
+        if (!_closed) Excef.excef_invalidate(Id, (int)type);
+    }
+
+    /// <summary>
+    /// Tell CEF the OS captured the mouse away from the page (alt-tab,
+    /// lock screen, modal dialog). Resets in-flight mousedown state.
+    /// </summary>
+    public void SendCaptureLostEvent()
+    {
+        if (!_closed) Excef.excef_send_capture_lost_event(Id);
+    }
+
+    /// <summary>
+    /// Open the OS print dialog for this browser. Different from
+    /// <c>PrintToPdfAsync</c> (which is silent + fixed settings) —
+    /// <c>Print()</c> shows the system printer picker.
+    /// </summary>
+    public void Print()
+    {
+        if (!_closed) Excef.excef_print(Id);
+    }
+
+    /// <summary>Programmatically start a download for the given URL.</summary>
+    public void StartDownload(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
+            try { Excef.excef_start_download(Id, p); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>
+    /// Windowless frame rate cap. Browser-creation default is 30 fps;
+    /// runtime-bump for media playback, drop to 1 for backgrounded tabs.
+    /// </summary>
+    public int WindowlessFrameRate
+    {
+        get => _closed ? 0 : Excef.excef_get_windowless_frame_rate(Id);
+        set { if (!_closed) Excef.excef_set_windowless_frame_rate(Id, value); }
+    }
+
+    /// <summary>
+    /// Forward a touch event to the embedded page. Required for
+    /// touch-screen Avalonia builds — CEF doesn't see OS touch events
+    /// directly in OSR mode.
+    /// </summary>
+    public void SendTouchEvent(int id, float x, float y,
+                                Cef.CefTouchEventType type,
+                                float radiusX = 0, float radiusY = 0,
+                                float rotationAngle = 0, float pressure = 1.0f,
+                                Cef.CefModifiers modifiers = Cef.CefModifiers.None,
+                                Cef.CefPointerType pointerType = Cef.CefPointerType.Touch)
+    {
+        if (!_closed)
+            Excef.excef_send_touch_event(Id, id, x, y, radiusX, radiusY,
+                                          rotationAngle, pressure,
+                                          (int)type, (int)modifiers,
+                                          (int)pointerType);
+    }
+
+    /// <summary>
+    /// Drive a single begin-frame to Chromium's compositor. Requires the
+    /// browser to have been created via <see cref="Cef.CreateOffscreenBrowserEx"/>
+    /// with <see cref="Cef.OffscreenFlags.ExternalBeginFrame"/> set —
+    /// otherwise the standard <see cref="WindowlessFrameRate"/> timer
+    /// drives frames and this is a no-op.
+    /// </summary>
+    public void SendExternalBeginFrame()
+    {
+        if (!_closed) Excef.excef_send_external_begin_frame(Id);
     }
 
     /// <summary>
@@ -1251,6 +1380,17 @@ public sealed class CefBrowser : IDisposable
         => AudioStreamStopped?.Invoke(this, EventArgs.Empty);
     internal void RaiseAudioError(string message)
         => AudioStreamError?.Invoke(this, message);
+
+    internal void RaiseTouchHandleSizeRequest(TouchHandleSizeRequest args)
+        => TouchHandleSizeRequested?.Invoke(this, args);
+    internal void RaiseTouchHandleStateChanged(TouchHandleStateEventArgs args)
+        => TouchHandleStateChanged?.Invoke(this, args);
+    internal void RaiseImeCompositionRangeChanged(ImeCompositionRangeEventArgs args)
+        => ImeCompositionRangeChanged?.Invoke(this, args);
+    internal void RaiseVirtualKeyboardRequested(Cef.CefTextInputMode mode)
+        => VirtualKeyboardRequested?.Invoke(this, mode);
+    internal void RaiseAcceleratedPaint(AcceleratedPaintEventArgs args)
+        => AcceleratedPaint?.Invoke(this, args);
 
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
@@ -2287,5 +2427,109 @@ public sealed class AudioPacketEventArgs : EventArgs
             System.Buffer.MemoryCopy((void*)Buffer, dst, arr.Length * sizeof(float), arr.Length * sizeof(float));
         }
         return arr;
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.TouchHandleSizeRequested"/>. The handler
+/// sets <see cref="Width"/> and <see cref="Height"/> in DIPs; leaving them
+/// at 0 means "use Chromium's default."
+/// </summary>
+public sealed class TouchHandleSizeRequest : EventArgs
+{
+    public Cef.HorizontalAlignment Orientation { get; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public TouchHandleSizeRequest(Cef.HorizontalAlignment orientation)
+    {
+        Orientation = orientation;
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.TouchHandleStateChanged"/>. Mirrors
+/// <c>cef_touch_handle_state_t</c>. Each call only updates the fields
+/// whose flag bit is set in <see cref="Flags"/>; the rest are stale but
+/// still echoed for convenience.
+/// </summary>
+public sealed class TouchHandleStateEventArgs : EventArgs
+{
+    /// <summary>Touch-handle id, incremented for each new handle.</summary>
+    public int HandleId { get; }
+    /// <summary>Bitmask of cef_touch_handle_state_flags_t values (which fields are present).</summary>
+    public uint Flags { get; }
+    public bool Enabled { get; }
+    public Cef.HorizontalAlignment Orientation { get; }
+    public bool MirrorVertical { get; }
+    public bool MirrorHorizontal { get; }
+    public int OriginX { get; }
+    public int OriginY { get; }
+    public float Alpha { get; }
+
+    public TouchHandleStateEventArgs(int handleId, uint flags, bool enabled,
+        Cef.HorizontalAlignment orientation, bool mirrorV, bool mirrorH,
+        int originX, int originY, float alpha)
+    {
+        HandleId = handleId;
+        Flags = flags;
+        Enabled = enabled;
+        Orientation = orientation;
+        MirrorVertical = mirrorV;
+        MirrorHorizontal = mirrorH;
+        OriginX = originX;
+        OriginY = originY;
+        Alpha = alpha;
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.ImeCompositionRangeChanged"/>. Selection
+/// is in character offsets; <see cref="CharacterBounds"/> rects are in
+/// view DIPs and snapshot-copied (safe to retain after the handler exits).
+/// </summary>
+public sealed class ImeCompositionRangeEventArgs : EventArgs
+{
+    public int SelectionStart { get; }
+    public int SelectionEnd { get; }
+    public System.Drawing.Rectangle[] CharacterBounds { get; }
+    public ImeCompositionRangeEventArgs(int selectionStart, int selectionEnd, System.Drawing.Rectangle[] bounds)
+    {
+        SelectionStart = selectionStart;
+        SelectionEnd = selectionEnd;
+        CharacterBounds = bounds;
+    }
+}
+
+/// <summary>
+/// Args for <see cref="CefBrowser.AcceleratedPaint"/>. The shared-texture
+/// handle is platform-specific and only valid for the duration of the
+/// event handler — the host MUST copy / consume before returning.
+/// </summary>
+public sealed class AcceleratedPaintEventArgs : EventArgs
+{
+    public Cef.PaintElementType ElementType { get; }
+    /// <summary>Full coded width of the frame in physical pixels.</summary>
+    public int CodedWidth { get; }
+    /// <summary>Full coded height of the frame in physical pixels.</summary>
+    public int CodedHeight { get; }
+    public Cef.CefColorType Format { get; }
+    /// <summary>Timestamp in microseconds since capture start.</summary>
+    public long TimestampMicroseconds { get; }
+    /// <summary>
+    /// Platform-specific shared-texture handle:
+    /// macOS: <c>IOSurfaceRef</c>. Windows: NT shared handle (HANDLE).
+    /// Linux: dma-buf fd (int).
+    /// </summary>
+    public IntPtr SharedHandle { get; }
+
+    public AcceleratedPaintEventArgs(Cef.PaintElementType type, int codedWidth, int codedHeight,
+        Cef.CefColorType format, long timestampUs, IntPtr sharedHandle)
+    {
+        ElementType = type;
+        CodedWidth = codedWidth;
+        CodedHeight = codedHeight;
+        Format = format;
+        TimestampMicroseconds = timestampUs;
+        SharedHandle = sharedHandle;
     }
 }
