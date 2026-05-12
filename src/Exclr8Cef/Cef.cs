@@ -311,6 +311,23 @@ public static partial class Cef
     }
 
     /// <summary>
+    /// Hide / show the embedded host widget (NSView on mac, HWND on win)
+    /// WITHOUT destroying its <see cref="CefBrowser"/>. Use when an
+    /// embedded browser would otherwise paint over sibling host content
+    /// (tab-switch surfaces, popovers, etc.) — Avalonia's
+    /// <c>ZIndex</c> / <c>Opacity</c> don't reorder native children,
+    /// so the host stays on top of every Avalonia draw call until the
+    /// UI framework hides it. Also notifies Chromium via
+    /// <c>CefBrowserHost::WasHidden</c> so it can throttle rendering
+    /// while hidden.
+    /// </summary>
+    public static void SetEmbeddedHostHidden(IntPtr hostView, bool hidden)
+    {
+        if (hostView == IntPtr.Zero) return;
+        unsafe { Excef.excef_set_embedded_host_hidden((void*)hostView, hidden ? 1 : 0); }
+    }
+
+    /// <summary>
     /// Phase 1 of two-phase embedded browser creation: allocate an empty
     /// host NSView. Return it to the UI framework via NativeControlHost so
     /// it gets parented to the window. Then call

@@ -15,7 +15,7 @@ namespace Exclr8Cef;
 /// variants) wrap an instance of this class and forward only the bits
 /// they need to wire to their host framework.
 /// </summary>
-public sealed class CefBrowser : IDisposable
+public sealed partial class CefBrowser : IDisposable
 {
     /// <summary>Browser id assigned by Exclr8Cef (≥ 1). Zero after close.</summary>
     public int Id { get; private set; }

@@ -132,6 +132,15 @@ EXCEF_API int excef_attach_embedded_browser_in_context(void* host_view,
 // from the UI framework. macOS-only for v0.
 EXCEF_API void excef_resize_browser_view(void* host_view, int width, int height);
 
+// Hide / show the host NSView (mac) / HWND (win) in place WITHOUT
+// destroying the browser. Use this to suppress an embedded browser
+// from painting over sibling host content (e.g. a tab-switch path
+// where the previous tab's NSView still draws on top of the new
+// foreground tab — Avalonia's ZIndex / Opacity don't reorder native
+// children). Also calls CefBrowserHost::WasHidden so Chromium can
+// throttle rendering work.
+EXCEF_API void excef_set_embedded_host_hidden(void* host_view, int hidden);
+
 // ---- Off-screen rendering (OSR) ------------------------------------------
 //
 // OSR mode: CEF doesn't create any native windows. Instead it renders to

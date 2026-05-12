@@ -65,6 +65,29 @@ public class NativeWebView : NativeControlHost, IWebView
     /// </summary>
     public void NavigateToUrl(string url) => Url = url;
 
+    /// <summary>
+    /// Hide or show the embedded host widget without closing the
+    /// underlying <see cref="CefBrowser"/>. The browser stays alive and
+    /// keeps any in-flight JS / DOM state; only the native widget is
+    /// hidden via <c>setHidden:</c> (mac) / <c>ShowWindow</c> (win),
+    /// and Chromium gets a <c>WasHidden</c> notification so it can
+    /// throttle work while we're off-screen.
+    /// <para>
+    /// Use this when sibling Avalonia content needs to draw on top of
+    /// the browser (e.g. tab-switch reveals a sibling tab) — Avalonia's
+    /// <c>ZIndex</c> / <c>Opacity</c> don't reorder or hide native
+    /// children, so a no-op here would leak this NSView/HWND through
+    /// every Avalonia draw.
+    /// </para>
+    /// No-op if the embedded host hasn't been created yet (still in
+    /// the pre-arrange phase).
+    /// </summary>
+    public void SetEmbeddedHidden(bool hidden)
+    {
+        if (_hostView == IntPtr.Zero) return;
+        Cef.SetEmbeddedHostHidden(_hostView, hidden);
+    }
+
     private string _title = "";
     public string Title
     {

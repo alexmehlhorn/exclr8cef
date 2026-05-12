@@ -243,10 +243,18 @@ extern "C" void* excef_create_embedded_host(int width, int height) {
 // Phase 2: attach a CEF browser to a previously-created host NSView.
 // Call this AFTER the UI framework has parented the NSView, so Chromium
 // can read the correct backingScaleFactor at browser-creation time.
-extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
-                                                          int width, int height,
-                                                          const char* url,
-                                                          int context_handle) {
+//
+// `background_color` (ARGB) sets the colour Chromium fills the
+// render target with before any HTML paints. CEF's default is opaque
+// white, which appears as a visible "white flash" on the embedded
+// NSView in the gap between attach and first page paint. Pass 0 to
+// keep CEF's default. Alpha must be either 0x00 (transparent) or
+// 0xFF (opaque) — Chromium ignores in-between values.
+extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
+                                                             int width, int height,
+                                                             const char* url,
+                                                             int context_handle,
+                                                             uint32_t background_color) {
     if (!host_view_ptr || !url) return 0;
     @autoreleasepool {
         NSView* host = (__bridge NSView*)host_view_ptr;
@@ -268,6 +276,9 @@ extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
         CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
 
         CefBrowserSettings browser_settings;
+        if (background_color != 0) {
+            browser_settings.background_color = background_color;
+        }
         bool ok = CefBrowserHost::CreateBrowser(
             window_info, handler.get(), url, browser_settings,
             /*extra_info=*/nullptr, pass);
@@ -281,10 +292,17 @@ extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
     }
 }
 
+extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
+                                                          int width, int height,
+                                                          const char* url,
+                                                          int context_handle) {
+    return excef_attach_embedded_browser_in_context_v2(host_view_ptr, width, height, url, context_handle, 0);
+}
+
 extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
                                               int width, int height,
                                               const char* url) {
-    return excef_attach_embedded_browser_in_context(host_view_ptr, width, height, url, 0);
+    return excef_attach_embedded_browser_in_context_v2(host_view_ptr, width, height, url, 0, 0);
 }
 
 extern "C" void* excef_create_browser_view_in_context(int width, int height,
@@ -347,6 +365,28 @@ extern "C" void* excef_create_browser_view(int width, int height,
 // backing browser so Chromium re-lays out the page viewport. Without
 // WasResized(), the page renders at its original viewport and overflows
 // when the window grows.
+// Hide/show the host NSView in place. Hosts that need to keep the
+// CefBrowser alive — but stop the NSView painting on top of sibling
+// Avalonia content (e.g. tab-switch scenarios where the embedded
+// browser would otherwise leak through the new foreground tab)
+// flip this. CEF's WasHidden() is also called to let Chromium throttle
+// rendering work while we're hidden.
+extern "C" void excef_set_embedded_host_hidden(void* host_view_ptr, int hidden) {
+    if (!host_view_ptr) return;
+    @autoreleasepool {
+        NSView* host = (__bridge NSView*)host_view_ptr;
+        BOOL hide = (hidden != 0);
+        if ([host isHidden] != hide) [host setHidden:hide];
+        auto it = g_host_to_id.find(host_view_ptr);
+        if (it != g_host_to_id.end()) {
+            auto* handler = exclr8cef::LookupOsrHandler(it->second);
+            if (handler && handler->browser()) {
+                handler->browser()->GetHost()->WasHidden(hide);
+            }
+        }
+    }
+}
+
 extern "C" void excef_resize_browser_view(void* host_view_ptr,
                                           int width, int height) {
     if (!host_view_ptr || width <= 0 || height <= 0) return;

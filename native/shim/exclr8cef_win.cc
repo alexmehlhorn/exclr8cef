@@ -268,6 +268,27 @@ extern "C" void* excef_create_browser_view(int width, int height,
 // Resize the host HWND, its child CEF window, and notify Chromium so
 // the page viewport relays out. Without WasResized() the page keeps
 // its original viewport size and overflows when the host grows.
+// Hide/show the host HWND in place. Mirrors the mac impl so callers
+// (e.g. VibeCoder's tab-switch path) can hide an embedded browser
+// without tearing it down. See exclr8cef_mac.mm for rationale.
+extern "C" void excef_set_embedded_host_hidden(void* host_view_ptr, int hidden) {
+    if (!host_view_ptr) return;
+    HWND host = reinterpret_cast<HWND>(host_view_ptr);
+    ShowWindow(host, hidden ? SW_HIDE : SW_SHOWNOACTIVATE);
+    int browser_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_host_map_mu);
+        auto it = g_host_to_id.find(host);
+        if (it != g_host_to_id.end()) browser_id = it->second;
+    }
+    if (browser_id != 0) {
+        auto* handler = exclr8cef::LookupOsrHandler(browser_id);
+        if (handler && handler->browser()) {
+            handler->browser()->GetHost()->WasHidden(hidden != 0);
+        }
+    }
+}
+
 extern "C" void excef_resize_browser_view(void* host_view_ptr,
                                           int width, int height) {
     if (!host_view_ptr || width <= 0 || height <= 0) return;
