@@ -514,6 +514,11 @@ public static class Cef
     /// <paramref name="url"/> to get all cookies. For partitioned cookies
     /// (per-profile) use <see cref="CefRequestContext.GetCookiesAsync"/>.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public static Task<List<CookieInfo>> GetCookiesAsync(string? url = null)
         => GetCookiesAsyncInContext(0, url);
 
@@ -614,9 +619,13 @@ public static class Cef
         Error = -1,
     }
 
-    /// <summary>Decision-point info passed to <see cref="ShouldFilterResponse"/>.</summary>
+    /// <summary>
+    /// Decision-point info passed to <see cref="ShouldFilterResponse"/>.
+    /// <see cref="Browser"/> may be null if the response originated from
+    /// a browser that's already torn down (rare, but possible).
+    /// </summary>
     public readonly record struct ResponseFilterDecision(
-        int BrowserId,
+        CefBrowser? Browser,
         ulong Token,
         string Url,
         int HttpStatus,
@@ -713,23 +722,25 @@ public static class Cef
 
     /// <summary>
     /// Return true to suppress Chrome's default handling of the command.
-    /// Return false to let Chrome execute its normal behavior.
+    /// Return false to let Chrome execute its normal behavior. The
+    /// browser argument may be null if the command originated outside
+    /// any tracked browser (e.g. menu bar with no active window).
     /// </summary>
-    public static Func<int, int, WindowOpenDisposition, bool>? OnChromeCommand
+    public static Func<CefBrowser?, int, WindowOpenDisposition, bool>? OnChromeCommand
     {
         get => s_onChromeCommand;
         set => s_onChromeCommand = value;
     }
 
     /// <summary>Return true = item visible in app menu; false = hide.</summary>
-    public static Func<int, int, bool>? IsChromeAppMenuItemVisible
+    public static Func<CefBrowser?, int, bool>? IsChromeAppMenuItemVisible
     {
         get => s_isAppMenuItemVisible;
         set => s_isAppMenuItemVisible = value;
     }
 
     /// <summary>Return true = enabled; false = greyed out.</summary>
-    public static Func<int, int, bool>? IsChromeAppMenuItemEnabled
+    public static Func<CefBrowser?, int, bool>? IsChromeAppMenuItemEnabled
     {
         get => s_isAppMenuItemEnabled;
         set => s_isAppMenuItemEnabled = value;
@@ -747,9 +758,9 @@ public static class Cef
         set => s_isToolbarButtonVisible = value;
     }
 
-    private static Func<int, int, WindowOpenDisposition, bool>? s_onChromeCommand;
-    private static Func<int, int, bool>? s_isAppMenuItemVisible;
-    private static Func<int, int, bool>? s_isAppMenuItemEnabled;
+    private static Func<CefBrowser?, int, WindowOpenDisposition, bool>? s_onChromeCommand;
+    private static Func<CefBrowser?, int, bool>? s_isAppMenuItemVisible;
+    private static Func<CefBrowser?, int, bool>? s_isAppMenuItemEnabled;
     private static Func<ChromePageActionIcon, bool>? s_isPageActionIconVisible;
     private static Func<ChromeToolbarButton, bool>? s_isToolbarButtonVisible;
 
@@ -761,9 +772,13 @@ public static class Cef
     // for any URL (http://, https://, file://, app://, …) and lets the
     // host decide per-request rather than per-scheme.
 
-    /// <summary>Info passed to <see cref="ShouldHandleResource"/>.</summary>
+    /// <summary>
+    /// Info passed to <see cref="ShouldHandleResource"/>.
+    /// <see cref="Browser"/> may be null if the request originated from a
+    /// browser that's been torn down (rare).
+    /// </summary>
     public readonly record struct ResourceHandlerDecision(
-        int BrowserId,
+        CefBrowser? Browser,
         ulong Token,
         string Url,
         string Method);
@@ -2030,8 +2045,9 @@ public static class Cef
         if (fn is null) return 0;
         try
         {
+            s_browsers.TryGetValue(browserId, out var b);
             var args = new ResponseFilterDecision(
-                browserId, token,
+                b, token,
                 Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
                 status,
                 Marshal.PtrToStringUTF8((IntPtr)mimeType) ?? "");
@@ -2094,7 +2110,11 @@ public static class Cef
     {
         var fn = s_onChromeCommand;
         if (fn is null) return 0;
-        try { return fn(browserId, commandId, (WindowOpenDisposition)disposition) ? 1 : 0; }
+        try
+        {
+            s_browsers.TryGetValue(browserId, out var b);
+            return fn(b, commandId, (WindowOpenDisposition)disposition) ? 1 : 0;
+        }
         catch { return 0; }
     }
 
@@ -2103,7 +2123,11 @@ public static class Cef
     {
         var fn = s_isAppMenuItemVisible;
         if (fn is null) return 1;
-        try { return fn(browserId, commandId) ? 1 : 0; }
+        try
+        {
+            s_browsers.TryGetValue(browserId, out var b);
+            return fn(b, commandId) ? 1 : 0;
+        }
         catch { return 1; }
     }
 
@@ -2112,7 +2136,11 @@ public static class Cef
     {
         var fn = s_isAppMenuItemEnabled;
         if (fn is null) return 1;
-        try { return fn(browserId, commandId) ? 1 : 0; }
+        try
+        {
+            s_browsers.TryGetValue(browserId, out var b);
+            return fn(b, commandId) ? 1 : 0;
+        }
         catch { return 1; }
     }
 
@@ -2142,8 +2170,9 @@ public static class Cef
         if (fn is null) return 0;
         try
         {
+            s_browsers.TryGetValue(browserId, out var b);
             var args = new ResourceHandlerDecision(
-                browserId, token,
+                b, token,
                 Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
                 Marshal.PtrToStringUTF8((IntPtr)method) ?? "");
             return fn(args) ? 1 : 0;

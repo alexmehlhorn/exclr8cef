@@ -90,6 +90,11 @@ public sealed class CefRequestContext : IDisposable
     /// Read cookies from this context's cookie jar. Empty/null url returns
     /// all cookies.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public Task<List<Cef.CookieInfo>> GetCookiesAsync(string? url = null)
         => Cef.GetCookiesAsyncInContext(_handle, url);
 

@@ -458,11 +458,22 @@ public sealed class CefBrowser : IDisposable
     /// Async — returns the rendered HTML source of the main frame.
     /// CefFrame::GetSource. Useful for debugging / page-scraping scenarios.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// If you call another <see cref="CefBrowser"/> method on the awaited
+    /// result, marshal back to the UI thread first (e.g.
+    /// <c>Avalonia.Threading.Dispatcher.UIThread.Post</c>).
+    /// </remarks>
     public Task<string> GetSourceAsync() => GetVisitorString(Excef.excef_get_frame_source);
     /// <summary>
     /// Async — returns the rendered plain text of the main frame
     /// (innerText-equivalent). CefFrame::GetText.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public Task<string> GetTextAsync() => GetVisitorString(Excef.excef_get_frame_text);
 
     private Task<string> GetVisitorString(Func<int, int, int> caller)
@@ -526,6 +537,11 @@ public sealed class CefBrowser : IDisposable
     /// CefBrowserHost::GetNavigationEntries.
     /// </summary>
     /// <param name="currentOnly">If true, returns just the current entry; otherwise the whole history.</param>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public Task<System.Collections.Generic.List<NavigationEntry>> GetNavigationEntriesAsync(bool currentOnly = false)
     {
         if (_closed) return Task.FromException<System.Collections.Generic.List<NavigationEntry>>(new InvalidOperationException("browser closed"));
@@ -964,6 +980,11 @@ public sealed class CefBrowser : IDisposable
     /// <param name="format">"png" | "jpeg" | "webp" (default png)</param>
     /// <param name="quality">0-100 for jpeg/webp (ignored for png)</param>
     /// <param name="captureBeyondViewport">If true, captures the full document height, not just the visible viewport.</param>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public async Task<byte[]> CapturePageAsync(string format = "png", int? quality = null, bool captureBeyondViewport = false)
     {
         var sb = new System.Text.StringBuilder("{\"format\":\"").Append(format).Append("\"");
@@ -1001,6 +1022,11 @@ public sealed class CefBrowser : IDisposable
     /// and await the JSON reply. <paramref name="paramsJson"/> is a
     /// JSON-stringified object; pass <c>null</c> for no params.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public Task<string> ExecuteDevToolsMethodAsync(string method, string? paramsJson = null)
     {
         ArgumentNullException.ThrowIfNull(method);
@@ -1054,6 +1080,11 @@ public sealed class CefBrowser : IDisposable
     /// <summary>
     /// Evaluate JS in the main frame and return the result as a JSON string.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     // Eval request IDs owned by this browser, so RaiseClosed can fail any
     // in-flight TaskCompletionSources instead of leaving them hanging.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _evalRequestIds = new();
@@ -1098,6 +1129,15 @@ public sealed class CefBrowser : IDisposable
     private readonly List<Action<int, int>> _pdfQueue = new();
     internal List<Action<int, int>> PdfQueue => _pdfQueue;
 
+    /// <summary>
+    /// Render the current page as PDF at <paramref name="path"/>. Default
+    /// settings; use the <c>Exclr8Cef.Print</c> package for full control.
+    /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public Task<bool> PrintToPdfAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -1492,6 +1532,11 @@ public sealed class CefBrowser : IDisposable
     /// given DIP coordinates (CSS pixels) along with its tag, id, classes,
     /// text snippet, and bounding rect. Null if nothing's there.
     /// </summary>
+    /// <remarks>
+    /// Continuations run on the .NET threadpool, NOT the CEF UI thread.
+    /// Marshal back to the UI thread before any follow-up
+    /// <see cref="CefBrowser"/> call.
+    /// </remarks>
     public async Task<HitTestResult?> HitTestAtAsync(int x, int y)
     {
         // Wrap the result in JSON so EvaluateJavaScriptAsync's structured
