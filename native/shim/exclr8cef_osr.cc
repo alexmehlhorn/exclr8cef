@@ -1,6 +1,8 @@
 #include "exclr8cef_osr.h"
 
+#include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -97,6 +99,15 @@ excef_audio_stream_error_cb_t g_audio_error_cb = nullptr;
 // Per-browser audio-capture enable flag (set via excef_enable_audio_capture).
 std::map<int, bool> g_audio_enabled;
 std::mutex g_audio_enabled_mu;
+excef_should_filter_response_cb_t g_should_filter_cb = nullptr;
+excef_response_filter_cb_t g_response_filter_cb = nullptr;
+excef_response_filter_finalize_cb_t g_response_filter_finalize_cb = nullptr;
+excef_chrome_command_cb_t g_chrome_command_cb = nullptr;
+excef_app_menu_visibility_cb_t g_app_menu_visible_cb = nullptr;
+excef_app_menu_visibility_cb_t g_app_menu_enabled_cb = nullptr;
+excef_page_action_visibility_cb_t g_page_action_visible_cb = nullptr;
+excef_toolbar_button_visibility_cb_t g_toolbar_button_visible_cb = nullptr;
+excef_should_handle_resource_cb_t g_should_handle_resource_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -154,6 +165,11 @@ struct PendingSchemeRequest {
     int browser_id;
     CefRefPtr<SchemeResourceHandler> handler;
 };
+// Same shape as PendingSchemeRequest, separate type. The UrlResourceHandler
+// class itself lives outside the anon namespace (see GetResourceHandler
+// nearby) so Exclr8CefOsrHandler::GetResourceHandler can construct it;
+// the forward decl + struct also live outside anon so the global pending
+// map declared at exclr8cef:: scope can reference the type.
 
 // Resource-request state. The CefRequest is kept alive until resolve
 // so the host's new headers (if any) can be applied to it.
@@ -341,6 +357,32 @@ public:
 };
 
 }  // namespace
+
+// Streaming URL resource handler bookkeeping. Lives at exclr8cef:: scope
+// (not anonymous) so the UrlResourceHandler class definition further down
+// — also at exclr8cef:: scope — can reference these symbols. The class
+// is forward-declared here and fully defined near GetResourceHandler.
+//
+// Lifecycle: GetResourceHandler() inserts a placeholder, then fires the
+// host's should_handle callback. Inside that callback the host MAY call
+// the resolve ABI synchronously — that's why we register the entry FIRST,
+// so the lookup succeeds. If sync-resolved the placeholder.body /
+// status_code / mime / status_text are filled in; Open() picks them up
+// when CEF calls it. If async, the handler pointer is set during Open()
+// and the eventual resolve will Continue() its callback.
+class UrlResourceHandler;
+struct PendingUrlHandler {
+    int browser_id;
+    CefRefPtr<UrlResourceHandler> handler;  // null until Open() registers
+    bool resolved = false;                   // host has filled in fields below
+    int status_code = 200;
+    std::string status_text = "OK";
+    std::string mime_type = "text/plain";
+    std::vector<uint8_t> body;
+    std::vector<std::pair<std::string, std::string>> extra_headers;
+};
+std::mutex g_url_handler_mu;
+std::map<uint64_t, PendingUrlHandler> g_url_handler_pending;
 
 Exclr8CefOsrHandler::Exclr8CefOsrHandler(int id, int width, int height,
                                           float device_scale_factor,
@@ -713,6 +755,37 @@ void Exclr8CefOsrHandler::OnAudioStreamError(CefRefPtr<CefBrowser> /*browser*/,
     }
 }
 
+// ---- CefCommandHandler ----------------------------------------------------
+
+bool Exclr8CefOsrHandler::OnChromeCommand(CefRefPtr<CefBrowser> /*browser*/,
+                                            int command_id,
+                                            cef_window_open_disposition_t disposition) {
+    if (!g_chrome_command_cb) return false;
+    return g_chrome_command_cb(id_, command_id, static_cast<int>(disposition)) != 0;
+}
+
+bool Exclr8CefOsrHandler::IsChromeAppMenuItemVisible(CefRefPtr<CefBrowser> /*browser*/,
+                                                      int command_id) {
+    if (!g_app_menu_visible_cb) return true;
+    return g_app_menu_visible_cb(id_, command_id) != 0;
+}
+
+bool Exclr8CefOsrHandler::IsChromeAppMenuItemEnabled(CefRefPtr<CefBrowser> /*browser*/,
+                                                      int command_id) {
+    if (!g_app_menu_enabled_cb) return true;
+    return g_app_menu_enabled_cb(id_, command_id) != 0;
+}
+
+bool Exclr8CefOsrHandler::IsChromePageActionIconVisible(cef_chrome_page_action_icon_type_t icon_type) {
+    if (!g_page_action_visible_cb) return true;
+    return g_page_action_visible_cb(static_cast<int>(icon_type)) != 0;
+}
+
+bool Exclr8CefOsrHandler::IsChromeToolbarButtonVisible(cef_chrome_toolbar_button_type_t button_type) {
+    if (!g_toolbar_button_visible_cb) return true;
+    return g_toolbar_button_visible_cb(static_cast<int>(button_type)) != 0;
+}
+
 bool Exclr8CefOsrHandler::OnCertificateError(
         CefRefPtr<CefBrowser> /*browser*/,
         cef_errorcode_t cert_error,
@@ -814,6 +887,231 @@ cef_return_value_t Exclr8CefOsrHandler::OnBeforeResourceLoad(
     g_resource_request_cb(id_, token, url.c_str(), method.c_str(),
                           rtype, serialized.c_str());
     return RV_CONTINUE_ASYNC;
+}
+
+// ---- CefResponseFilter ----------------------------------------------------
+//
+// Bridges CEF's Filter() chunked API to the host's sync callback. Each
+// instance carries the browser id + a token the host can use to keep
+// per-response state across chunks (the same token is passed back on
+// every Filter() call and on the finalize callback at end-of-life).
+class Exclr8ResponseFilter : public CefResponseFilter {
+public:
+    Exclr8ResponseFilter(int browser_id, uint64_t token)
+        : browser_id_(browser_id), token_(token) {}
+
+    ~Exclr8ResponseFilter() override {
+        if (g_response_filter_finalize_cb) {
+            g_response_filter_finalize_cb(browser_id_, token_);
+        }
+    }
+
+    bool InitFilter() override { return true; }
+
+    FilterStatus Filter(void* data_in, size_t data_in_size, size_t& data_in_read,
+                         void* data_out, size_t data_out_size, size_t& data_out_written) override {
+        data_in_read = 0;
+        data_out_written = 0;
+        if (!g_response_filter_cb) {
+            // No filter callback installed — treat as identity: copy as
+            // many bytes as fit, signal DONE when input is exhausted.
+            size_t n = std::min(data_in_size, data_out_size);
+            if (data_in && data_out && n > 0) {
+                std::memcpy(data_out, data_in, n);
+            }
+            data_in_read = n;
+            data_out_written = n;
+            return (data_in_size == 0)
+                ? RESPONSE_FILTER_DONE
+                : RESPONSE_FILTER_NEED_MORE_DATA;
+        }
+
+        int bytes_read = 0, bytes_written = 0;
+        // Clamp sizes to int range — CEF chunks are KBs in practice.
+        int in_n = data_in_size > static_cast<size_t>(INT_MAX)
+                    ? INT_MAX : static_cast<int>(data_in_size);
+        int out_n = data_out_size > static_cast<size_t>(INT_MAX)
+                     ? INT_MAX : static_cast<int>(data_out_size);
+        int status = g_response_filter_cb(browser_id_, token_,
+                                            static_cast<const unsigned char*>(data_in), in_n,
+                                            static_cast<unsigned char*>(data_out), out_n,
+                                            &bytes_read, &bytes_written);
+        if (bytes_read < 0) bytes_read = 0;
+        if (bytes_written < 0) bytes_written = 0;
+        data_in_read = static_cast<size_t>(bytes_read);
+        data_out_written = static_cast<size_t>(bytes_written);
+        switch (status) {
+            case 1:  return RESPONSE_FILTER_DONE;
+            case -1: return RESPONSE_FILTER_ERROR;
+            default: return RESPONSE_FILTER_NEED_MORE_DATA;
+        }
+    }
+
+private:
+    int browser_id_;
+    uint64_t token_;
+    IMPLEMENT_REFCOUNTING(Exclr8ResponseFilter);
+};
+
+// ---- Streaming resource handler -----------------------------------------
+//
+// Same deferred-resolve pattern as SchemeResourceHandler but driven by
+// `g_should_handle_resource_cb` (per-request URL claim) instead of the
+// scheme-factory path. Reuses the shared `g_scheme_pending` map so the
+// host calls the same `excef_resolve_resource_handler_request` ABI to
+// fill in the response — no separate token pool.
+class UrlResourceHandler : public CefResourceHandler {
+public:
+    UrlResourceHandler(int browser_id, uint64_t token,
+                        std::string url, std::string method)
+        : browser_id_(browser_id), url_(std::move(url)),
+          method_(std::move(method)), token_(token) {}
+
+    bool Open(CefRefPtr<CefRequest> /*request*/,
+              bool& handle_request,
+              CefRefPtr<CefCallback> callback) override {
+        in_open_ = true;
+        callback_ = callback;
+        {
+            std::lock_guard<std::mutex> lock(g_url_handler_mu);
+            auto it = g_url_handler_pending.find(token_);
+            if (it != g_url_handler_pending.end()) {
+                // Sync-resolved path: host called resolve from inside the
+                // should_handle callback before we ever got here.
+                if (it->second.resolved) {
+                    status_code_ = it->second.status_code;
+                    status_text_ = std::move(it->second.status_text);
+                    mime_type_ = std::move(it->second.mime_type);
+                    body_ = std::move(it->second.body);
+                    extra_headers_ = std::move(it->second.extra_headers);
+                    resolved_ = true;
+                }
+                // Wire up the handler pointer so a still-pending async
+                // resolve can find us. If sync-resolved, this entry is
+                // still useful for Cancel() / cleanup.
+                it->second.handler = this;
+            } else {
+                g_url_handler_pending[token_] = PendingUrlHandler{browser_id_, this};
+            }
+        }
+        in_open_ = false;
+        if (resolved_) {
+            // Sync path — don't Continue() the callback (calling it from
+            // inside Open is treated as net::ERR_ABORTED by CEF).
+            callback_ = nullptr;
+            handle_request = true;
+        } else {
+            handle_request = false;
+        }
+        return true;
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response,
+                             int64_t& response_length,
+                             CefString& /*redirectUrl*/) override {
+        response->SetStatus(status_code_);
+        if (!status_text_.empty()) response->SetStatusText(status_text_);
+        if (!mime_type_.empty()) {
+            auto semi = mime_type_.find(';');
+            std::string type = semi == std::string::npos ? mime_type_ : mime_type_.substr(0, semi);
+            response->SetMimeType(type);
+            CefResponse::HeaderMap headers;
+            response->GetHeaderMap(headers);
+            headers.emplace("Content-Type", mime_type_);
+            for (const auto& [k, v] : extra_headers_) {
+                headers.emplace(k, v);
+            }
+            response->SetHeaderMap(headers);
+        }
+        response_length = -1;
+    }
+
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read,
+               CefRefPtr<CefResourceReadCallback> /*callback*/) override {
+        if (read_pos_ >= body_.size()) { bytes_read = 0; return false; }
+        size_t avail = body_.size() - read_pos_;
+        size_t copy = std::min<size_t>(avail, static_cast<size_t>(bytes_to_read));
+        std::memcpy(data_out, body_.data() + read_pos_, copy);
+        read_pos_ += copy;
+        bytes_read = static_cast<int>(copy);
+        return true;
+    }
+
+    void Cancel() override {
+        std::lock_guard<std::mutex> lock(g_scheme_mu);
+        g_scheme_pending.erase(token_);
+    }
+
+    // Host calls excef_resolve_resource_handler_request → dispatch here.
+    void Resolve(int status_code, std::string status_text,
+                  std::string mime_type, std::vector<uint8_t> body,
+                  std::vector<std::pair<std::string, std::string>> headers) {
+        status_code_ = status_code;
+        status_text_ = std::move(status_text);
+        mime_type_ = std::move(mime_type);
+        body_ = std::move(body);
+        extra_headers_ = std::move(headers);
+        resolved_ = true;
+        if (!in_open_ && callback_) {
+            callback_->Continue();
+            callback_ = nullptr;
+        }
+    }
+
+private:
+    int browser_id_;
+    std::string url_;
+    std::string method_;
+    uint64_t token_;
+    CefRefPtr<CefCallback> callback_;
+    int status_code_ = 200;
+    std::string status_text_ = "OK";
+    std::string mime_type_ = "text/plain";
+    std::vector<uint8_t> body_;
+    std::vector<std::pair<std::string, std::string>> extra_headers_;
+    size_t read_pos_ = 0;
+    bool resolved_ = false;
+    bool in_open_ = false;
+    IMPLEMENT_REFCOUNTING(UrlResourceHandler);
+};
+
+CefRefPtr<CefResourceHandler> Exclr8CefOsrHandler::GetResourceHandler(
+        CefRefPtr<CefBrowser> /*browser*/,
+        CefRefPtr<CefFrame> /*frame*/,
+        CefRefPtr<CefRequest> request) {
+    if (!g_should_handle_resource_cb || !request) return nullptr;
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    std::string url = request->GetURL().ToString();
+    std::string method = request->GetMethod().ToString();
+    // Pre-register the placeholder so the host can resolve synchronously
+    // from inside the should_handle callback. If it claims (returns 1) we
+    // keep the entry; if it skips (returns 0) we erase it.
+    {
+        std::lock_guard<std::mutex> lock(g_url_handler_mu);
+        g_url_handler_pending[token] = PendingUrlHandler{id_, nullptr};
+    }
+    int claim = g_should_handle_resource_cb(id_, token, url.c_str(), method.c_str());
+    if (claim == 0) {
+        std::lock_guard<std::mutex> lock(g_url_handler_mu);
+        g_url_handler_pending.erase(token);
+        return nullptr;
+    }
+    return new UrlResourceHandler(id_, token, std::move(url), std::move(method));
+}
+
+CefRefPtr<CefResponseFilter> Exclr8CefOsrHandler::GetResourceResponseFilter(
+        CefRefPtr<CefBrowser> /*browser*/,
+        CefRefPtr<CefFrame> /*frame*/,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefResponse> response) {
+    if (!g_should_filter_cb) return nullptr;
+    std::string url = request ? request->GetURL().ToString() : std::string{};
+    int status = response ? response->GetStatus() : 0;
+    std::string mime = response ? response->GetMimeType().ToString() : std::string{};
+    uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+    int want = g_should_filter_cb(id_, token, url.c_str(), status, mime.c_str());
+    if (want == 0) return nullptr;
+    return new Exclr8ResponseFilter(id_, token);
 }
 
 void Exclr8CefOsrHandler::OnFindResult(CefRefPtr<CefBrowser> /*browser*/,
@@ -1639,6 +1937,96 @@ extern "C" int excef_is_audio_muted(int browser_id) {
     if (it == exclr8cef::g_osr_browsers.end()) return 0;
     auto b = it->second->browser();
     return (b && b->GetHost()->IsAudioMuted()) ? 1 : 0;
+}
+
+extern "C" void excef_set_should_filter_response_callback(excef_should_filter_response_cb_t cb) {
+    exclr8cef::g_should_filter_cb = cb;
+}
+extern "C" void excef_set_response_filter_callback(excef_response_filter_cb_t cb) {
+    exclr8cef::g_response_filter_cb = cb;
+}
+extern "C" void excef_set_response_filter_finalize_callback(excef_response_filter_finalize_cb_t cb) {
+    exclr8cef::g_response_filter_finalize_cb = cb;
+}
+extern "C" void excef_set_chrome_command_callback(excef_chrome_command_cb_t cb) {
+    exclr8cef::g_chrome_command_cb = cb;
+}
+extern "C" void excef_set_app_menu_visible_callback(excef_app_menu_visibility_cb_t cb) {
+    exclr8cef::g_app_menu_visible_cb = cb;
+}
+extern "C" void excef_set_app_menu_enabled_callback(excef_app_menu_visibility_cb_t cb) {
+    exclr8cef::g_app_menu_enabled_cb = cb;
+}
+extern "C" void excef_set_page_action_visible_callback(excef_page_action_visibility_cb_t cb) {
+    exclr8cef::g_page_action_visible_cb = cb;
+}
+extern "C" void excef_set_toolbar_button_visible_callback(excef_toolbar_button_visibility_cb_t cb) {
+    exclr8cef::g_toolbar_button_visible_cb = cb;
+}
+extern "C" void excef_set_should_handle_resource_callback(excef_should_handle_resource_cb_t cb) {
+    exclr8cef::g_should_handle_resource_cb = cb;
+}
+
+extern "C" void excef_resolve_resource_handler_request(
+        uint64_t token,
+        int status_code,
+        const char* status_text,
+        const char* mime_type,
+        const char* headers,
+        const unsigned char* body,
+        int body_len) {
+    // Copy body + parse headers up front (so we can move them into either
+    // the pending placeholder or the handler instance without holding the
+    // lock while doing string work).
+    std::vector<uint8_t> body_copy;
+    if (body && body_len > 0) body_copy.assign(body, body + body_len);
+    std::vector<std::pair<std::string, std::string>> hdrs;
+    if (headers && *headers) {
+        std::string s(headers);
+        size_t start = 0;
+        for (size_t i = 0; i <= s.size(); ++i) {
+            if (i == s.size() || s[i] == '\n') {
+                if (i > start) {
+                    auto line = s.substr(start, i - start);
+                    auto colon = line.find(':');
+                    if (colon != std::string::npos) {
+                        std::string k = line.substr(0, colon);
+                        std::string v = line.substr(colon + 1);
+                        if (!v.empty() && v.front() == ' ') v.erase(0, 1);
+                        hdrs.emplace_back(std::move(k), std::move(v));
+                    }
+                }
+                start = i + 1;
+            }
+        }
+    }
+    std::string st = status_text ? status_text : "";
+    std::string mt = mime_type ? mime_type : "text/plain";
+
+    CefRefPtr<exclr8cef::UrlResourceHandler> handler;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_url_handler_mu);
+        auto it = exclr8cef::g_url_handler_pending.find(token);
+        if (it == exclr8cef::g_url_handler_pending.end()) return;
+        if (it->second.handler) {
+            // Async path — Open already ran, the handler is alive and
+            // waiting on its CefCallback. Hand off and let Resolve fire.
+            handler = it->second.handler;
+            exclr8cef::g_url_handler_pending.erase(it);
+        } else {
+            // Sync path — Open hasn't been called yet. Stash the response
+            // in the placeholder; Open will consume it.
+            it->second.resolved = true;
+            it->second.status_code = status_code;
+            it->second.status_text = std::move(st);
+            it->second.mime_type = std::move(mt);
+            it->second.body = std::move(body_copy);
+            it->second.extra_headers = std::move(hdrs);
+            return;
+        }
+    }
+    handler->Resolve(status_code, std::move(st), std::move(mt),
+                      std::move(body_copy), std::move(hdrs));
 }
 
 namespace {

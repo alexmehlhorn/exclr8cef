@@ -245,6 +245,106 @@ EXCEF_API void excef_set_audio_stream_error_callback(excef_audio_stream_error_cb
 EXCEF_API void excef_set_audio_muted(int browser_id, int muted);
 EXCEF_API int excef_is_audio_muted(int browser_id);
 
+// ---- Response filter (body rewrite) ------------------------------------
+//
+// CefResourceRequestHandler::GetResourceResponseFilter — lets the host
+// rewrite response bodies as they stream past, before the renderer parses
+// them. Useful for HTML/JS injection, CSP stripping, content-type fixups.
+//
+// Per-response token model: should_filter is called once per response;
+// returning 1 installs a filter and CEF then calls back into excef_response_filter_cb_t
+// repeatedly with (data_in, data_out) chunks until the body is done.
+// Each call is synchronous — host returns immediately with bytes_read /
+// bytes_written / status. Host can stash per-response state keyed by token.
+
+typedef int (*excef_should_filter_response_cb_t)(int browser_id,
+                                                   uint64_t filter_token,
+                                                   const char* url,
+                                                   int status,
+                                                   const char* mime_type);
+EXCEF_API void excef_set_should_filter_response_callback(excef_should_filter_response_cb_t cb);
+
+// Filter callback. Sync. Per-chunk. Returns:
+//   0 = NEED_MORE_DATA (call me again with more input)
+//   1 = DONE (this response is finished — no more bytes will be sent)
+//  -1 = ERROR (CEF will abort the response)
+// data_in / data_out are caller-owned buffers; host writes into data_out.
+typedef int (*excef_response_filter_cb_t)(int browser_id,
+                                            uint64_t filter_token,
+                                            const unsigned char* data_in,
+                                            int size_in,
+                                            unsigned char* data_out,
+                                            int size_out,
+                                            int* bytes_read,
+                                            int* bytes_written);
+EXCEF_API void excef_set_response_filter_callback(excef_response_filter_cb_t cb);
+
+// Optional: fires once per filter end-of-life so the host can drop any
+// per-token state (HTML parser, injection state machine, etc.).
+typedef void (*excef_response_filter_finalize_cb_t)(int browser_id, uint64_t filter_token);
+EXCEF_API void excef_set_response_filter_finalize_callback(excef_response_filter_finalize_cb_t cb);
+
+// ---- Streaming resource handler (per-request URL intercept) ------------
+//
+// Lets the host serve a complete response for ANY URL — http://, file://,
+// etc. Unlike the scheme handler factory (which is tied to a single scheme
+// registered at init), this is a per-request decision made via the
+// `should_handle_resource` callback. Most commonly used to intercept
+// XHR/fetch requests, serve from a local mirror, or stub out endpoints
+// in tests.
+//
+// Flow:
+//   1. Host calls excef_set_should_handle_resource_callback() once.
+//   2. Per request, the shim asks the host "claim this URL?" (sync).
+//      Returning 1 allocates a token (same token pool as scheme handler)
+//      and pauses CEF awaiting the response.
+//   3. Host calls excef_resolve_resource_handler_request(token, ...) with
+//      status / mime / headers / body, identical to the scheme path.
+
+typedef int (*excef_should_handle_resource_cb_t)(int browser_id,
+                                                   uint64_t token,
+                                                   const char* url,
+                                                   const char* method);
+EXCEF_API void excef_set_should_handle_resource_callback(excef_should_handle_resource_cb_t cb);
+
+// Provide the response for a token previously claimed via
+// `should_handle_resource` (or `scheme_request`). headers is the raw header
+// string (e.g. "Cache-Control: no-cache\nX-Custom: 1"), body is a copy-by-
+// value byte array (shim copies before returning so the host can free).
+EXCEF_API void excef_resolve_resource_handler_request(
+    uint64_t token,
+    int status_code,
+    const char* status_text,
+    const char* mime_type,
+    const char* headers,
+    const unsigned char* body,
+    int body_len);
+
+// ---- Command handler (Chrome runtime) -----------------------------------
+//
+// Intercept Chrome menu commands, page-action icons, toolbar buttons.
+// Only meaningful when CEF is initialized with CEF_RUNTIME_STYLE_CHROME.
+// All callbacks are synchronous host queries.
+
+// command_id values are Chrome's IDC_* IDs (browser-side). disposition is
+// cef_window_open_disposition_t — same enum values as JavaScript window.open.
+// Return 1 to mark handled (CEF will NOT execute the default action).
+typedef int (*excef_chrome_command_cb_t)(int browser_id, int command_id, int disposition);
+EXCEF_API void excef_set_chrome_command_callback(excef_chrome_command_cb_t cb);
+
+// App menu visibility/enabled queries. Return 1 = visible/enabled, 0 = hidden/disabled.
+typedef int (*excef_app_menu_visibility_cb_t)(int browser_id, int command_id);
+EXCEF_API void excef_set_app_menu_visible_callback(excef_app_menu_visibility_cb_t cb);
+EXCEF_API void excef_set_app_menu_enabled_callback(excef_app_menu_visibility_cb_t cb);
+
+// Page-action icon (e.g. bookmark star, find, manage passwords).
+typedef int (*excef_page_action_visibility_cb_t)(int icon_type);
+EXCEF_API void excef_set_page_action_visible_callback(excef_page_action_visibility_cb_t cb);
+
+// Toolbar button (e.g. cast, download, avatar, side panel).
+typedef int (*excef_toolbar_button_visibility_cb_t)(int button_type);
+EXCEF_API void excef_set_toolbar_button_visible_callback(excef_toolbar_button_visibility_cb_t cb);
+
 // Clipboard / editing primitives. Operate on the browser's focused frame.
 // CEF in OSR mode does not auto-execute these from keyboard accelerators;
 // the host must invoke them when Cmd/Ctrl + C / V / X / A / Z / Y is pressed.

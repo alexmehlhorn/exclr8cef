@@ -14,6 +14,7 @@
 #include "include/cef_life_span_handler.h"
 #include "include/cef_accessibility_handler.h"
 #include "include/cef_audio_handler.h"
+#include "include/cef_command_handler.h"
 #include "include/cef_focus_handler.h"
 #include "include/cef_frame_handler.h"
 #include "include/cef_keyboard_handler.h"
@@ -22,6 +23,7 @@
 #include "include/cef_render_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_resource_request_handler.h"
+#include "include/cef_response_filter.h"
 
 #include "exclr8cef.h"
 
@@ -44,7 +46,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefFocusHandler,
                             public CefKeyboardHandler,
                             public CefFrameHandler,
-                            public CefAudioHandler {
+                            public CefAudioHandler,
+                            public CefCommandHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -73,6 +76,7 @@ public:
     // Only opt in to audio capture when the host has installed a packet
     // callback — otherwise CEF spends cycles streaming PCM nobody reads.
     CefRefPtr<CefAudioHandler> GetAudioHandler() override;
+    CefRefPtr<CefCommandHandler> GetCommandHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -181,6 +185,23 @@ public:
         CefRefPtr<CefRequest> request,
         CefRefPtr<CefCallback> callback) override;
 
+    // Body rewrite via response filter (CefResponseFilter). Returns a
+    // filter instance for responses the host wants to rewrite; nullptr
+    // for everything else (lets CEF stream the response unchanged).
+    CefRefPtr<CefResponseFilter> GetResourceResponseFilter(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request,
+        CefRefPtr<CefResponse> response) override;
+
+    // Custom resource handler. Host claims a URL via the
+    // should_handle_resource callback; if claimed, we return a deferred
+    // handler that the host fills in via excef_resolve_resource_handler_request.
+    CefRefPtr<CefResourceHandler> GetResourceHandler(
+        CefRefPtr<CefBrowser> browser,
+        CefRefPtr<CefFrame> frame,
+        CefRefPtr<CefRequest> request) override;
+
     // CefFindHandler
     void OnFindResult(CefRefPtr<CefBrowser> browser,
                        int identifier,
@@ -231,6 +252,14 @@ public:
     void OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) override;
     void OnAudioStreamError(CefRefPtr<CefBrowser> browser,
                               const CefString& message) override;
+
+    // CefCommandHandler
+    bool OnChromeCommand(CefRefPtr<CefBrowser> browser, int command_id,
+                          cef_window_open_disposition_t disposition) override;
+    bool IsChromeAppMenuItemVisible(CefRefPtr<CefBrowser> browser, int command_id) override;
+    bool IsChromeAppMenuItemEnabled(CefRefPtr<CefBrowser> browser, int command_id) override;
+    bool IsChromePageActionIconVisible(cef_chrome_page_action_icon_type_t icon_type) override;
+    bool IsChromeToolbarButtonVisible(cef_chrome_toolbar_button_type_t button_type) override;
 
     // CefFrameHandler
     void OnFrameCreated(CefRefPtr<CefBrowser> browser,

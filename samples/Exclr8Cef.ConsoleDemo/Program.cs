@@ -72,6 +72,28 @@ static int RunScreenshotMode(string[] argv, string helperPath, string url, strin
 {
     Console.WriteLine($"Headless screenshot: {url} → {outPath} ({width}×{height} @ {dsf}x)");
 
+    // --stub-html "<body>...</body>" intercepts the main navigation and
+    // serves the given HTML as text/html. Lets the demo exercise the
+    // ShouldHandleResource → ResolveResourceHandlerRequest pipeline
+    // without depending on the public internet.
+    string? stubHtml = GetArg(argv, "--stub-html");
+    if (stubHtml is not null)
+    {
+        var bodyBytes = System.Text.Encoding.UTF8.GetBytes(stubHtml);
+        Cef.ShouldHandleResource = info =>
+        {
+            // Only claim the top-level navigation; let CSS / icons fail
+            // gracefully (the stub body is self-contained anyway).
+            if (info.Url != url) return false;
+            // Resolve synchronously here on the IO thread — this stub is
+            // tiny and copy-free on the wire.
+            Cef.ResolveResourceHandlerRequest(
+                info.Token, 200, "OK", "text/html; charset=utf-8",
+                bodyBytes);
+            return true;
+        };
+    }
+
     // OSR mode + external pump. The schedule callback is a no-op — we pump
     // synchronously in the main loop below. CEF still fires it when async
     // work needs to be drained sooner, but Sleep(10) inside the loop gives

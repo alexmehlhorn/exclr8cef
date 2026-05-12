@@ -559,6 +559,242 @@ public static class Cef
         }
     }
 
+    // ---- Response filter (body rewrite) -------------------------------
+    //
+    // Process-wide hooks; the per-response token lets the host keep state
+    // across chunks of a single response (e.g. a streaming HTML rewriter).
+    // Callbacks fire on CEF's network/IO thread — they MUST be fast and
+    // non-blocking. Do not touch the UI thread from here.
+
+    public enum ResponseFilterStatus
+    {
+        /// <summary>More input expected — leave bytes_read &lt; size_in unconsumed if needed.</summary>
+        NeedMoreData = 0,
+        /// <summary>Response body is finished — no more bytes from CEF after this call.</summary>
+        Done = 1,
+        /// <summary>Abort the response — CEF will fail the request.</summary>
+        Error = -1,
+    }
+
+    /// <summary>Decision-point info passed to <see cref="ShouldFilterResponse"/>.</summary>
+    public readonly record struct ResponseFilterDecision(
+        int BrowserId,
+        ulong Token,
+        string Url,
+        int HttpStatus,
+        string MimeType);
+
+    /// <summary>
+    /// Host predicate: return true to install a filter for the given
+    /// response. Called once per response (per resource the browser
+    /// fetches). The same Token is then handed to <see cref="ResponseFilter"/>
+    /// for every chunk of that response.
+    /// </summary>
+    public static Func<ResponseFilterDecision, bool>? ShouldFilterResponse
+    {
+        get => s_shouldFilterResponse;
+        set => s_shouldFilterResponse = value;
+    }
+
+    /// <summary>
+    /// Per-chunk transform. Read bytes from <paramref name="dataIn"/>, write
+    /// to <paramref name="dataOut"/>. <paramref name="bytesRead"/> /
+    /// <paramref name="bytesWritten"/> tell CEF how much you consumed and
+    /// produced respectively. Both spans may be empty (e.g. at end-of-stream
+    /// CEF calls Filter with size_in=0 expecting you to flush remaining
+    /// buffered output and return Done).
+    /// </summary>
+    public delegate ResponseFilterStatus ResponseFilterDelegate(
+        int browserId, ulong token,
+        ReadOnlySpan<byte> dataIn, Span<byte> dataOut,
+        out int bytesRead, out int bytesWritten);
+
+    public static ResponseFilterDelegate? ResponseFilter
+    {
+        get => s_responseFilter;
+        set => s_responseFilter = value;
+    }
+
+    /// <summary>
+    /// Fires once per filter end-of-life — host can drop any per-token
+    /// state (HTML parser, injection state machine, etc.).
+    /// </summary>
+    public static Action<int, ulong>? ResponseFilterFinalize
+    {
+        get => s_responseFilterFinalize;
+        set => s_responseFilterFinalize = value;
+    }
+
+    private static Func<ResponseFilterDecision, bool>? s_shouldFilterResponse;
+    private static ResponseFilterDelegate? s_responseFilter;
+    private static Action<int, ulong>? s_responseFilterFinalize;
+
+    // ---- Command handler (Chrome runtime only) ------------------------
+    //
+    // Intercept Chrome's menu commands, toolbar buttons, and page-action
+    // icons. Only meaningful when CEF is initialized with the Chrome
+    // runtime (windowed mode without OSR). All hooks are synchronous host
+    // queries — keep them fast.
+
+    /// <summary>Subset of Chromium's IDC_* command IDs that hosts most often intercept.</summary>
+    public enum ChromeCommand
+    {
+        NewTab = 34014,
+        CloseTab = 34015,
+        NewWindow = 34000,
+        Print = 41001,
+        OpenFile = 34045,
+        Find = 41007,
+        ZoomPlus = 33001,
+        ZoomMinus = 33002,
+        ZoomNormal = 33003,
+        DevTools = 40005,
+        ViewSource = 40002,
+        SavePage = 34046,
+        Bookmarks = 35000,
+        History = 34030,
+    }
+
+    /// <summary>cef_chrome_page_action_icon_type_t.</summary>
+    public enum ChromePageActionIcon
+    {
+        BookmarkStar = 0,
+        CookieControls = 2,
+        Find = 4,
+        ManagePasswords = 8,
+    }
+
+    /// <summary>cef_chrome_toolbar_button_type_t.</summary>
+    public enum ChromeToolbarButton
+    {
+        Media = 8,
+        TabSearch = 9,
+        BatterySaver = 10,
+        Avatar = 11,
+    }
+
+    /// <summary>
+    /// Return true to suppress Chrome's default handling of the command.
+    /// Return false to let Chrome execute its normal behavior.
+    /// </summary>
+    public static Func<int, int, WindowOpenDisposition, bool>? OnChromeCommand
+    {
+        get => s_onChromeCommand;
+        set => s_onChromeCommand = value;
+    }
+
+    /// <summary>Return true = item visible in app menu; false = hide.</summary>
+    public static Func<int, int, bool>? IsChromeAppMenuItemVisible
+    {
+        get => s_isAppMenuItemVisible;
+        set => s_isAppMenuItemVisible = value;
+    }
+
+    /// <summary>Return true = enabled; false = greyed out.</summary>
+    public static Func<int, int, bool>? IsChromeAppMenuItemEnabled
+    {
+        get => s_isAppMenuItemEnabled;
+        set => s_isAppMenuItemEnabled = value;
+    }
+
+    public static Func<ChromePageActionIcon, bool>? IsChromePageActionIconVisible
+    {
+        get => s_isPageActionIconVisible;
+        set => s_isPageActionIconVisible = value;
+    }
+
+    public static Func<ChromeToolbarButton, bool>? IsChromeToolbarButtonVisible
+    {
+        get => s_isToolbarButtonVisible;
+        set => s_isToolbarButtonVisible = value;
+    }
+
+    private static Func<int, int, WindowOpenDisposition, bool>? s_onChromeCommand;
+    private static Func<int, int, bool>? s_isAppMenuItemVisible;
+    private static Func<int, int, bool>? s_isAppMenuItemEnabled;
+    private static Func<ChromePageActionIcon, bool>? s_isPageActionIconVisible;
+    private static Func<ChromeToolbarButton, bool>? s_isToolbarButtonVisible;
+
+    // ---- Custom resource handler (per-URL intercept) ------------------
+    //
+    // Claim a URL via <see cref="ShouldHandleResource"/>; the host then
+    // calls <see cref="ResolveResourceHandlerRequest"/> with the response.
+    // Unlike <see cref="CefSchemeHandler"/>-style registration, this fires
+    // for any URL (http://, https://, file://, app://, …) and lets the
+    // host decide per-request rather than per-scheme.
+
+    /// <summary>Info passed to <see cref="ShouldHandleResource"/>.</summary>
+    public readonly record struct ResourceHandlerDecision(
+        int BrowserId,
+        ulong Token,
+        string Url,
+        string Method);
+
+    /// <summary>
+    /// Per-URL claim predicate. Return true to take over the request —
+    /// you must then call <see cref="ResolveResourceHandlerRequest"/>
+    /// with the response payload (sync or async). The same Token threads
+    /// through both calls.
+    /// </summary>
+    public static Func<ResourceHandlerDecision, bool>? ShouldHandleResource
+    {
+        get => s_shouldHandleResource;
+        set => s_shouldHandleResource = value;
+    }
+
+    private static Func<ResourceHandlerDecision, bool>? s_shouldHandleResource;
+
+    /// <summary>
+    /// Provide the response body for a request previously claimed via
+    /// <see cref="ShouldHandleResource"/>. <paramref name="headers"/> is
+    /// a flat list of (name, value) pairs added on top of Content-Type.
+    /// </summary>
+    public static void ResolveResourceHandlerRequest(
+        ulong token,
+        int statusCode,
+        string statusText,
+        string mimeType,
+        ReadOnlySpan<byte> body,
+        IEnumerable<(string Name, string Value)>? headers = null)
+    {
+        string? headerLines = null;
+        if (headers is not null)
+        {
+            var sb = new System.Text.StringBuilder();
+            bool first = true;
+            foreach (var (n, v) in headers)
+            {
+                if (!first) sb.Append('\n');
+                first = false;
+                sb.Append(n).Append(": ").Append(v);
+            }
+            if (sb.Length > 0) headerLines = sb.ToString();
+        }
+
+        unsafe
+        {
+            sbyte* statusTextPtr = (sbyte*)Marshal.StringToCoTaskMemUTF8(statusText ?? "");
+            sbyte* mimePtr       = (sbyte*)Marshal.StringToCoTaskMemUTF8(mimeType ?? "text/plain");
+            sbyte* headersPtr    = headerLines is null ? null
+                                    : (sbyte*)Marshal.StringToCoTaskMemUTF8(headerLines);
+            try
+            {
+                fixed (byte* bodyPtr = body)
+                {
+                    Excef.excef_resolve_resource_handler_request(
+                        token, statusCode, statusTextPtr, mimePtr, headersPtr,
+                        bodyPtr, body.Length);
+                }
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)statusTextPtr);
+                Marshal.FreeCoTaskMem((IntPtr)mimePtr);
+                if (headersPtr != null) Marshal.FreeCoTaskMem((IntPtr)headersPtr);
+            }
+        }
+    }
+
     // ---- Process lifecycle ---------------------------------------------
 
     public static void RunMessageLoop() => Excef.excef_run_message_loop();
@@ -966,6 +1202,15 @@ public static class Cef
                 Excef.excef_set_audio_stream_packet_callback(&AudioStreamPacketTrampoline);
                 Excef.excef_set_audio_stream_stopped_callback(&AudioStreamStoppedTrampoline);
                 Excef.excef_set_audio_stream_error_callback(&AudioStreamErrorTrampoline);
+                Excef.excef_set_should_filter_response_callback(&ShouldFilterResponseTrampoline);
+                Excef.excef_set_response_filter_callback(&ResponseFilterTrampoline);
+                Excef.excef_set_response_filter_finalize_callback(&ResponseFilterFinalizeTrampoline);
+                Excef.excef_set_chrome_command_callback(&ChromeCommandTrampoline);
+                Excef.excef_set_app_menu_visible_callback(&AppMenuVisibleTrampoline);
+                Excef.excef_set_app_menu_enabled_callback(&AppMenuEnabledTrampoline);
+                Excef.excef_set_page_action_visible_callback(&PageActionVisibleTrampoline);
+                Excef.excef_set_toolbar_button_visible_callback(&ToolbarButtonVisibleTrampoline);
+                Excef.excef_set_should_handle_resource_callback(&ShouldHandleResourceTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1684,6 +1929,142 @@ public static class Cef
         var msg = Marshal.PtrToStringUTF8((IntPtr)message) ?? "";
         try { b.RaiseAudioError(msg); }
         catch { }
+    }
+
+    // ---- Response-filter trampolines ----------------------------------
+    //
+    // The filter callbacks fire from CEF's network/IO thread, NOT the UI
+    // thread. They MUST be fast — they sit in the critical path of every
+    // response body chunk. Host handlers should treat them as inline
+    // transforms, not as a place to do I/O or marshalling.
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int ShouldFilterResponseTrampoline(
+        int browserId, ulong token, sbyte* url, int status, sbyte* mimeType)
+    {
+        var fn = s_shouldFilterResponse;
+        if (fn is null) return 0;
+        try
+        {
+            var args = new ResponseFilterDecision(
+                browserId, token,
+                Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+                status,
+                Marshal.PtrToStringUTF8((IntPtr)mimeType) ?? "");
+            return fn(args) ? 1 : 0;
+        }
+        catch { return 0; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int ResponseFilterTrampoline(
+        int browserId, ulong token,
+        byte* dataIn, int sizeIn,
+        byte* dataOut, int sizeOut,
+        int* bytesRead, int* bytesWritten)
+    {
+        var fn = s_responseFilter;
+        if (fn is null)
+        {
+            // Identity: copy what fits, signal DONE if nothing more incoming.
+            int n = Math.Min(sizeIn, sizeOut);
+            if (n > 0 && dataIn != null && dataOut != null)
+                System.Buffer.MemoryCopy(dataIn, dataOut, sizeOut, n);
+            *bytesRead = n;
+            *bytesWritten = n;
+            return sizeIn == 0 ? 1 : 0;
+        }
+        try
+        {
+            var input = new ReadOnlySpan<byte>(dataIn, sizeIn);
+            var output = new Span<byte>(dataOut, sizeOut);
+            var status = fn(browserId, token, input, output, out int br, out int bw);
+            *bytesRead = br;
+            *bytesWritten = bw;
+            return status switch
+            {
+                ResponseFilterStatus.Done => 1,
+                ResponseFilterStatus.Error => -1,
+                _ => 0,
+            };
+        }
+        catch
+        {
+            *bytesRead = 0;
+            *bytesWritten = 0;
+            return -1;
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ResponseFilterFinalizeTrampoline(int browserId, ulong token)
+    {
+        try { s_responseFilterFinalize?.Invoke(browserId, token); }
+        catch { }
+    }
+
+    // ---- Command-handler trampolines ----------------------------------
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ChromeCommandTrampoline(int browserId, int commandId, int disposition)
+    {
+        var fn = s_onChromeCommand;
+        if (fn is null) return 0;
+        try { return fn(browserId, commandId, (WindowOpenDisposition)disposition) ? 1 : 0; }
+        catch { return 0; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int AppMenuVisibleTrampoline(int browserId, int commandId)
+    {
+        var fn = s_isAppMenuItemVisible;
+        if (fn is null) return 1;
+        try { return fn(browserId, commandId) ? 1 : 0; }
+        catch { return 1; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int AppMenuEnabledTrampoline(int browserId, int commandId)
+    {
+        var fn = s_isAppMenuItemEnabled;
+        if (fn is null) return 1;
+        try { return fn(browserId, commandId) ? 1 : 0; }
+        catch { return 1; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int PageActionVisibleTrampoline(int iconType)
+    {
+        var fn = s_isPageActionIconVisible;
+        if (fn is null) return 1;
+        try { return fn((ChromePageActionIcon)iconType) ? 1 : 0; }
+        catch { return 1; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ToolbarButtonVisibleTrampoline(int buttonType)
+    {
+        var fn = s_isToolbarButtonVisible;
+        if (fn is null) return 1;
+        try { return fn((ChromeToolbarButton)buttonType) ? 1 : 0; }
+        catch { return 1; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int ShouldHandleResourceTrampoline(
+        int browserId, ulong token, sbyte* url, sbyte* method)
+    {
+        var fn = s_shouldHandleResource;
+        if (fn is null) return 0;
+        try
+        {
+            var args = new ResourceHandlerDecision(
+                browserId, token,
+                Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)method) ?? "");
+            return fn(args) ? 1 : 0;
+        }
+        catch { return 0; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
