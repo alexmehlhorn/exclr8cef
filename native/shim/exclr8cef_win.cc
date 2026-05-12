@@ -164,9 +164,10 @@ extern "C" void* excef_create_embedded_host(int width, int height) {
 // Phase 2: attach a CEF browser to a previously-created host HWND. Call
 // this AFTER the UI framework has parented the HWND so Chromium reads
 // the correct effective DPI at browser-creation time.
-extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
-                                              int width, int height,
-                                              const char* url) {
+extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
+                                                          int width, int height,
+                                                          const char* url,
+                                                          int context_handle) {
     if (!host_view_ptr || !url) return 0;
     HWND host = reinterpret_cast<HWND>(host_view_ptr);
 
@@ -187,10 +188,13 @@ extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
         g_host_to_id[host] = id;
     }
 
+    CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
+    CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
+
     CefBrowserSettings browser_settings;
     bool ok = CefBrowserHost::CreateBrowser(
         window_info, handler.get(), url, browser_settings,
-        /*extra_info=*/nullptr, /*request_context=*/nullptr);
+        /*extra_info=*/nullptr, pass);
 
     if (!ok) {
         exclr8cef::UnregisterOsrHandler(id);
@@ -201,12 +205,19 @@ extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
     return id;
 }
 
+extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
+                                              int width, int height,
+                                              const char* url) {
+    return excef_attach_embedded_browser_in_context(host_view_ptr, width, height, url, 0);
+}
+
 // Combined create + attach. Returns the host HWND as void* (with the
 // browser id written to out_browser_id) so a single managed call can
 // produce a renderable handle.
-extern "C" void* excef_create_browser_view(int width, int height,
-                                           const char* url,
-                                           int* out_browser_id) {
+extern "C" void* excef_create_browser_view_in_context(int width, int height,
+                                                       const char* url,
+                                                       int* out_browser_id,
+                                                       int context_handle) {
     if (out_browser_id) *out_browser_id = 0;
     if (!url) return nullptr;
 
@@ -226,10 +237,13 @@ extern "C" void* excef_create_browser_view(int width, int height,
         g_host_to_id[host] = id;
     }
 
+    CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
+    CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
+
     CefBrowserSettings browser_settings;
     bool ok = CefBrowserHost::CreateBrowser(
         window_info, handler.get(), url, browser_settings,
-        /*extra_info=*/nullptr, /*request_context=*/nullptr);
+        /*extra_info=*/nullptr, pass);
 
     if (!ok) {
         exclr8cef::UnregisterOsrHandler(id);
@@ -243,6 +257,12 @@ extern "C" void* excef_create_browser_view(int width, int height,
 
     if (out_browser_id) *out_browser_id = id;
     return reinterpret_cast<void*>(host);
+}
+
+extern "C" void* excef_create_browser_view(int width, int height,
+                                           const char* url,
+                                           int* out_browser_id) {
+    return excef_create_browser_view_in_context(width, height, url, out_browser_id, 0);
 }
 
 // Resize the host HWND, its child CEF window, and notify Chromium so

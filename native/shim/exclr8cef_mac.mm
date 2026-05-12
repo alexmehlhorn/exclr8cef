@@ -243,9 +243,10 @@ extern "C" void* excef_create_embedded_host(int width, int height) {
 // Phase 2: attach a CEF browser to a previously-created host NSView.
 // Call this AFTER the UI framework has parented the NSView, so Chromium
 // can read the correct backingScaleFactor at browser-creation time.
-extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
-                                              int width, int height,
-                                              const char* url) {
+extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
+                                                          int width, int height,
+                                                          const char* url,
+                                                          int context_handle) {
     if (!host_view_ptr || !url) return 0;
     @autoreleasepool {
         NSView* host = (__bridge NSView*)host_view_ptr;
@@ -261,10 +262,15 @@ extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
         exclr8cef::RegisterOsrHandler(id, handler);
         g_host_to_id[host_view_ptr] = id;
 
+        CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
+        // Treat handle=0 → global as "no explicit context" so CEF picks
+        // its default — same shape as request_context=nullptr.
+        CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
+
         CefBrowserSettings browser_settings;
         bool ok = CefBrowserHost::CreateBrowser(
             window_info, handler.get(), url, browser_settings,
-            /*extra_info=*/nullptr, /*request_context=*/nullptr);
+            /*extra_info=*/nullptr, pass);
 
         if (!ok) {
             exclr8cef::UnregisterOsrHandler(id);
@@ -275,9 +281,16 @@ extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
     }
 }
 
-extern "C" void* excef_create_browser_view(int width, int height,
-                                           const char* url,
-                                           int* out_browser_id) {
+extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
+                                              int width, int height,
+                                              const char* url) {
+    return excef_attach_embedded_browser_in_context(host_view_ptr, width, height, url, 0);
+}
+
+extern "C" void* excef_create_browser_view_in_context(int width, int height,
+                                                       const char* url,
+                                                       int* out_browser_id,
+                                                       int context_handle) {
     if (out_browser_id) *out_browser_id = 0;
     if (!url) return nullptr;
 
@@ -303,10 +316,13 @@ extern "C" void* excef_create_browser_view(int width, int height,
         exclr8cef::RegisterOsrHandler(id, handler);
         g_host_to_id[(__bridge void*)host] = id;
 
+        CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
+        CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
+
         CefBrowserSettings browser_settings;
         bool ok = CefBrowserHost::CreateBrowser(
             window_info, handler.get(), url, browser_settings,
-            /*extra_info=*/nullptr, /*request_context=*/nullptr);
+            /*extra_info=*/nullptr, pass);
 
         if (!ok) {
             exclr8cef::UnregisterOsrHandler(id);
@@ -317,6 +333,12 @@ extern "C" void* excef_create_browser_view(int width, int height,
         if (out_browser_id) *out_browser_id = id;
         return (void*)CFBridgingRetain(host);
     }
+}
+
+extern "C" void* excef_create_browser_view(int width, int height,
+                                           const char* url,
+                                           int* out_browser_id) {
+    return excef_create_browser_view_in_context(width, height, url, out_browser_id, 0);
 }
 
 // Resize a previously-created embedded browser view. Sets the host's

@@ -100,6 +100,18 @@ public class WebView : Control
     /// </summary>
     public CefRequestContext? RequestContext { get; set; }
 
+    /// <summary>
+    /// Fires once when <see cref="Browser"/> is populated (after the first
+    /// arrange creates it). Use this to subscribe to per-browser events
+    /// (ConsoleMessage, FileDialog, etc.) that aren't mirrored as
+    /// Avalonia properties on the control. Identical shape to the same
+    /// event on <see cref="NativeWebView"/>.
+    /// </summary>
+    public event EventHandler? BrowserReady;
+
+    /// <summary>Fires after the underlying browser has been fully closed.</summary>
+    public event EventHandler? BrowserClosed;
+
     private CefBrowser? _browser;
     // Browser dimensions in DIPs / CSS pixels. The native shim multiplies
     // these by _renderScale (passed via SetDeviceScaleFactor + the create
@@ -450,6 +462,7 @@ public class WebView : Control
             {
                 _browser = browser;
                 SubscribeBrowserEvents(browser);
+                BrowserReady?.Invoke(this, EventArgs.Empty);
             }
         }
         else
@@ -493,6 +506,7 @@ public class WebView : Control
         b.PopupSize            += OnBrowserPopupSize;
         b.PopupPainted         += OnBrowserPopupPainted;
         b.DragImage            += OnBrowserDragImage;
+        b.Closed               += OnBrowserClosed;
     }
 
     private void UnsubscribeBrowserEvents(CefBrowser b)
@@ -506,7 +520,11 @@ public class WebView : Control
         b.PopupSize            -= OnBrowserPopupSize;
         b.PopupPainted         -= OnBrowserPopupPainted;
         b.DragImage            -= OnBrowserDragImage;
+        b.Closed               -= OnBrowserClosed;
     }
+
+    private void OnBrowserClosed(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() => BrowserClosed?.Invoke(this, EventArgs.Empty));
 
     private void OnBrowserAddressChanged(object? sender, string url)
     {

@@ -403,6 +403,11 @@ void RegisterOsrHandler(int browser_id, CefRefPtr<Exclr8CefOsrHandler> handler);
 void UnregisterOsrHandler(int browser_id);
 Exclr8CefOsrHandler* LookupOsrHandler(int browser_id);
 
+// Forward decl so platform shims (mac.mm / win.cc) can resolve a request-
+// context handle from C# to the underlying CefRequestContext before
+// passing it to CefBrowserHost::CreateBrowser. Defined in exclr8cef_osr.cc.
+CefRefPtr<CefRequestContext> ResolveContext(int handle);
+
 }  // namespace exclr8cef
 
 #endif  // EXCLR8CEF_OSR_H_

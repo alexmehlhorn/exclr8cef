@@ -99,11 +99,23 @@ public class NativeWebView : NativeControlHost
     public int BrowserId => _browser?.Id ?? 0;
 
     /// <summary>
-    /// Fires once when <see cref="Browser"/> is populated. Use this to
-    /// subscribe to per-browser events (ConsoleMessage, FileDialog, etc.)
-    /// that aren't mirrored as Avalonia properties on the control.
+    /// Optional isolated request context (separate cookies / cache /
+    /// storage from other browsers). MUST be set before the control is
+    /// laid out for the first time — after the underlying
+    /// <see cref="CefBrowser"/> is created, this is read-only.
+    /// </summary>
+    public CefRequestContext? RequestContext { get; set; }
+
+    /// <summary>
+    /// Fires once when <see cref="Browser"/> is populated (after the first
+    /// arrange creates and attaches it). Use this to subscribe to
+    /// per-browser events (ConsoleMessage, FileDialog, etc.) that aren't
+    /// mirrored as Avalonia properties on the control.
     /// </summary>
     public event EventHandler? BrowserReady;
+
+    /// <summary>Fires after the underlying browser has been fully closed.</summary>
+    public event EventHandler? BrowserClosed;
 
     // Native handle returned by excef_create_embedded_host. NSView*/HWND
     // depending on platform; treated as an opaque IntPtr at this layer.
@@ -150,7 +162,7 @@ public class NativeWebView : NativeControlHost
             _browserAttached = true;
             _lastWidth = w;
             _lastHeight = h;
-            var browser = Cef.AttachEmbeddedBrowser(_hostView, w, h, Url ?? "about:blank");
+            var browser = Cef.AttachEmbeddedBrowser(_hostView, w, h, Url ?? "about:blank", RequestContext);
             if (browser is not null)
             {
                 _browser = browser;
@@ -179,19 +191,71 @@ public class NativeWebView : NativeControlHost
 
     protected override void DestroyNativeControlCore(IPlatformHandle control)
     {
-        // The CefBrowser is bound to the native widget's lifetime; once
-        // Avalonia tears down the widget, CEF will fire OnBeforeClose for
-        // the underlying browser. Unsubscribe so the dead browser ref
-        // doesn't keep our property handlers alive.
-        if (_browser is { } b)
-        {
-            UnsubscribeBrowserEvents(b);
-            try { b.Close(force: false); } catch { /* already closing */ }
-        }
-        _browser = null;
+        // Avalonia is tearing down the hosted widget; close the browser
+        // through the same path a user-driven Close() would take so the
+        // unsubscribe / null-out sequence stays consistent.
+        Close();
         _browserAttached = false;
         _hostView = IntPtr.Zero;
         base.DestroyNativeControlCore(control);
+    }
+
+    // ---- Convenience methods (mirror of WebView's surface) ------------
+    //
+    // Most hosts can reach the same functionality via webView.Browser.<x>()
+    // directly; these shortcuts exist so XAML data-binding scenarios and
+    // toolbar wiring don't need a null check on Browser when the control
+    // isn't yet ready. Parity with WebView is intentional — swapping
+    // between the two controls is mechanical.
+
+    /// <summary>Load the given URL. Equivalent to setting <see cref="Url"/>.</summary>
+    public void LoadUrl(string url) => _browser?.LoadUrl(url);
+    public void GoBack()      => _browser?.GoBack();
+    public void GoForward()   => _browser?.GoForward();
+    public void Reload(bool ignoreCache = false) => _browser?.Reload(ignoreCache);
+    public void StopLoad()    => _browser?.StopLoad();
+    public void ShowDevTools()  => _browser?.ShowDevTools();
+    public void CloseDevTools() => _browser?.CloseDevTools();
+    public void ExecuteJavaScript(string code) => _browser?.ExecuteJavaScript(code);
+
+    private const double ZoomStep = 0.5;
+    public double ZoomLevel
+    {
+        get => _browser?.ZoomLevel ?? 0;
+        set { if (_browser is not null) _browser.ZoomLevel = value; }
+    }
+    public void ZoomIn()    => ZoomLevel = ZoomLevel + ZoomStep;
+    public void ZoomOut()   => ZoomLevel = ZoomLevel - ZoomStep;
+    public void ResetZoom() => ZoomLevel = 0;
+
+    public void Copy()      => _browser?.Copy();
+    public void Paste()     => _browser?.Paste();
+    public void Cut()       => _browser?.Cut();
+    public void SelectAll() => _browser?.SelectAll();
+    public void Undo()      => _browser?.Undo();
+    public void Redo()      => _browser?.Redo();
+
+    public Task<string> EvaluateJavaScriptAsync(string code)
+        => _browser is null ? Task.FromResult("null") : _browser.EvaluateJavaScriptAsync(code);
+
+    public Task<bool> PrintToPdfAsync(string path)
+        => _browser is null ? Task.FromResult(false) : _browser.PrintToPdfAsync(path);
+
+    /// <summary>
+    /// Close the underlying CEF browser. Idempotent. Force-closes (skips
+    /// the page's <c>onbeforeunload</c>) to match <see cref="WebView.Close"/>
+    /// — appropriate for window-teardown paths. Use
+    /// <c>webView.Browser?.Close(force: false)</c> directly if you need
+    /// graceful close semantics.
+    /// </summary>
+    public void Close()
+    {
+        if (_browser is not null)
+        {
+            UnsubscribeBrowserEvents(_browser);
+            _browser.Close(force: true);
+            _browser = null;
+        }
     }
 
     // ---- Browser event routing → Avalonia property updates ------------
@@ -201,6 +265,7 @@ public class NativeWebView : NativeControlHost
         b.AddressChanged      += OnBrowserAddressChanged;
         b.TitleChanged        += OnBrowserTitleChanged;
         b.LoadingStateChanged += OnBrowserLoadingStateChanged;
+        b.Closed              += OnBrowserClosed;
     }
 
     private void UnsubscribeBrowserEvents(CefBrowser b)
@@ -208,7 +273,11 @@ public class NativeWebView : NativeControlHost
         b.AddressChanged      -= OnBrowserAddressChanged;
         b.TitleChanged        -= OnBrowserTitleChanged;
         b.LoadingStateChanged -= OnBrowserLoadingStateChanged;
+        b.Closed              -= OnBrowserClosed;
     }
+
+    private void OnBrowserClosed(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() => BrowserClosed?.Invoke(this, EventArgs.Empty));
 
     private void OnBrowserAddressChanged(object? sender, string url)
     {

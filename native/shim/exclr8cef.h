@@ -112,6 +112,20 @@ EXCEF_API void* excef_create_embedded_host(int width, int height);
 EXCEF_API int excef_attach_embedded_browser(void* host_view, int width, int height,
                                              const char* url);
 
+// Request-context-aware variants — same as the two functions above but
+// the browser is created inside the named CefRequestContext for cookie/
+// cache/storage isolation. context_handle = 0 → global context (same as
+// the non-_in_context variants). Mirrors the OSR side's
+// excef_create_offscreen_browser_in_context.
+EXCEF_API void* excef_create_browser_view_in_context(int width, int height,
+                                                       const char* url,
+                                                       int* out_browser_id,
+                                                       int context_handle);
+EXCEF_API int excef_attach_embedded_browser_in_context(void* host_view,
+                                                         int width, int height,
+                                                         const char* url,
+                                                         int context_handle);
+
 // Resize a browser view previously returned by excef_create_browser_view.
 // Walks the host view's direct subviews and resizes them so the embedded
 // Chromium browser tracks the host's layout. Call on every layout change
