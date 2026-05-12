@@ -126,6 +126,17 @@ EXCEF_API int excef_attach_embedded_browser_in_context(void* host_view,
                                                          const char* url,
                                                          int context_handle);
 
+// V2: like _in_context but accepts an ARGB background colour Chromium
+// uses for the render target before any HTML paints. CEF's default
+// (when 0 is passed) is opaque white, which appears as a "white
+// flash" on the embedded NSView/HWND between attach and first page
+// paint. Alpha must be 0x00 (transparent) or 0xFF (opaque).
+EXCEF_API int excef_attach_embedded_browser_in_context_v2(void* host_view,
+                                                            int width, int height,
+                                                            const char* url,
+                                                            int context_handle,
+                                                            uint32_t background_color);
+
 // Resize a browser view previously returned by excef_create_browser_view.
 // Walks the host view's direct subviews and resizes them so the embedded
 // Chromium browser tracks the host's layout. Call on every layout change

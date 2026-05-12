@@ -17,6 +17,8 @@ public sealed partial class CefBrowser
     private AccessibilityClient? _accessibility;
     private DomSnapshotClient? _domSnapshot;
     private OverlayClient? _overlay;
+    private NetworkClient? _network;
+    private TargetClient? _target;
 
     /// <summary>
     /// CDP <c>Page</c> domain — lifecycle events, screenshot with
@@ -68,4 +70,19 @@ public sealed partial class CefBrowser
     /// Useful for human-in-the-loop transparency.
     /// </summary>
     public OverlayClient Overlay => _overlay ??= new OverlayClient(this);
+
+    /// <summary>
+    /// CDP <c>Network</c> domain — devtools-style request/response
+    /// stream with on-demand body retrieval. Lets the AI read the
+    /// underlying API JSON the page is fetching instead of scraping
+    /// rendered DOM.
+    /// </summary>
+    public NetworkClient Network => _network ??= new NetworkClient(this);
+
+    /// <summary>
+    /// CDP <c>Target</c> domain — visibility into out-of-process
+    /// iframes (OOPIFs), workers, service workers. Required to see
+    /// inside cross-origin iframes (embedded YouTube, Stripe, etc.).
+    /// </summary>
+    public TargetClient Target => _target ??= new TargetClient(this);
 }

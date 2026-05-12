@@ -346,7 +346,7 @@ public static partial class Cef
     /// so the per-browser event surface fires. Pass <paramref name="context"/>
     /// to isolate cookies / cache / storage; null = global context.
     /// </summary>
-    public static CefBrowser? AttachEmbeddedBrowser(IntPtr hostView, int width, int height, string url, CefRequestContext? context = null)
+    public static CefBrowser? AttachEmbeddedBrowser(IntPtr hostView, int width, int height, string url, CefRequestContext? context = null, uint backgroundColor = 0)
     {
         if (hostView == IntPtr.Zero) return null;
         ArgumentNullException.ThrowIfNull(url);
@@ -357,7 +357,7 @@ public static partial class Cef
             try
             {
                 int ctxHandle = context?.Handle ?? 0;
-                int id = Excef.excef_attach_embedded_browser_in_context((void*)hostView, width, height, ptr, ctxHandle);
+                int id = Excef.excef_attach_embedded_browser_in_context_v2((void*)hostView, width, height, ptr, ctxHandle, backgroundColor);
                 if (id <= 0) return null;
                 var browser = new CefBrowser(id);
                 s_browsers[id] = browser;

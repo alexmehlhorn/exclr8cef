@@ -37,6 +37,29 @@ public class NativeWebView : NativeControlHost, IWebView
     public static readonly StyledProperty<string?> UrlProperty =
         AvaloniaProperty.Register<NativeWebView, string?>(nameof(Url), "about:blank");
 
+    /// <summary>
+    /// ARGB colour Chromium fills the embedded browser's render
+    /// target with BEFORE any HTML paints. CEF's default is opaque
+    /// white (<c>0xFFFFFFFF</c>) which surfaces as a brief white flash
+    /// on the host NSView/HWND between attach and first page paint —
+    /// noticeable on dark-themed hosts. Set this to an opaque dark
+    /// colour (e.g. <c>0xFF0d1117</c>) or fully transparent
+    /// (<c>0x00000000</c>) before the control's first arrange to
+    /// suppress it. Read once at <c>AttachEmbeddedBrowser</c> time;
+    /// changing later has no effect (CEF's
+    /// <c>CefBrowserSettings.background_color</c> is creation-only).
+    /// Alpha must be either 0x00 (transparent) or 0xFF (opaque);
+    /// in-between values are ignored by Chromium.
+    /// </summary>
+    public static readonly StyledProperty<uint> BackgroundColorProperty =
+        AvaloniaProperty.Register<NativeWebView, uint>(nameof(BackgroundColor), 0u);
+
+    public uint BackgroundColor
+    {
+        get => GetValue(BackgroundColorProperty);
+        set => SetValue(BackgroundColorProperty, value);
+    }
+
     public static readonly DirectProperty<NativeWebView, string> TitleProperty =
         AvaloniaProperty.RegisterDirect<NativeWebView, string>(
             nameof(Title), o => o.Title);
@@ -213,7 +236,7 @@ public class NativeWebView : NativeControlHost, IWebView
             _browserAttached = true;
             _lastWidth = w;
             _lastHeight = h;
-            var browser = Cef.AttachEmbeddedBrowser(_hostView, w, h, Url ?? "about:blank", RequestContext);
+            var browser = Cef.AttachEmbeddedBrowser(_hostView, w, h, Url ?? "about:blank", RequestContext, BackgroundColor);
             if (browser is not null)
             {
                 _browser = browser;

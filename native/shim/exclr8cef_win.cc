@@ -164,10 +164,15 @@ extern "C" void* excef_create_embedded_host(int width, int height) {
 // Phase 2: attach a CEF browser to a previously-created host HWND. Call
 // this AFTER the UI framework has parented the HWND so Chromium reads
 // the correct effective DPI at browser-creation time.
-extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
-                                                          int width, int height,
-                                                          const char* url,
-                                                          int context_handle) {
+//
+// `background_color` (ARGB) sets the colour Chromium fills the
+// render target with before any HTML paints. CEF's default is opaque
+// white; pass 0 to keep it. Alpha must be 0x00 or 0xFF.
+extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
+                                                             int width, int height,
+                                                             const char* url,
+                                                             int context_handle,
+                                                             uint32_t background_color) {
     if (!host_view_ptr || !url) return 0;
     HWND host = reinterpret_cast<HWND>(host_view_ptr);
 
@@ -192,6 +197,9 @@ extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
     CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
 
     CefBrowserSettings browser_settings;
+    if (background_color != 0) {
+        browser_settings.background_color = background_color;
+    }
     bool ok = CefBrowserHost::CreateBrowser(
         window_info, handler.get(), url, browser_settings,
         /*extra_info=*/nullptr, pass);
@@ -205,10 +213,17 @@ extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
     return id;
 }
 
+extern "C" int excef_attach_embedded_browser_in_context(void* host_view_ptr,
+                                                          int width, int height,
+                                                          const char* url,
+                                                          int context_handle) {
+    return excef_attach_embedded_browser_in_context_v2(host_view_ptr, width, height, url, context_handle, 0);
+}
+
 extern "C" int excef_attach_embedded_browser(void* host_view_ptr,
                                               int width, int height,
                                               const char* url) {
-    return excef_attach_embedded_browser_in_context(host_view_ptr, width, height, url, 0);
+    return excef_attach_embedded_browser_in_context_v2(host_view_ptr, width, height, url, 0, 0);
 }
 
 // Combined create + attach. Returns the host HWND as void* (with the

@@ -47,6 +47,9 @@ internal static unsafe partial class Excef
     public static extern int excef_attach_embedded_browser_in_context(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url, int context_handle);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_attach_embedded_browser_in_context_v2(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url, int context_handle, uint background_color);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_resize_browser_view(void* host_view, int width, int height);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
