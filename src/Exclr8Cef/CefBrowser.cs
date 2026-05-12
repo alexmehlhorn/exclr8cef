@@ -297,6 +297,39 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<CertErrorEventArgs>? CertError;
 
     /// <summary>
+    /// The page wants to move focus OUT (Tab past last form field, etc.).
+    /// CefFocusHandler::OnTakeFocus. Argument: <c>true</c> = move forward
+    /// (Tab), <c>false</c> = backward (Shift+Tab). Host should pass focus
+    /// to the next / previous Avalonia control around the WebView.
+    /// </summary>
+    public event EventHandler<bool>? TakeFocus;
+
+    /// <summary>
+    /// CEF is about to receive focus. CefFocusHandler::OnSetFocus.
+    /// Host can cancel via <see cref="SetFocusEventArgs.Cancel"/>.
+    /// </summary>
+    public event EventHandler<SetFocusEventArgs>? FocusRequested;
+
+    /// <summary>
+    /// CEF received focus successfully. CefFocusHandler::OnGotFocus.
+    /// </summary>
+    public event EventHandler? GotFocus;
+
+    /// <summary>
+    /// CefKeyboardHandler::OnPreKeyEvent. Fires before the page sees the
+    /// key event. Set <see cref="PreKeyEventArgs.Handled"/> = true to
+    /// suppress page dispatch (use for global accelerators).
+    /// </summary>
+    public event EventHandler<PreKeyEventArgs>? PreKeyEvent;
+
+    /// <summary>
+    /// CefKeyboardHandler::OnKeyEvent. Fires AFTER the page sees the key
+    /// (and didn't handle it). Set <see cref="PreKeyEventArgs.Handled"/>
+    /// = true to indicate the host consumed the event.
+    /// </summary>
+    public event EventHandler<PreKeyEventArgs>? KeyEvent;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -347,6 +380,51 @@ public sealed class CefBrowser : IDisposable
         if (!_closed) Excef.excef_reload(Id, ignoreCache ? 1 : 0);
     }
     public void StopLoad() { if (!_closed) Excef.excef_stop_load(Id); }
+
+    /// <summary>
+    /// Async — returns the rendered HTML source of the main frame.
+    /// CefFrame::GetSource. Useful for debugging / page-scraping scenarios.
+    /// </summary>
+    public Task<string> GetSourceAsync() => GetVisitorString(Excef.excef_get_frame_source);
+    /// <summary>
+    /// Async — returns the rendered plain text of the main frame
+    /// (innerText-equivalent). CefFrame::GetText.
+    /// </summary>
+    public Task<string> GetTextAsync() => GetVisitorString(Excef.excef_get_frame_text);
+
+    private Task<string> GetVisitorString(Func<int, int, int> caller)
+    {
+        if (_closed) return Task.FromException<string>(new InvalidOperationException("browser closed"));
+        int reqId = Interlocked.Increment(ref Cef.s_nextStringVisitorId);
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Cef.s_stringVisitorRequests[reqId] = tcs;
+        if (caller(Id, reqId) == 0)
+        {
+            Cef.s_stringVisitorRequests.TryRemove(reqId, out _);
+            tcs.TrySetException(new InvalidOperationException("frame call failed"));
+        }
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Load arbitrary HTML into the main frame without a network round-trip.
+    /// </summary>
+    public void LoadString(string html, string? virtualUrl = null)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* h = (sbyte*)Marshal.StringToCoTaskMemUTF8(html);
+            sbyte* u = virtualUrl is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(virtualUrl);
+            try { Excef.excef_load_string(Id, h, u); }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)h);
+                if (u != null) Marshal.FreeCoTaskMem((IntPtr)u);
+            }
+        }
+    }
 
     // ---- Sizing / paint pipeline ---------------------------------------
 
@@ -563,6 +641,100 @@ public sealed class CefBrowser : IDisposable
 
     public void ShowDevTools()  { if (!_closed) Excef.excef_show_dev_tools(Id); }
     public void CloseDevTools() { if (!_closed) Excef.excef_close_dev_tools(Id); }
+
+    /// <summary>Raised for every CDP message the browser emits — replies to host requests AND server-pushed events.</summary>
+    public event EventHandler<DevToolsMessageEventArgs>? DevToolsMessage;
+
+    internal void RaiseDevToolsMessage(bool isEvent, int messageId, string json)
+    {
+        // Resolve any pending ExecuteDevToolsMethodAsync awaiter for this id.
+        if (!isEvent && messageId > 0 &&
+            _devtoolsPending.TryRemove(messageId, out var tcs))
+        {
+            tcs.TrySetResult(json);
+        }
+        DevToolsMessage?.Invoke(this, new DevToolsMessageEventArgs(isEvent, messageId, json));
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> _devtoolsPending = new();
+    private int _nextDevToolsId;
+
+    /// <summary>
+    /// Capture a PNG screenshot of the page via CDP <c>Page.captureScreenshot</c>.
+    /// Works in any rendering mode (OSR, embedded, windowed) and doesn't
+    /// require <see cref="EnableFrameCapture"/>. Returns PNG bytes ready
+    /// to write to disk or send to a vision API.
+    /// </summary>
+    /// <param name="format">"png" | "jpeg" | "webp" (default png)</param>
+    /// <param name="quality">0-100 for jpeg/webp (ignored for png)</param>
+    /// <param name="captureBeyondViewport">If true, captures the full document height, not just the visible viewport.</param>
+    public async Task<byte[]> CapturePageAsync(string format = "png", int? quality = null, bool captureBeyondViewport = false)
+    {
+        var sb = new System.Text.StringBuilder("{\"format\":\"").Append(format).Append("\"");
+        if (quality is int q) sb.Append(",\"quality\":").Append(q);
+        if (captureBeyondViewport) sb.Append(",\"captureBeyondViewport\":true");
+        sb.Append("}");
+        var reply = await ExecuteDevToolsMethodAsync("Page.captureScreenshot", sb.ToString());
+        // Reply is `{"id":N, "result":{"data":"<base64>"}}`. Crude
+        // extraction — avoids a JSON dependency. CDP guarantees the
+        // shape, so this is reliable enough for v0.
+        int idx = reply.IndexOf("\"data\":\"", StringComparison.Ordinal);
+        if (idx < 0) throw new InvalidOperationException("CapturePage: no data in CDP reply: " + reply);
+        idx += "\"data\":\"".Length;
+        int end = reply.IndexOf('"', idx);
+        if (end < 0) throw new InvalidOperationException("CapturePage: unterminated data in CDP reply");
+        return Convert.FromBase64String(reply.Substring(idx, end - idx));
+    }
+
+    /// <summary>Send a raw CDP JSON message to the browser. Fire-and-forget; use <see cref="ExecuteDevToolsMethodAsync"/> for round-trip.</summary>
+    public bool SendDevToolsMessageRaw(string messageJson)
+    {
+        ArgumentNullException.ThrowIfNull(messageJson);
+        if (_closed) return false;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(messageJson);
+            try { return Excef.excef_send_devtools_message(Id, p, messageJson.Length) != 0; }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>
+    /// Execute a CDP method (e.g. <c>Network.setUserAgentOverride</c>,
+    /// <c>Emulation.setDeviceMetricsOverride</c>, <c>Page.captureScreenshot</c>)
+    /// and await the JSON reply. <paramref name="paramsJson"/> is a
+    /// JSON-stringified object; pass <c>null</c> for no params.
+    /// </summary>
+    public Task<string> ExecuteDevToolsMethodAsync(string method, string? paramsJson = null)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        if (_closed) return Task.FromException<string>(new InvalidOperationException("browser closed"));
+
+        int messageId = Interlocked.Increment(ref _nextDevToolsId);
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _devtoolsPending[messageId] = tcs;
+
+        unsafe
+        {
+            sbyte* m = (sbyte*)Marshal.StringToCoTaskMemUTF8(method);
+            sbyte* p = paramsJson is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(paramsJson);
+            try
+            {
+                int rc = Excef.excef_execute_devtools_method(Id, messageId, m, p);
+                if (rc == 0)
+                {
+                    _devtoolsPending.TryRemove(messageId, out _);
+                    tcs.TrySetException(new InvalidOperationException("ExecuteDevToolsMethod failed (browser unknown)"));
+                }
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)m);
+                if (p != null) Marshal.FreeCoTaskMem((IntPtr)p);
+            }
+        }
+        return tcs.Task;
+    }
 
     // ---- JavaScript -----------------------------------------------------
 
@@ -850,8 +1022,18 @@ public sealed class CefBrowser : IDisposable
     internal void RaisePopupPainted(IntPtr buffer, int width, int height)
         => PopupPainted?.Invoke(this, new PaintEventArgs(buffer, width, height));
 
-    internal void RaiseJsInvoke(string method, string argsJson)
-        => JsInvoke?.Invoke(this, new JsInvokeEventArgs(method, argsJson));
+    internal void RaiseJsInvoke(JsInvokeEventArgs args)
+    {
+        if (JsInvoke is null)
+        {
+            // No subscriber — auto-resolve with null so the renderer's
+            // Promise doesn't hang.
+            args.Reply(null);
+            return;
+        }
+        try { JsInvoke.Invoke(this, args); }
+        catch (Exception ex) { args.ReplyError(ex.Message); }
+    }
 
     internal void RaiseAccessibilityTreeChange(string json)
         => AccessibilityTreeChange?.Invoke(this, json);
@@ -883,6 +1065,12 @@ public sealed class CefBrowser : IDisposable
     internal bool HasCertErrorSubscriber => CertError is not null;
     internal void RaiseCertError(CertErrorEventArgs args)
         => CertError?.Invoke(this, args);
+
+    internal void RaiseTakeFocus(bool next) => TakeFocus?.Invoke(this, next);
+    internal void RaiseSetFocus(SetFocusEventArgs args) => FocusRequested?.Invoke(this, args);
+    internal void RaiseGotFocus() => GotFocus?.Invoke(this, EventArgs.Empty);
+    internal void RaisePreKey(PreKeyEventArgs args) => PreKeyEvent?.Invoke(this, args);
+    internal void RaiseKeyEvent(PreKeyEventArgs args) => KeyEvent?.Invoke(this, args);
 
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
@@ -1053,6 +1241,13 @@ public sealed class CefBrowser : IDisposable
                 tcs.TrySetException(browserClosedEx);
         }
         _evalRequestIds.Clear();
+        // Fail any pending DevTools method awaiters so callers' Tasks
+        // complete instead of hanging.
+        foreach (var kv in _devtoolsPending)
+        {
+            kv.Value.TrySetException(browserClosedEx);
+        }
+        _devtoolsPending.Clear();
         // Unblock any FrameStream consumers — without TryComplete, an
         // awaiter on ReadAsync hangs after browser close.
         lock (_frameLock)
@@ -1091,14 +1286,59 @@ public sealed record HitTestResult(
     string? Href,
     double X, double Y, double Width, double Height);
 
-/// <summary>Args for <see cref="CefBrowser.JsInvoke"/>.</summary>
+/// <summary>
+/// Args for <see cref="CefBrowser.JsInvoke"/>. The renderer's
+/// <c>window.exclr8cef.invoke(method, argsJson)</c> call returns a
+/// Promise — the host MUST call <see cref="Reply"/> or <see cref="ReplyError"/>
+/// so the Promise eventually resolves / rejects. If the host never
+/// replies, the Promise stays pending forever (no leak in the browser
+/// process — the entry is cleaned up on browser close).
+/// </summary>
 public sealed class JsInvokeEventArgs : EventArgs
 {
+    private readonly ulong _token;
+    private int _resolved;
+
     /// <summary>The method name JS passed as the first argument.</summary>
     public string Method { get; }
     /// <summary>The arguments JS passed as the second argument (a string — typically <c>JSON.stringify(...)</c> of the call args).</summary>
     public string ArgsJson { get; }
-    internal JsInvokeEventArgs(string method, string argsJson) { Method = method; ArgsJson = argsJson; }
+    internal JsInvokeEventArgs(ulong token, string method, string argsJson)
+    {
+        _token = token;
+        Method = method;
+        ArgsJson = argsJson;
+    }
+
+    /// <summary>
+    /// Resolve the renderer's Promise. <paramref name="resultJson"/>
+    /// will be <c>JSON.parse</c>d on the JS side. Pass <c>null</c> to
+    /// resolve with <c>null</c>. Idempotent — only the first call wins.
+    /// </summary>
+    public void Reply(string? resultJson)
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* p = resultJson is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(resultJson);
+            try { Excef.excef_resolve_js_invoke(_token, 1, p); }
+            finally { if (p != null) Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>
+    /// Reject the renderer's Promise with the given message. Idempotent.
+    /// </summary>
+    public void ReplyError(string message)
+    {
+        if (Interlocked.Exchange(ref _resolved, 1) != 0) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(message ?? "");
+            try { Excef.excef_resolve_js_invoke(_token, 0, p); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
 }
 
 /// <summary>
@@ -1493,6 +1733,54 @@ public sealed class DragImageEventArgs : EventArgs
         Height = height;
         HotspotX = hotspotX;
         HotspotY = hotspotY;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.DevToolsMessage"/>.</summary>
+public sealed class DevToolsMessageEventArgs : EventArgs
+{
+    /// <summary>True if this is an unsolicited server event (e.g. Network.requestWillBeSent), false if it's a reply.</summary>
+    public bool IsEvent { get; }
+    /// <summary>For replies, the message_id of the request. 0 for events.</summary>
+    public int MessageId { get; }
+    /// <summary>The raw JSON message.</summary>
+    public string Json { get; }
+    internal DevToolsMessageEventArgs(bool isEvent, int messageId, string json)
+    {
+        IsEvent = isEvent;
+        MessageId = messageId;
+        Json = json;
+    }
+}
+
+/// <summary>Args for <see cref="CefBrowser.FocusRequested"/>.</summary>
+public sealed class SetFocusEventArgs : EventArgs
+{
+    public Cef.FocusSource Source { get; }
+    /// <summary>Set true to deny CEF the focus.</summary>
+    public bool Cancel { get; set; }
+    internal SetFocusEventArgs(Cef.FocusSource source) { Source = source; }
+}
+
+/// <summary>Args for <see cref="CefBrowser.PreKeyEvent"/> and <see cref="CefBrowser.KeyEvent"/>.</summary>
+public sealed class PreKeyEventArgs : EventArgs
+{
+    public Cef.CefKeyEventType Type { get; }
+    public Cef.CefModifiers Modifiers { get; }
+    public int WindowsKeyCode { get; }
+    public int NativeKeyCode { get; }
+    public bool IsSystemKey { get; }
+    /// <summary>Set true to indicate the host handled the key — page is not notified.</summary>
+    public bool Handled { get; set; }
+
+    internal PreKeyEventArgs(Cef.CefKeyEventType type, Cef.CefModifiers mods,
+                              int vk, int native, bool isSystem)
+    {
+        Type = type;
+        Modifiers = mods;
+        WindowsKeyCode = vk;
+        NativeKeyCode = native;
+        IsSystemKey = isSystem;
     }
 }
 

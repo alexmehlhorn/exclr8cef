@@ -623,6 +623,9 @@ public static class Cef
         FileSystemAccess           = 1 << 24,
     }
 
+    /// <summary>Source of a CefFocusHandler::OnSetFocus request. Mirrors <c>cef_focus_source_t</c>.</summary>
+    public enum FocusSource { Navigation = 0, System = 1 }
+
     /// <summary>How a permission request was resolved. Mirrors <c>cef_permission_request_result_t</c>.</summary>
     public enum PermissionResult
     {
@@ -910,6 +913,13 @@ public static class Cef
                 Excef.excef_set_media_access_callback(&MediaAccessTrampoline);
                 Excef.excef_set_before_popup_callback(&BeforePopupTrampoline);
                 Excef.excef_set_cert_error_callback(&CertErrorTrampoline);
+                Excef.excef_set_take_focus_callback(&TakeFocusTrampoline);
+                Excef.excef_set_set_focus_callback(&SetFocusTrampoline);
+                Excef.excef_set_got_focus_callback(&GotFocusTrampoline);
+                Excef.excef_set_pre_key_callback(&PreKeyTrampoline);
+                Excef.excef_set_key_event_callback(&KeyEventTrampoline);
+                Excef.excef_set_devtools_message_callback(&DevToolsMessageTrampoline);
+                Excef.excef_set_string_visitor_callback(&StringVisitorTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1112,12 +1122,18 @@ public static class Cef
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static unsafe void JsInvokeTrampoline(int browserId, sbyte* method, sbyte* argsJson)
+    private static unsafe void JsInvokeTrampoline(int browserId, ulong token, sbyte* method, sbyte* argsJson)
     {
-        if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseJsInvoke(
+        if (!s_browsers.TryGetValue(browserId, out var b))
+        {
+            // Unknown browser: auto-resolve so the renderer's Promise doesn't hang.
+            Excef.excef_resolve_js_invoke(token, 0, null);
+            return;
+        }
+        b.RaiseJsInvoke(new JsInvokeEventArgs(
+            token,
             Marshal.PtrToStringUTF8((IntPtr)method) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? "");
+            Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? ""));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1162,6 +1178,65 @@ public static class Cef
             (PermissionRequestType)requestedPermissions);
         try { b.RaisePermissionRequest(args); }
         catch { args.Deny(); }  // idempotent — won't double-resolve if handler already did
+    }
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> s_stringVisitorRequests = new();
+    internal static int s_nextStringVisitorId;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void StringVisitorTrampoline(int requestId, sbyte* value)
+    {
+        if (!s_stringVisitorRequests.TryRemove(requestId, out var tcs)) return;
+        tcs.TrySetResult(Marshal.PtrToStringUTF8((IntPtr)value) ?? "");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void DevToolsMessageTrampoline(int browserId, int isEvent, int messageId, sbyte* json)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var s = Marshal.PtrToStringUTF8((IntPtr)json) ?? "";
+        b.RaiseDevToolsMessage(isEvent != 0, messageId, s);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void TakeFocusTrampoline(int browserId, int next)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseTakeFocus(next != 0);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int SetFocusTrampoline(int browserId, int source)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
+        var args = new SetFocusEventArgs((FocusSource)source);
+        b.RaiseSetFocus(args);
+        return args.Cancel ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void GotFocusTrampoline(int browserId)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        b.RaiseGotFocus();
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int PreKeyTrampoline(int browserId, int type, int mods, int vk, int native, int isSystem)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
+        var args = new PreKeyEventArgs((CefKeyEventType)type, (CefModifiers)mods, vk, native, isSystem != 0);
+        b.RaisePreKey(args);
+        return args.Handled ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe int KeyEventTrampoline(int browserId, int type, int mods, int vk, int native, int isSystem)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
+        var args = new PreKeyEventArgs((CefKeyEventType)type, (CefModifiers)mods, vk, native, isSystem != 0);
+        b.RaiseKeyEvent(args);
+        return args.Handled ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

@@ -932,15 +932,133 @@ EXCEF_API void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb);
 // in every V8 context created in the renderer process. Calls from JS
 // fire a CefProcessMessage to the browser process; we surface that to
 // the host via this callback. Fire-and-forget for v1 — return values
-// to JS (Promises) are a v2 concern.
-//
 // `args_json` is whatever the JS caller passed as the second argument
 // (typically a JSON.stringify(...) of an args object). Host parses it
 // however it likes.
+//
+// `token` lets the host send a reply back to the renderer's Promise via
+// excef_resolve_js_invoke. If the host never resolves, the Promise stays
+// pending — clean it up on browser close.
 typedef void (*excef_js_invoke_cb_t)(int browser_id,
+                                       unsigned long long token,
                                        const char* method,
                                        const char* args_json);
 EXCEF_API void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb);
+
+// Resolve a pending window.exclr8cef.invoke() promise.
+// `success` = 1 → renderer's Promise resolves with JSON.parse(result_json)
+// `success` = 0 → renderer's Promise rejects with result_json (string)
+// `result_json` may be NULL/empty (treated as "null"). Idempotent — extra
+// resolve calls on the same token are no-ops.
+EXCEF_API void excef_resolve_js_invoke(unsigned long long token,
+                                        int success,
+                                        const char* result_json);
+
+// ---- Frame operations -------------------------------------------------
+//
+// Operate on the browser's main frame. CefFrame::GetSource gives the
+// HTML, GetText gives the rendered plain text, LoadString loads an HTML
+// string directly without a network round-trip (useful for splash pages
+// or rendering generated content).
+
+typedef void (*excef_string_visitor_cb_t)(int request_id, const char* value);
+EXCEF_API void excef_set_string_visitor_callback(excef_string_visitor_cb_t cb);
+
+// Returns 0 on failure, 1 on success. The result is delivered async via
+// the string-visitor callback with the same request_id.
+EXCEF_API int excef_get_frame_source(int browser_id, int request_id);
+EXCEF_API int excef_get_frame_text(int browser_id, int request_id);
+
+// Load `html` into the main frame as if served from `url`. URL is just
+// used for relative-link resolution + the location bar; no network
+// request happens.
+EXCEF_API int excef_load_string(int browser_id,
+                                 const char* html,
+                                 const char* url);
+
+// ---- DevTools protocol (CDP) messaging --------------------------------
+//
+// CefBrowserHost::SendDevToolsMessage / ExecuteDevToolsMethod /
+// AddDevToolsMessageObserver. Lets the host drive the browser via the
+// Chrome DevTools Protocol — the universal escape hatch for things not
+// exposed in CEF's high-level handlers (Network.setUserAgentOverride,
+// Emulation.setDeviceMetricsOverride, Page.captureScreenshot,
+// Network.setBlockedURLs, Runtime.evaluate with isolated worlds, etc.).
+
+// Send a raw CDP JSON message. `message_json` must include "id" if you
+// want a reply. Returns 1 if sent, 0 if browser is unknown.
+EXCEF_API int excef_send_devtools_message(int browser_id,
+                                           const char* message_json,
+                                           int message_length);
+
+// Execute a CDP method with a structured params object. Returns the
+// CDP message_id (positive int) so the host can correlate the eventual
+// response in the observer callback. Returns 0 on failure.
+EXCEF_API int excef_execute_devtools_method(int browser_id,
+                                             int message_id,
+                                             const char* method,
+                                             const char* params_json);
+
+// Observer fires for every CDP message — replies to host-sent requests
+// AND server-pushed events (Network.requestWillBeSent, Page.loadEventFired,
+// etc.). `is_event` = 1 for unsolicited events, 0 for replies. `message_id`
+// is the int id from the request (0 for events).
+typedef void (*excef_devtools_message_cb_t)(int browser_id,
+                                              int is_event,
+                                              int message_id,
+                                              const char* message_json);
+EXCEF_API void excef_set_devtools_message_callback(excef_devtools_message_cb_t cb);
+
+// ---- Focus handler -----------------------------------------------------
+//
+// CefFocusHandler. Lets the host integrate the page's focus chain with
+// its surrounding UI toolkit:
+//
+//   _take_focus_cb_t  — page wants to move focus OUT (Tab past last form
+//                       field, Shift+Tab before first). `next=1` for
+//                       forward, 0 for backward. Host should move focus
+//                       to the next/previous control around the WebView.
+//   _set_focus_cb_t   — CEF wants to TAKE focus (page click, system
+//                       request). `source`: 0=navigation, 1=system.
+//                       Return 1 to deny, 0 to allow.
+//   _got_focus_cb_t   — CEF received focus successfully.
+
+typedef void (*excef_take_focus_cb_t)(int browser_id, int next);
+typedef int  (*excef_set_focus_cb_t)(int browser_id, int source);
+typedef void (*excef_got_focus_cb_t)(int browser_id);
+
+EXCEF_API void excef_set_take_focus_callback(excef_take_focus_cb_t cb);
+EXCEF_API void excef_set_set_focus_callback(excef_set_focus_cb_t cb);
+EXCEF_API void excef_set_got_focus_callback(excef_got_focus_cb_t cb);
+
+// ---- Keyboard handler -------------------------------------------------
+//
+// CefKeyboardHandler. Lets the host intercept key events before / after
+// the page sees them. Useful for global accelerators (Ctrl+F, Ctrl+R,
+// F11 fullscreen, etc.) and for gating dev-tools shortcuts.
+//
+// `event_type`: 0=raw-keydown, 1=keydown, 2=keyup, 3=char (cef_key_event_type_t)
+// `modifiers`: bitmask of EXCEF_MOD_*
+// `windows_key_code`: Windows VK code
+// `native_key_code`: platform-specific scan code
+// Returns 1 to mark the event handled (suppress page dispatch), 0 to allow.
+typedef int (*excef_pre_key_cb_t)(int browser_id,
+                                    int event_type,
+                                    int modifiers,
+                                    int windows_key_code,
+                                    int native_key_code,
+                                    int is_system_key);
+// OnKeyEvent: fires AFTER the page sees the event (and didn't handle it).
+// Same args as pre-key. Return 1 to indicate host handled it.
+typedef int (*excef_key_event_cb_t)(int browser_id,
+                                     int event_type,
+                                     int modifiers,
+                                     int windows_key_code,
+                                     int native_key_code,
+                                     int is_system_key);
+
+EXCEF_API void excef_set_pre_key_callback(excef_pre_key_cb_t cb);
+EXCEF_API void excef_set_key_event_callback(excef_key_event_cb_t cb);
 
 // ---- Accessibility (lite) ----------------------------------------------
 //

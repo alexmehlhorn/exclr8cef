@@ -13,6 +13,8 @@
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_accessibility_handler.h"
+#include "include/cef_focus_handler.h"
+#include "include/cef_keyboard_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_render_handler.h"
@@ -36,7 +38,9 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefFindHandler,
                             public CefResourceRequestHandler,
                             public CefAccessibilityHandler,
-                            public CefPermissionHandler {
+                            public CefPermissionHandler,
+                            public CefFocusHandler,
+                            public CefKeyboardHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -59,6 +63,8 @@ public:
     CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
     CefRefPtr<CefAccessibilityHandler> GetAccessibilityHandler() override { return this; }
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
+    CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
+    CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -189,6 +195,20 @@ public:
         const CefString& requesting_origin,
         uint32_t requested_permissions,
         CefRefPtr<CefPermissionPromptCallback> callback) override;
+
+    // CefFocusHandler
+    void OnTakeFocus(CefRefPtr<CefBrowser> browser, bool next) override;
+    bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override;
+    void OnGotFocus(CefRefPtr<CefBrowser> browser) override;
+
+    // CefKeyboardHandler
+    bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                        const CefKeyEvent& event,
+                        CefEventHandle os_event,
+                        bool* is_keyboard_shortcut) override;
+    bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
+                     const CefKeyEvent& event,
+                     CefEventHandle os_event) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

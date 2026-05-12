@@ -323,7 +323,46 @@ internal static unsafe partial class Excef
     public static extern void excef_set_popup_paint_callback([NativeTypeName("excef_popup_paint_cb_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_js_invoke_callback([NativeTypeName("excef_js_invoke_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, void> cb);
+    public static extern void excef_set_js_invoke_callback([NativeTypeName("excef_js_invoke_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_js_invoke(ulong token, int success, [NativeTypeName("const char *")] sbyte* result_json);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_take_focus_callback([NativeTypeName("excef_take_focus_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_set_focus_callback([NativeTypeName("excef_set_focus_cb_t")] delegate* unmanaged[Cdecl]<int, int, int> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_got_focus_callback([NativeTypeName("excef_got_focus_cb_t")] delegate* unmanaged[Cdecl]<int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_pre_key_callback([NativeTypeName("excef_pre_key_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, int, int> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_key_event_callback([NativeTypeName("excef_key_event_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, int, int> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_send_devtools_message(int browser_id, [NativeTypeName("const char *")] sbyte* message_json, int message_length);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_execute_devtools_method(int browser_id, int message_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* params_json);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_devtools_message_callback([NativeTypeName("excef_devtools_message_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_string_visitor_callback([NativeTypeName("excef_string_visitor_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_frame_source(int browser_id, int request_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_frame_text(int browser_id, int request_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_load_string(int browser_id, [NativeTypeName("const char *")] sbyte* html, [NativeTypeName("const char *")] sbyte* url);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_accessibility_tree_callback([NativeTypeName("excef_accessibility_tree_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);

@@ -1,6 +1,8 @@
 #include "exclr8cef_app.h"
 
+#include <atomic>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -27,10 +29,22 @@ namespace {
 
 CefRefPtr<Exclr8CefApp> g_app;
 
+// Renderer-side pending Promise registry, keyed by request id. When the
+// browser process replies via CefProcessMessage("JsInvokeReply") we look
+// up the context + promise and resolve / reject.
+struct PendingJsInvoke {
+    CefRefPtr<CefV8Context> context;
+    CefRefPtr<CefV8Value> promise;
+};
+std::map<int, PendingJsInvoke> g_pending_invokes;
+std::mutex g_pending_invokes_mu;
+std::atomic<int> g_next_invoke_id{1};
+
 // V8 handler installed in every renderer-side V8 context as
-// `window.exclr8cef.invoke(method, argsJson)`. Forwards calls to the
-// browser process via CefProcessMessage("JsInvoke"); the OSR client
-// hooks that message and fires the host's js-invoke callback.
+// `window.exclr8cef.invoke(method, argsJson)`. Returns a Promise that
+// resolves with whatever the host replies (or rejects if the host calls
+// JsInvokeArgs.ReplyError). Forwards calls to the browser process via
+// CefProcessMessage("JsInvoke") with [request_id, method, argsJson].
 class JsBridgeV8Handler : public CefV8Handler {
 public:
     explicit JsBridgeV8Handler(CefRefPtr<CefFrame> frame) : frame_(std::move(frame)) {}
@@ -38,7 +52,7 @@ public:
     bool Execute(const CefString& name,
                  CefRefPtr<CefV8Value> /*object*/,
                  const CefV8ValueList& args,
-                 CefRefPtr<CefV8Value>& /*retval*/,
+                 CefRefPtr<CefV8Value>& retval,
                  CefString& exception) override {
         if (name != "invoke") return false;
         if (args.empty() || !args[0]->IsString()) {
@@ -50,11 +64,22 @@ public:
         if (args.size() >= 2 && args[1]->IsString()) {
             argsJson = args[1]->GetStringValue().ToString();
         }
+
+        int request_id = g_next_invoke_id.fetch_add(1, std::memory_order_relaxed);
+        auto promise = CefV8Value::CreatePromise();
+        {
+            std::lock_guard<std::mutex> lock(g_pending_invokes_mu);
+            g_pending_invokes[request_id] = {CefV8Context::GetCurrentContext(), promise};
+        }
+
         auto msg = CefProcessMessage::Create("JsInvoke");
         auto a = msg->GetArgumentList();
-        a->SetString(0, method);
-        a->SetString(1, argsJson);
+        a->SetInt(0, request_id);
+        a->SetString(1, method);
+        a->SetString(2, argsJson);
         if (frame_) frame_->SendProcessMessage(PID_BROWSER, msg);
+
+        retval = promise;
         return true;
     }
 
@@ -325,6 +350,47 @@ bool Exclr8CefApp::OnProcessMessageReceived(
     CefRefPtr<CefFrame> frame,
     CefProcessId source_process,
     CefRefPtr<CefProcessMessage> message) {
+    // Renderer-process side: reply path for window.exclr8cef.invoke(...)
+    // — look up the pending Promise by request id, resolve or reject.
+    if (message->GetName() == "JsInvokeReply") {
+        auto args = message->GetArgumentList();
+        int request_id = args->GetInt(0);
+        bool ok = args->GetBool(1);
+        std::string result_json = args->GetString(2).ToString();
+
+        PendingJsInvoke entry;
+        {
+            std::lock_guard<std::mutex> lock(g_pending_invokes_mu);
+            auto it = g_pending_invokes.find(request_id);
+            if (it == g_pending_invokes.end()) return true;
+            entry = it->second;
+            g_pending_invokes.erase(it);
+        }
+        if (!entry.context || !entry.promise) return true;
+        if (!entry.context->Enter()) return true;
+
+        // JSON.parse the reply into a V8 value. On parse failure, fall
+        // through to the raw string.
+        CefRefPtr<CefV8Value> value;
+        auto global = entry.context->GetGlobal();
+        auto json_obj = global->GetValue("JSON");
+        if (json_obj && json_obj->IsObject()) {
+            auto parse = json_obj->GetValue("parse");
+            if (parse && parse->IsFunction()) {
+                CefV8ValueList sargs;
+                sargs.push_back(CefV8Value::CreateString(result_json));
+                value = parse->ExecuteFunction(json_obj, sargs);
+            }
+        }
+        if (!value) value = CefV8Value::CreateString(result_json);
+
+        if (ok) entry.promise->ResolvePromise(value);
+        else entry.promise->RejectPromise(result_json);
+
+        entry.context->Exit();
+        return true;
+    }
+
     // Renderer-process side: handle "Eval" requests sent from the browser
     // process. Run the JS in the frame's V8 context, JSON-serialize the
     // result, and send back via "EvalResult".

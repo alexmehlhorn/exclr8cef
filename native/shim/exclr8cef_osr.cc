@@ -10,6 +10,7 @@
 #include "include/base/cef_callback.h"
 #include "include/cef_browser.h"
 #include "include/cef_cookie.h"
+#include "include/cef_devtools_message_observer.h"
 #include "include/cef_frame.h"
 #include "include/cef_parser.h"
 #include "include/cef_process_message.h"
@@ -74,6 +75,16 @@ excef_start_drag_cb_t g_start_drag_cb = nullptr;
 excef_drag_image_cb_t g_drag_image_cb = nullptr;
 excef_permission_prompt_cb_t g_permission_prompt_cb = nullptr;
 excef_media_access_cb_t g_media_access_cb = nullptr;
+excef_take_focus_cb_t g_take_focus_cb = nullptr;
+excef_set_focus_cb_t g_set_focus_cb = nullptr;
+excef_got_focus_cb_t g_got_focus_cb = nullptr;
+excef_pre_key_cb_t g_pre_key_cb = nullptr;
+excef_key_event_cb_t g_key_event_cb = nullptr;
+excef_devtools_message_cb_t g_devtools_message_cb = nullptr;
+excef_string_visitor_cb_t g_string_visitor_cb = nullptr;
+// Per-browser DevTools observer registrations (keep alive while open).
+std::map<int, CefRefPtr<CefRegistration>> g_devtools_observers;
+std::mutex g_devtools_observers_mu;
 excef_before_popup_cb_t g_before_popup_cb = nullptr;
 excef_cert_error_cb_t g_cert_error_cb = nullptr;
 
@@ -118,6 +129,11 @@ struct PendingCertError {
     int browser_id;
     CefRefPtr<CefCallback> callback;
 };
+struct PendingJsInvoke {
+    int browser_id;
+    CefRefPtr<CefFrame> frame;
+    int request_id;  // renderer-side promise id; round-tripped in the reply
+};
 
 // Scheme-request handler state. The resource handler instance lives across
 // Open() / GetResponseHeaders() / Read() — the host's resolve fills in
@@ -155,6 +171,8 @@ std::mutex g_media_access_mu;
 std::map<uint64_t, PendingMediaAccess> g_media_access_pending;
 std::mutex g_cert_error_mu;
 std::map<uint64_t, PendingCertError> g_cert_error_pending;
+std::mutex g_js_invoke_mu;
+std::map<uint64_t, PendingJsInvoke> g_js_invoke_pending;
 std::mutex g_scheme_mu;
 std::map<uint64_t, PendingSchemeRequest> g_scheme_pending;
 std::mutex g_resource_request_mu;
@@ -323,7 +341,7 @@ Exclr8CefOsrHandler::Exclr8CefOsrHandler(int id, int width, int height,
 
 bool Exclr8CefOsrHandler::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> /*browser*/,
-    CefRefPtr<CefFrame> /*frame*/,
+    CefRefPtr<CefFrame> frame,
     CefProcessId /*source_process*/,
     CefRefPtr<CefProcessMessage> message) {
     const std::string name = message->GetName().ToString();
@@ -340,11 +358,20 @@ bool Exclr8CefOsrHandler::OnProcessMessageReceived(
     }
 
     if (name == "JsInvoke") {
-        // Renderer-process JS bridge: window.exclr8cef.invoke(method, argsJson).
+        // Renderer JS bridge: window.exclr8cef.invoke(method, argsJson).
+        // Message args: [request_id:int, method:string, argsJson:string].
+        // We map the request_id to a token, store the frame so we can send
+        // the reply back to the right renderer, and fire the host event.
         if (g_js_invoke_cb) {
-            std::string method = args->GetString(0).ToString();
-            std::string argsJson = args->GetString(1).ToString();
-            g_js_invoke_cb(id_, method.c_str(), argsJson.c_str());
+            int request_id = args->GetInt(0);
+            std::string method = args->GetString(1).ToString();
+            std::string argsJson = args->GetString(2).ToString();
+            uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lock(g_js_invoke_mu);
+                g_js_invoke_pending[token] = {id_, frame, request_id};
+            }
+            g_js_invoke_cb(id_, token, method.c_str(), argsJson.c_str());
         }
         return true;
     }
@@ -525,6 +552,44 @@ void Exclr8CefOsrHandler::OnRenderProcessTerminated(CefRefPtr<CefBrowser> /*brow
         g_render_process_gone_cb(id_, static_cast<int>(status),
                                   error_code, err.c_str());
     }
+}
+
+// ---- CefFocusHandler ------------------------------------------------------
+
+void Exclr8CefOsrHandler::OnTakeFocus(CefRefPtr<CefBrowser> /*browser*/, bool next) {
+    if (g_take_focus_cb) g_take_focus_cb(id_, next ? 1 : 0);
+}
+
+bool Exclr8CefOsrHandler::OnSetFocus(CefRefPtr<CefBrowser> /*browser*/, FocusSource source) {
+    if (!g_set_focus_cb) return false;
+    return g_set_focus_cb(id_, static_cast<int>(source)) != 0;
+}
+
+void Exclr8CefOsrHandler::OnGotFocus(CefRefPtr<CefBrowser> /*browser*/) {
+    if (g_got_focus_cb) g_got_focus_cb(id_);
+}
+
+// ---- CefKeyboardHandler ---------------------------------------------------
+
+bool Exclr8CefOsrHandler::OnPreKeyEvent(CefRefPtr<CefBrowser> /*browser*/,
+                                          const CefKeyEvent& event,
+                                          CefEventHandle /*os_event*/,
+                                          bool* /*is_keyboard_shortcut*/) {
+    if (!g_pre_key_cb) return false;
+    return g_pre_key_cb(id_, static_cast<int>(event.type),
+                        static_cast<int>(event.modifiers),
+                        event.windows_key_code, event.native_key_code,
+                        event.is_system_key ? 1 : 0) != 0;
+}
+
+bool Exclr8CefOsrHandler::OnKeyEvent(CefRefPtr<CefBrowser> /*browser*/,
+                                       const CefKeyEvent& event,
+                                       CefEventHandle /*os_event*/) {
+    if (!g_key_event_cb) return false;
+    return g_key_event_cb(id_, static_cast<int>(event.type),
+                           static_cast<int>(event.modifiers),
+                           event.windows_key_code, event.native_key_code,
+                           event.is_system_key ? 1 : 0) != 0;
 }
 
 bool Exclr8CefOsrHandler::OnCertificateError(
@@ -957,6 +1022,21 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
     if (in_drag_) {
         clear_drag();
         if (g_drag_image_cb) g_drag_image_cb(closed_id, nullptr, 0, 0, 0, 0);
+    }
+    // Drop the DevTools observer registration for this browser (if any).
+    {
+        std::lock_guard<std::mutex> lock(g_devtools_observers_mu);
+        g_devtools_observers.erase(closed_id);
+    }
+    // Drop any pending JS-invoke entries for this browser. The renderer
+    // Promise stays pending in the dead context — no leak in the browser
+    // process.
+    {
+        std::lock_guard<std::mutex> lock(g_js_invoke_mu);
+        for (auto it = g_js_invoke_pending.begin(); it != g_js_invoke_pending.end(); ) {
+            if (it->second.browser_id == closed_id) it = g_js_invoke_pending.erase(it);
+            else ++it;
+        }
     }
 
     browser_ = nullptr;
@@ -1535,6 +1615,160 @@ extern "C" void excef_set_popup_show_callback(excef_popup_show_cb_t cb) { exclr8
 extern "C" void excef_set_popup_size_callback(excef_popup_size_cb_t cb) { exclr8cef::g_popup_size_cb = cb; }
 extern "C" void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb) { exclr8cef::g_popup_paint_cb = cb; }
 extern "C" void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb) { exclr8cef::g_js_invoke_cb = cb; }
+extern "C" void excef_set_devtools_message_callback(excef_devtools_message_cb_t cb) {
+    exclr8cef::g_devtools_message_cb = cb;
+}
+extern "C" void excef_set_string_visitor_callback(excef_string_visitor_cb_t cb) {
+    exclr8cef::g_string_visitor_cb = cb;
+}
+
+namespace {
+class StringRelay : public CefStringVisitor {
+public:
+    explicit StringRelay(int request_id) : request_id_(request_id) {}
+    void Visit(const CefString& str) override {
+        if (!exclr8cef::g_string_visitor_cb) return;
+        std::string s = str.ToString();
+        exclr8cef::g_string_visitor_cb(request_id_, s.c_str());
+    }
+private:
+    int request_id_;
+    IMPLEMENT_REFCOUNTING(StringRelay);
+};
+}  // namespace
+
+extern "C" int excef_get_frame_source(int browser_id, int request_id) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return 0;
+    auto frame = b->GetMainFrame();
+    if (!frame) return 0;
+    frame->GetSource(new StringRelay(request_id));
+    return 1;
+}
+
+extern "C" int excef_get_frame_text(int browser_id, int request_id) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return 0;
+    auto frame = b->GetMainFrame();
+    if (!frame) return 0;
+    frame->GetText(new StringRelay(request_id));
+    return 1;
+}
+
+extern "C" int excef_load_string(int browser_id, const char* html, const char* /*url*/) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b || !html) return 0;
+    auto frame = b->GetMainFrame();
+    if (!frame) return 0;
+    // CEF removed Frame::LoadString — load via data: URL with base64
+    // encoding so arbitrary HTML (including special chars) survives the
+    // URL trip.
+    CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(html, strlen(html));
+    std::string encoded = CefBase64Encode(html, strlen(html)).ToString();
+    frame->LoadURL(std::string("data:text/html;charset=utf-8;base64,") + encoded);
+    return 1;
+}
+
+namespace {
+class DevToolsObserver : public CefDevToolsMessageObserver {
+public:
+    explicit DevToolsObserver(int browser_id) : browser_id_(browser_id) {}
+    bool OnDevToolsMessage(CefRefPtr<CefBrowser> /*browser*/,
+                            const void* message, size_t message_size) override {
+        if (!exclr8cef::g_devtools_message_cb) return false;
+        // The message is a JSON byte buffer. Reply messages have an integer
+        // "id" matching what the host passed; events have no "id".
+        std::string json(static_cast<const char*>(message), message_size);
+        // Inspect for "id":N to decide event vs reply.
+        int message_id = 0;
+        bool is_event = true;
+        size_t pos = json.find("\"id\":");
+        if (pos != std::string::npos) {
+            is_event = false;
+            // Skip "id":
+            pos += 5;
+            // Skip whitespace
+            while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+            int sign = 1;
+            if (pos < json.size() && json[pos] == '-') { sign = -1; pos++; }
+            while (pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
+                message_id = message_id * 10 + (json[pos] - '0');
+                pos++;
+            }
+            message_id *= sign;
+        }
+        exclr8cef::g_devtools_message_cb(browser_id_, is_event ? 1 : 0, message_id, json.c_str());
+        return false;  // don't suppress
+    }
+private:
+    int browser_id_;
+    IMPLEMENT_REFCOUNTING(DevToolsObserver);
+};
+
+}  // namespace
+
+extern "C" int excef_send_devtools_message(int browser_id,
+                                            const char* message_json,
+                                            int message_length) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b || !message_json || message_length <= 0) return 0;
+    // Lazily register the observer on first send so the host's callback fires.
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_devtools_observers_mu);
+        if (!exclr8cef::g_devtools_observers.count(browser_id)) {
+            exclr8cef::g_devtools_observers[browser_id] = b->GetHost()->AddDevToolsMessageObserver(
+                new DevToolsObserver(browser_id));
+        }
+    }
+    return b->GetHost()->SendDevToolsMessage(message_json, static_cast<size_t>(message_length)) ? 1 : 0;
+}
+
+extern "C" int excef_execute_devtools_method(int browser_id,
+                                              int message_id,
+                                              const char* method,
+                                              const char* params_json) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b || !method) return 0;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_devtools_observers_mu);
+        if (!exclr8cef::g_devtools_observers.count(browser_id)) {
+            exclr8cef::g_devtools_observers[browser_id] = b->GetHost()->AddDevToolsMessageObserver(
+                new DevToolsObserver(browser_id));
+        }
+    }
+    CefRefPtr<CefDictionaryValue> params;
+    if (params_json && *params_json) {
+        auto v = CefParseJSON(params_json, JSON_PARSER_RFC);
+        if (v && v->GetType() == VTYPE_DICTIONARY) {
+            params = v->GetDictionary();
+        }
+    }
+    return b->GetHost()->ExecuteDevToolsMethod(message_id, method, params);
+}
+extern "C" void excef_set_take_focus_callback(excef_take_focus_cb_t cb) { exclr8cef::g_take_focus_cb = cb; }
+extern "C" void excef_set_set_focus_callback(excef_set_focus_cb_t cb) { exclr8cef::g_set_focus_cb = cb; }
+extern "C" void excef_set_got_focus_callback(excef_got_focus_cb_t cb) { exclr8cef::g_got_focus_cb = cb; }
+extern "C" void excef_set_pre_key_callback(excef_pre_key_cb_t cb) { exclr8cef::g_pre_key_cb = cb; }
+extern "C" void excef_set_key_event_callback(excef_key_event_cb_t cb) { exclr8cef::g_key_event_cb = cb; }
+
+extern "C" void excef_resolve_js_invoke(uint64_t token, int success, const char* result_json) {
+    exclr8cef::PendingJsInvoke entry;
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_js_invoke_mu);
+        auto it = exclr8cef::g_js_invoke_pending.find(token);
+        if (it == exclr8cef::g_js_invoke_pending.end()) return;
+        entry = it->second;
+        exclr8cef::g_js_invoke_pending.erase(it);
+    }
+    if (!entry.frame) return;
+
+    auto msg = CefProcessMessage::Create("JsInvokeReply");
+    auto a = msg->GetArgumentList();
+    a->SetInt(0, entry.request_id);
+    a->SetBool(1, success != 0);
+    a->SetString(2, result_json ? result_json : "null");
+    entry.frame->SendProcessMessage(PID_RENDERER, msg);
+}
 extern "C" void excef_set_accessibility_tree_callback(excef_accessibility_tree_cb_t cb) { exclr8cef::g_a11y_tree_cb = cb; }
 extern "C" void excef_set_accessibility_location_callback(excef_accessibility_location_cb_t cb) { exclr8cef::g_a11y_location_cb = cb; }
 

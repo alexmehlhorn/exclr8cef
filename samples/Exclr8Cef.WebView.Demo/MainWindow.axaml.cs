@@ -343,15 +343,26 @@ public partial class MainWindow : Window
     private void OnBrowserJsInvoke(object? sender, Exclr8Cef.JsInvokeEventArgs e)
     {
         LogEvent("js-invoke", $"{e.Method}({e.ArgsJson})");
-        // Page-side toggle for the a11y stream goes through the JS bridge.
-        if (e.Method == "a11y" && Browser.Browser is { } b)
+        switch (e.Method)
         {
-            b.SetAccessibilityEnabled(e.ArgsJson == "on");
-        }
-        // Page-driven capture trigger — same path as the toolbar button.
-        if (e.Method == "capture")
-        {
-            Dispatcher.UIThread.Post(() => OnCapturePngClick(this, new RoutedEventArgs()));
+            case "a11y" when Browser.Browser is { } b:
+                b.SetAccessibilityEnabled(e.ArgsJson == "on");
+                e.Reply($"\"a11y {e.ArgsJson}\"");
+                break;
+            case "capture":
+                Dispatcher.UIThread.Post(() => OnCapturePngClick(this, new RoutedEventArgs()));
+                e.Reply("\"capture queued\"");
+                break;
+            case "ping":
+                // Echo the args back — useful for verifying the round-trip.
+                e.Reply(string.IsNullOrEmpty(e.ArgsJson) ? "\"pong\"" : e.ArgsJson);
+                break;
+            case "time":
+                e.Reply($"\"{DateTime.UtcNow:O}\"");
+                break;
+            default:
+                e.ReplyError($"unknown method '{e.Method}'");
+                break;
         }
     }
 
