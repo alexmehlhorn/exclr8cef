@@ -245,6 +245,26 @@ public sealed class ResourceRequestEventArgs : EventArgs
     }
 }
 
+/// <summary>
+/// Args for <see cref="CefBrowser.ResourceRequestObserved"/> — pure
+/// notification, no gate participation. Same fields as
+/// <see cref="ResourceRequestEventArgs"/> minus the resolve methods,
+/// since the trampoline auto-continues these.
+/// </summary>
+public sealed class ResourceRequestObservedEventArgs : EventArgs
+{
+    public string Url { get; }
+    public string Method { get; }
+    public Cef.ResourceType Type { get; }
+    /// <summary>The request's current header set ("Name: Value\n" per line).</summary>
+    public string CurrentHeaders { get; }
+
+    internal ResourceRequestObservedEventArgs(string url, string method, Cef.ResourceType type, string headers)
+    {
+        Url = url; Method = method; Type = type; CurrentHeaders = headers;
+    }
+}
+
 /// <summary>Args for <see cref="CefBrowser.RenderProcessGone"/>.</summary>
 public sealed class RenderProcessGoneEventArgs : EventArgs
 {

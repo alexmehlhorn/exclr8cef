@@ -1322,12 +1322,12 @@ EXCEF_API void excef_set_string_visitor_callback(excef_string_visitor_cb_t cb);
 EXCEF_API int excef_get_frame_source(int browser_id, int request_id);
 EXCEF_API int excef_get_frame_text(int browser_id, int request_id);
 
-// Load `html` into the main frame as if served from `url`. URL is just
-// used for relative-link resolution + the location bar; no network
-// request happens.
+// Load `html` into the main frame via a data: URL — the location bar
+// will reflect that data: URL and relative-link resolution is against
+// it. Callers that need a real-looking origin should register a custom
+// scheme handler and navigate to it instead.
 EXCEF_API int excef_load_string(int browser_id,
-                                 const char* html,
-                                 const char* url);
+                                 const char* html);
 
 // ---- Init: extra Chromium switches ------------------------------------
 //

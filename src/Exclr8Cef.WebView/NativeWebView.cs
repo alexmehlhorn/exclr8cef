@@ -113,12 +113,23 @@ public class NativeWebView : NativeControlHost, IWebView
     public CefRequestContext? RequestContext { get; set; }
 
     /// <summary>
-    /// Fires once when <see cref="Browser"/> is populated (after the first
-    /// arrange creates and attaches it). Use this to subscribe to
-    /// per-browser events (ConsoleMessage, FileDialog, etc.) that aren't
-    /// mirrored as Avalonia properties on the control.
+    /// Fires once when the underlying CEF browser is fully initialized —
+    /// <see cref="Browser"/> is populated AND CEF's <c>OnAfterCreated</c>
+    /// has run, so calls like <c>LoadUrl</c> / <c>ExecuteJavaScript</c>
+    /// actually do something (issuing them earlier silently drops them
+    /// while CEF's pending about:blank load is still resolving).
+    ///
+    /// Late subscribers — handlers added after the browser is already
+    /// ready — fire immediately on subscribe, so consumers don't have
+    /// to race the timing.
     /// </summary>
-    public event EventHandler? BrowserReady;
+    public event EventHandler? BrowserReady
+    {
+        add    { _browserReadyHandlers += value; if (_browserReady) value?.Invoke(this, EventArgs.Empty); }
+        remove { _browserReadyHandlers -= value; }
+    }
+    private EventHandler? _browserReadyHandlers;
+    private bool _browserReady;
 
     /// <summary>
     /// Fires when teardown is about to begin (Avalonia destroying the
@@ -184,7 +195,13 @@ public class NativeWebView : NativeControlHost, IWebView
             {
                 _browser = browser;
                 SubscribeBrowserEvents(browser);
-                BrowserReady?.Invoke(this, EventArgs.Empty);
+                // BrowserReady fires when CEF's OnAfterCreated has run —
+                // see comment on the event for why this matters.
+                browser.Initialized += (_, _) =>
+                {
+                    _browserReady = true;
+                    _browserReadyHandlers?.Invoke(this, EventArgs.Empty);
+                };
             }
         }
         else if (w != _lastWidth || h != _lastHeight)

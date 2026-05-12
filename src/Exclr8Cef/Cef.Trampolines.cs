@@ -462,12 +462,29 @@ public static partial class Cef
             Excef.excef_resolve_resource_request(token, 0, null);
             return;
         }
-        b.RaiseResourceRequest(
-            token,
-            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)method) ?? "GET",
-            (ResourceType)resourceType,
-            Marshal.PtrToStringUTF8((IntPtr)headers) ?? "");
+        var urlStr     = Marshal.PtrToStringUTF8((IntPtr)url) ?? "";
+        var methodStr  = Marshal.PtrToStringUTF8((IntPtr)method) ?? "GET";
+        var headersStr = Marshal.PtrToStringUTF8((IntPtr)headers) ?? "";
+        var typeEnum   = (ResourceType)resourceType;
+
+        // Observer fires first and never participates in the gate
+        // decision — it's pure notification (logging, devtools panels).
+        // A misbehaving observer must not be able to wedge the gate.
+        try { b.RaiseResourceRequestObserved(urlStr, methodStr, typeEnum, headersStr); }
+        catch { /* swallow — never let an observer break the request */ }
+
+        if (b.HasResourceRequestGate)
+        {
+            // Gate subscriber owns the resolve token — they must call
+            // Continue() or Cancel() on the args.
+            b.RaiseResourceRequest(token, urlStr, methodStr, typeEnum, headersStr);
+        }
+        else
+        {
+            // Observer-only: auto-continue immediately so the request
+            // doesn't stall waiting on a resolve that's never coming.
+            Excef.excef_resolve_resource_request(token, 0, null);
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

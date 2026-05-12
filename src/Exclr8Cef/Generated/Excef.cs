@@ -494,7 +494,7 @@ internal static unsafe partial class Excef
     public static extern int excef_get_frame_text(int browser_id, int request_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_load_string(int browser_id, [NativeTypeName("const char *")] sbyte* html, [NativeTypeName("const char *")] sbyte* url);
+    public static extern int excef_load_string(int browser_id, [NativeTypeName("const char *")] sbyte* html);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_load_request(int browser_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* url, byte* post_body, int post_length, [NativeTypeName("const char *")] sbyte* headers_string);

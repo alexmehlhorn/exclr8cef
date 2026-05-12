@@ -183,7 +183,35 @@ public sealed class CefBrowser : IDisposable
     /// <see cref="ResourceRequestEventArgs.Cancel"/>. Without a
     /// subscriber the request goes through with no overhead.
     /// </summary>
+    /// <remarks>
+    /// This event is a GATE — every request blocks until your handler
+    /// calls <c>Continue()</c> or <c>Cancel()</c>. Subscribe only when
+    /// you actually want to intervene (header injection, block-list,
+    /// rewrite). For pure observation (logging, devtools-style network
+    /// panels) use <see cref="ResourceRequestObserved"/> instead, which
+    /// auto-continues every request.
+    /// </remarks>
     public event EventHandler<ResourceRequestEventArgs>? ResourceRequest;
+
+    /// <summary>
+    /// Non-gating sibling of <see cref="ResourceRequest"/>: fires for
+    /// the same set of network requests but the request continues
+    /// immediately — your handler can't block, cancel, or rewrite
+    /// headers. Use this for `network_recent`-style logging,
+    /// devtools-style activity panels, or anywhere you only need to
+    /// watch traffic without participating in the request lifecycle.
+    /// </summary>
+    /// <remarks>
+    /// Fires on CEF's network/IO thread (same as <see cref="ResourceRequest"/>) —
+    /// keep handlers fast and marshal to your UI thread if you need to
+    /// touch UI state.
+    ///
+    /// If both <see cref="ResourceRequest"/> and this event are
+    /// subscribed, the observer fires first, then the gate runs. The
+    /// observer sees every request, including ones the gate later
+    /// cancels.
+    /// </remarks>
+    public event EventHandler<ResourceRequestObservedEventArgs>? ResourceRequestObserved;
 
     /// <summary>
     /// Fires when the page shows or hides a popup (HTML <c>&lt;select&gt;</c>
@@ -553,20 +581,33 @@ public sealed class CefBrowser : IDisposable
         return tcs.Task;
     }
 
-    public void LoadString(string html, string? virtualUrl = null)
+    /// <summary>
+    /// Load an HTML string into the main frame, served as a
+    /// <c>data:text/html;base64,…</c> URL. No network round-trip and no
+    /// way to forge a real-looking origin — the location bar will show
+    /// the data: URL and relative-link resolution is against it.
+    /// </summary>
+    /// <remarks>
+    /// If you need the page to behave as if served from a particular
+    /// origin (for relative URLs, document.origin, cookies, etc.),
+    /// register a custom scheme via <c>EXCLR8CEF_SCHEMES</c> + your own
+    /// scheme handler factory and navigate to <c>your-scheme://…</c>
+    /// instead. <see cref="LoadString"/> is intentionally minimal.
+    ///
+    /// Don't call this from <c>BrowserReady</c>: CEF's initial
+    /// about:blank load may still be pending and the navigation will
+    /// be dropped silently. Wait for the first <c>LoadEnd</c> (or any
+    /// load past about:blank) before issuing it.
+    /// </remarks>
+    public void LoadString(string html)
     {
         ArgumentNullException.ThrowIfNull(html);
         if (_closed) return;
         unsafe
         {
             sbyte* h = (sbyte*)Marshal.StringToCoTaskMemUTF8(html);
-            sbyte* u = virtualUrl is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(virtualUrl);
-            try { Excef.excef_load_string(Id, h, u); }
-            finally
-            {
-                Marshal.FreeCoTaskMem((IntPtr)h);
-                if (u != null) Marshal.FreeCoTaskMem((IntPtr)u);
-            }
+            try { Excef.excef_load_string(Id, h); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)h); }
         }
     }
 
@@ -1345,10 +1386,15 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseRenderProcessGone(Cef.TerminationStatus status, int errorCode, string errorString)
         => RenderProcessGone?.Invoke(this, new RenderProcessGoneEventArgs(status, errorCode, errorString));
 
-    internal bool HasResourceRequestSubscriber => ResourceRequest is not null;
+    internal bool HasResourceRequestSubscriber
+        => ResourceRequest is not null || ResourceRequestObserved is not null;
+    internal bool HasResourceRequestGate => ResourceRequest is not null;
 
     internal void RaiseResourceRequest(ulong token, string url, string method, Cef.ResourceType type, string headers)
         => ResourceRequest?.Invoke(this, new ResourceRequestEventArgs(token, url, method, type, headers));
+
+    internal void RaiseResourceRequestObserved(string url, string method, Cef.ResourceType type, string headers)
+        => ResourceRequestObserved?.Invoke(this, new ResourceRequestObservedEventArgs(url, method, type, headers));
 
     internal void RaisePopupShow(bool show) => PopupShow?.Invoke(this, show);
     internal void RaisePopupSize(int x, int y, int w, int h) => PopupSize?.Invoke(this, new PopupRect(x, y, w, h));

@@ -107,13 +107,24 @@ public class WebView : Control, IWebView
     public CefRequestContext? RequestContext { get; set; }
 
     /// <summary>
-    /// Fires once when <see cref="Browser"/> is populated (after the first
-    /// arrange creates it). Use this to subscribe to per-browser events
-    /// (ConsoleMessage, FileDialog, etc.) that aren't mirrored as
-    /// Avalonia properties on the control. Identical shape to the same
-    /// event on <see cref="NativeWebView"/>.
+    /// Fires once the underlying CEF browser is fully initialized
+    /// (CEF's <c>OnAfterCreated</c> has run and the browser is safe to
+    /// call). Subscribe per-browser events
+    /// (<c>ConsoleMessage</c>, <c>FileDialog</c>, …) here, and issue any
+    /// programmatic <c>NavigateToUrl</c> / <c>LoadRequest</c> / DevTools
+    /// calls.
+    ///
+    /// <para>Late-subscribe friendly: if the browser is already
+    /// initialized when you subscribe, your handler is invoked
+    /// synchronously on the subscribing thread.</para>
     /// </summary>
-    public event EventHandler? BrowserReady;
+    public event EventHandler? BrowserReady
+    {
+        add { _browserReadyHandlers += value; if (_browserReady) value?.Invoke(this, EventArgs.Empty); }
+        remove { _browserReadyHandlers -= value; }
+    }
+    private EventHandler? _browserReadyHandlers;
+    private bool _browserReady;
 
     /// <summary>
     /// Fires when teardown is about to begin (host window closing).
@@ -463,7 +474,17 @@ public class WebView : Control, IWebView
             {
                 _browser = browser;
                 SubscribeBrowserEvents(browser);
-                BrowserReady?.Invoke(this, EventArgs.Empty);
+                // BrowserReady fires when CEF's OnAfterCreated has run —
+                // that's when the underlying CefBrowser ref is populated
+                // and calls like LoadUrl / ExecuteJavaScript actually do
+                // something. CefBrowser.Initialized is "fire now if
+                // already initialized" so this is safe regardless of
+                // timing.
+                browser.Initialized += (_, _) =>
+                {
+                    _browserReady = true;
+                    _browserReadyHandlers?.Invoke(this, EventArgs.Empty);
+                };
             }
         }
         else

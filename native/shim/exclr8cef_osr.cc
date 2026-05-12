@@ -2597,15 +2597,16 @@ extern "C" int excef_get_navigation_entries(int browser_id, int request_id, int 
     return 1;
 }
 
-extern "C" int excef_load_string(int browser_id, const char* html, const char* /*url*/) {
+extern "C" int excef_load_string(int browser_id, const char* html) {
     auto b = exclr8cef::GetOsrBrowser(browser_id);
     if (!b || !html) return 0;
     auto frame = b->GetMainFrame();
     if (!frame) return 0;
     // CEF removed Frame::LoadString — load via data: URL with base64
     // encoding so arbitrary HTML (including special chars) survives the
-    // URL trip.
-    CefRefPtr<CefBinaryValue> bin = CefBinaryValue::Create(html, strlen(html));
+    // URL trip. There's no way to forge a different origin from here;
+    // callers that need a real-looking URL should register a custom
+    // scheme handler and navigate to that instead.
     std::string encoded = CefBase64Encode(html, strlen(html)).ToString();
     frame->LoadURL(std::string("data:text/html;charset=utf-8;base64,") + encoded);
     return 1;
