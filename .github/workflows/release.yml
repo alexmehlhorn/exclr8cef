@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Override version (defaults to tag, e.g. v0.5.0-stage5 → 0.5.0-stage5)'
+        description: 'Override version (defaults to tag, e.g. v0.6.0 → 0.6.0)'
         required: false
 
 permissions:

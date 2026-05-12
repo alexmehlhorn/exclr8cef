@@ -1,19 +1,19 @@
 {
   "runtimes": {
     "osx-arm64": {
-      "Exclr8Cef": { "runtime.osx-arm64.Exclr8Cef": "0.5.0-stage5" }
+      "Exclr8Cef": { "runtime.osx-arm64.Exclr8Cef": "0.6.0" }
     },
     "osx-x64": {
-      "Exclr8Cef": { "runtime.osx-x64.Exclr8Cef": "0.5.0-stage5" }
+      "Exclr8Cef": { "runtime.osx-x64.Exclr8Cef": "0.6.0" }
     },
     "win-x64": {
-      "Exclr8Cef": { "runtime.win-x64.Exclr8Cef": "0.5.0-stage5" }
+      "Exclr8Cef": { "runtime.win-x64.Exclr8Cef": "0.6.0" }
     },
     "linux-x64": {
-      "Exclr8Cef": { "runtime.linux-x64.Exclr8Cef": "0.5.0-stage5" }
+      "Exclr8Cef": { "runtime.linux-x64.Exclr8Cef": "0.6.0" }
     },
     "linux-arm64": {
-      "Exclr8Cef": { "runtime.linux-arm64.Exclr8Cef": "0.5.0-stage5" }
+      "Exclr8Cef": { "runtime.linux-arm64.Exclr8Cef": "0.6.0" }
     }
   }
 }
