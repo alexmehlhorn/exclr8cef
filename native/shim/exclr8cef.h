@@ -839,7 +839,7 @@ EXCEF_API int excef_can_zoom(int browser_id, int command);
 //   3 = onbeforeunload (success=1 means "leave page"; user_input ignored)
 typedef void (*excef_js_dialog_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int dialog_type,
     const char* message_text,
     const char* default_prompt_text);
@@ -849,7 +849,7 @@ EXCEF_API void excef_set_js_dialog_callback(excef_js_dialog_cb_t cb);
 // Continue the pending JS dialog. `success` = 1 if the user accepted
 // (clicked OK / Leave); `user_input` is the prompt text on accept
 // (NULL/empty otherwise).
-EXCEF_API void excef_resolve_js_dialog(unsigned long long token,
+EXCEF_API void excef_resolve_js_dialog(uint64_t token,
                                         int success,
                                         const char* user_input);
 
@@ -866,7 +866,7 @@ EXCEF_API void excef_resolve_js_dialog(unsigned long long token,
 // like "image/*" or a glob like "*.txt"). Empty if no filter.
 typedef void (*excef_file_dialog_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int mode,
     const char* title,
     const char* default_file_path,
@@ -876,7 +876,7 @@ EXCEF_API void excef_set_file_dialog_callback(excef_file_dialog_cb_t cb);
 
 // Resolve. `paths` is newline-separated absolute paths (UTF-8). Pass
 // NULL or empty string to cancel (the page sees an empty selection).
-EXCEF_API void excef_resolve_file_dialog(unsigned long long token, const char* paths);
+EXCEF_API void excef_resolve_file_dialog(uint64_t token, const char* paths);
 
 // ---- Context-menu handler ----------------------------------------------
 //
@@ -891,14 +891,14 @@ EXCEF_API void excef_resolve_file_dialog(unsigned long long token, const char* p
 // (or -1 to cancel). Without a host subscriber the menu is suppressed.
 typedef void (*excef_context_menu_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int x, int y,
     const char* items_joined);
 
 EXCEF_API void excef_set_context_menu_callback(excef_context_menu_cb_t cb);
 
 // Resolve with the chosen command id, or -1 to dismiss without action.
-EXCEF_API void excef_resolve_context_menu(unsigned long long token, int command_id);
+EXCEF_API void excef_resolve_context_menu(uint64_t token, int command_id);
 
 // ---- Download handler --------------------------------------------------
 //
@@ -915,7 +915,7 @@ EXCEF_API void excef_resolve_context_menu(unsigned long long token, int command_
 //    invalidated after the handler returns.
 typedef void (*excef_download_starting_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int download_id,
     const char* url,
     const char* suggested_name,
@@ -926,7 +926,7 @@ EXCEF_API void excef_set_download_starting_callback(excef_download_starting_cb_t
 
 // Resolve. `path` = NULL/"" cancels the download. `show_dialog` = 1
 // makes the OS show a save-as dialog (in addition to using `path`).
-EXCEF_API void excef_resolve_download_starting(unsigned long long token,
+EXCEF_API void excef_resolve_download_starting(uint64_t token,
                                                  const char* path,
                                                  int show_dialog);
 
@@ -934,7 +934,7 @@ EXCEF_API void excef_resolve_download_starting(unsigned long long token,
 // percent_complete may be -1 if total_bytes is unknown.
 typedef void (*excef_download_progress_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int download_id,
     int percent_complete,
     long long received_bytes,
@@ -947,7 +947,7 @@ EXCEF_API void excef_set_download_progress_callback(excef_download_progress_cb_t
 
 // action: 0 = cancel, 1 = pause, 2 = resume. No-op on unknown tokens
 // (the token is invalidated as soon as the event handler returns).
-EXCEF_API void excef_download_action(unsigned long long token, int action);
+EXCEF_API void excef_download_action(uint64_t token, int action);
 
 // ---- Auth credentials handler ------------------------------------------
 //
@@ -957,7 +957,7 @@ EXCEF_API void excef_download_action(unsigned long long token, int action);
 // passing NULL for both.
 typedef void (*excef_auth_request_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     int is_proxy,
     const char* host,
     int port,
@@ -967,7 +967,7 @@ typedef void (*excef_auth_request_cb_t)(
 EXCEF_API void excef_set_auth_request_callback(excef_auth_request_cb_t cb);
 
 // Resolve. NULL/empty username = cancel (the request fails with 401/407).
-EXCEF_API void excef_resolve_auth(unsigned long long token,
+EXCEF_API void excef_resolve_auth(uint64_t token,
                                     const char* username,
                                     const char* password);
 
@@ -1044,14 +1044,14 @@ EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 // proceed): proceed=1 continues the load (treat cert as trusted for this
 // request only); proceed=0 cancels (page sees the load failure).
 typedef void (*excef_cert_error_cb_t)(int browser_id,
-                                        unsigned long long token,
+                                        uint64_t token,
                                         int cert_error,
                                         const char* request_url,
                                         const char* subject_common_name,
                                         const char* issuer_common_name);
 
 EXCEF_API void excef_set_cert_error_callback(excef_cert_error_cb_t cb);
-EXCEF_API void excef_resolve_cert_error(unsigned long long token, int proceed);
+EXCEF_API void excef_resolve_cert_error(uint64_t token, int proceed);
 
 // ---- LifeSpan: OnBeforePopup -------------------------------------------
 //
@@ -1097,24 +1097,24 @@ EXCEF_API void excef_set_before_popup_callback(excef_before_popup_cb_t cb);
 
 typedef void (*excef_permission_prompt_cb_t)(
     int browser_id,
-    unsigned long long token,
-    unsigned long long prompt_id,
+    uint64_t token,
+    uint64_t prompt_id,
     const char* requesting_origin,
     int requested_permissions);
 
 EXCEF_API void excef_set_permission_prompt_callback(excef_permission_prompt_cb_t cb);
 
-EXCEF_API void excef_resolve_permission_prompt(unsigned long long token, int result);
+EXCEF_API void excef_resolve_permission_prompt(uint64_t token, int result);
 
 typedef void (*excef_media_access_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     const char* requesting_origin,
     int requested_permissions);
 
 EXCEF_API void excef_set_media_access_callback(excef_media_access_cb_t cb);
 
-EXCEF_API void excef_resolve_media_access(unsigned long long token, int granted_permissions);
+EXCEF_API void excef_resolve_media_access(uint64_t token, int granted_permissions);
 
 // ---- Render-process termination ----------------------------------------
 //
@@ -1174,7 +1174,7 @@ EXCEF_API int excef_register_custom_scheme(const char* scheme_name,
 
 typedef void (*excef_scheme_request_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     const char* url,
     const char* method);
 
@@ -1185,7 +1185,7 @@ EXCEF_API void excef_set_scheme_request_callback(excef_scheme_request_cb_t cb);
 // `body` may be NULL when `body_length == 0`. Multiple resolves on the
 // same token are no-ops (idempotent).
 EXCEF_API void excef_resolve_scheme_request(
-    unsigned long long token,
+    uint64_t token,
     int status_code,
     const char* status_text,
     const char* mime_type,
@@ -1207,7 +1207,7 @@ EXCEF_API void excef_resolve_scheme_request(
 // `Name: Value\n` lines (no trailing newline).
 typedef void (*excef_resource_request_cb_t)(
     int browser_id,
-    unsigned long long token,
+    uint64_t token,
     const char* url,
     const char* method,
     int resource_type,
@@ -1220,7 +1220,7 @@ EXCEF_API void excef_set_resource_request_callback(excef_resource_request_cb_t c
 // with the supplied list (same `Name: Value\n` format). Pass NULL or
 // empty to keep existing headers untouched.
 EXCEF_API void excef_resolve_resource_request(
-    unsigned long long token,
+    uint64_t token,
     int action,
     const char* new_headers);
 
@@ -1261,7 +1261,7 @@ EXCEF_API void excef_set_popup_paint_callback(excef_popup_paint_cb_t cb);
 // excef_resolve_js_invoke. If the host never resolves, the Promise stays
 // pending — clean it up on browser close.
 typedef void (*excef_js_invoke_cb_t)(int browser_id,
-                                       unsigned long long token,
+                                       uint64_t token,
                                        const char* method,
                                        const char* args_json);
 EXCEF_API void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb);
@@ -1271,7 +1271,7 @@ EXCEF_API void excef_set_js_invoke_callback(excef_js_invoke_cb_t cb);
 // `success` = 0 → renderer's Promise rejects with result_json (string)
 // `result_json` may be NULL/empty (treated as "null"). Idempotent — extra
 // resolve calls on the same token are no-ops.
-EXCEF_API void excef_resolve_js_invoke(unsigned long long token,
+EXCEF_API void excef_resolve_js_invoke(uint64_t token,
                                         int success,
                                         const char* result_json);
 

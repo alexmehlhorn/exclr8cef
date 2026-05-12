@@ -14,7 +14,7 @@
   <PropertyGroup Label="Packaging">
     <PackageId>Exclr8Cef.Print</PackageId>
     <Version Condition="'$(Exclr8CefVersion)' != ''">$(Exclr8CefVersion)</Version>
-    <Version Condition="'$(Exclr8CefVersion)' == ''">0.7.0</Version>
+    <Version Condition="'$(Exclr8CefVersion)' == ''">0.7.1</Version>
     <Authors>Exclr8</Authors>
     <Description>Optional PrintToPDF extension for Exclr8Cef — exposes Chromium's full PdfPrintSettings (header/footer HTML templates, paper size, margins, scale, page ranges). Only required by hosts that need PDF customization beyond Cef.PrintToPdfAsync(browserId, path).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
