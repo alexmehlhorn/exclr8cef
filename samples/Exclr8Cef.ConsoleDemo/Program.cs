@@ -40,6 +40,7 @@ Console.WriteLine($"Helper subprocess: {helperPath}");
 Console.WriteLine($"Exists: {File.Exists(helperPath)}");
 
 string? screenshotOut = GetArg(args, "--screenshot");
+string? accelPaintOut = GetArg(args, "--accel-paint");
 string? screenshotUrl = GetArg(args, "--url");
 int screenshotW = int.TryParse(GetArg(args, "--width"), out var w) ? w : 1280;
 int screenshotH = int.TryParse(GetArg(args, "--height"), out var h) ? h : 800;
@@ -53,6 +54,22 @@ if (screenshotOut is not null)
         return 2;
     }
     return RunScreenshotMode(args, helperPath, screenshotUrl, screenshotOut,
+                              screenshotW, screenshotH, screenshotDsf);
+}
+
+if (accelPaintOut is not null)
+{
+    if (screenshotUrl is null)
+    {
+        Console.Error.WriteLine("--accel-paint requires --url URL");
+        return 2;
+    }
+    if (!OperatingSystem.IsMacOS())
+    {
+        Console.Error.WriteLine("--accel-paint demo is macOS-only (IOSurface). The AcceleratedPaint event itself is cross-platform — the handle is just a Windows NT handle or Linux dma-buf fd elsewhere, and the consumer code path is different per platform.");
+        return 3;
+    }
+    return RunAccelPaintMode(args, helperPath, screenshotUrl, accelPaintOut,
                               screenshotW, screenshotH, screenshotDsf);
 }
 
@@ -185,4 +202,182 @@ static int RunScreenshotMode(string[] argv, string helperPath, string url, strin
     }
     Cef.Shutdown();
     return failed ? 4 : 0;
+}
+
+// Accelerated-paint mode (macOS only). Creates an OSR browser with
+// SharedTexture enabled so CEF delivers paints via the AcceleratedPaint
+// event with an IOSurface handle. The host locks the IOSurface, reads
+// the BGRA pixels directly out of GPU-shared memory, and writes them as
+// PPM (Netpbm; viewable by Preview / ffmpeg / GIMP / ImageMagick).
+//
+// Real Avalonia consumers would skip the lock-and-read and instead
+// import the IOSurface as a Metal texture, then wrap that as an
+// SkBackendTexture for Skia. That path is outside this demo's scope —
+// the demo only proves the wiring + the handle is real + the pixels are
+// what we expect.
+static int RunAccelPaintMode(string[] argv, string helperPath, string url, string outPath,
+                              int width, int height, float dsf)
+{
+    Console.WriteLine($"Accelerated paint: {url} → {outPath} ({width}×{height} @ {dsf}x, BGRA via IOSurface)");
+
+    Cef.InitializeForOsr(argv, helperPath, _ => { });
+
+    var browser = Cef.CreateOffscreenBrowserEx(
+        width, height, dsf, url, context: null,
+        flags: Cef.OffscreenFlags.SharedTexture);
+    if (browser is null)
+    {
+        Console.Error.WriteLine("CreateOffscreenBrowserEx failed");
+        Cef.Shutdown();
+        return 3;
+    }
+
+    // Track when we've written a frame so the main loop can exit.
+    // AcceleratedPaint fires on the CEF UI thread = same thread as
+    // DoMessageLoopWork — so the file write happens on the main loop
+    // tick that delivered the paint. No threading hazards.
+    bool wrote = false;
+    bool failed = false;
+    int frameNum = 0;
+    bool loadEnded = false;
+
+    browser.LoadEnd += (_, _) => loadEnded = true;
+
+    browser.AcceleratedPaint += (_, ap) =>
+    {
+        frameNum++;
+        Console.WriteLine($"AcceleratedPaint #{frameNum}: {ap.CodedWidth}×{ap.CodedHeight}, handle=0x{ap.SharedHandle.ToInt64():X}, format={ap.Format}, loadEnded={loadEnded}");
+        // Capture the first paint that arrives AFTER LoadEnd — static
+        // pages may fire one early "loading" paint and one "done" paint;
+        // the latter is the one we want. If the page never fires LoadEnd
+        // (rare) the timeout below will still produce a file via the
+        // last-seen paint.
+        if (wrote || !loadEnded || ap.SharedHandle == IntPtr.Zero) return;
+        try
+        {
+            WriteIOSurfaceAsPpm(ap.SharedHandle, outPath, ap.CodedWidth, ap.CodedHeight, ap.Format);
+            Console.WriteLine($"Wrote {outPath} from frame #{frameNum}");
+            wrote = true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Failed to write IOSurface contents: {ex.Message}");
+            failed = true;
+            wrote = true;
+        }
+    };
+
+    browser.LoadError += (_, e) =>
+    {
+        if (e.FailedUrl == url)
+        {
+            Console.Error.WriteLine($"Load failed: {e.ErrorText} ({e.ErrorCode})");
+            failed = true; wrote = true;
+        }
+    };
+
+    var deadline = DateTime.UtcNow.AddSeconds(30);
+    while (!wrote && DateTime.UtcNow < deadline)
+    {
+        Cef.DoMessageLoopWork();
+        Thread.Sleep(10);
+    }
+    if (!wrote)
+    {
+        Console.Error.WriteLine("Timed out waiting for accelerated paint. Check that SharedTexture is supported on this CEF build.");
+        failed = true;
+    }
+
+    browser.Close();
+    for (int i = 0; i < 100; ++i)
+    {
+        Cef.DoMessageLoopWork();
+        Thread.Sleep(10);
+    }
+    Cef.Shutdown();
+    return failed ? 4 : 0;
+}
+
+// Static helper at file scope reachable from the top-level statements.
+static void WriteIOSurfaceAsPpm(IntPtr surface, string outPath, int reportedW, int reportedH, Exclr8Cef.Cef.CefColorType format)
+    => IOSurfaceInterop.WriteAsPpm(surface, outPath, format);
+
+// macOS IOSurface FFI + PPM writer. IOSurface ships in
+// /System/Library/Frameworks/IOSurface.framework. We only use the
+// lock-and-read path; for true GPU consumption a host would instead
+// import the IOSurface as a Metal texture
+// (MTLDevice.MakeTexture(descriptor, iosurface:0)) and bind it as a
+// shader resource — no CPU read involved.
+internal static class IOSurfaceInterop
+{
+    private const string Lib = "/System/Library/Frameworks/IOSurface.framework/IOSurface";
+
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern int IOSurfaceLock(IntPtr surface, uint options, out uint seed);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern int IOSurfaceUnlock(IntPtr surface, uint options, out uint seed);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern IntPtr IOSurfaceGetBaseAddress(IntPtr surface);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern UIntPtr IOSurfaceGetWidth(IntPtr surface);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern UIntPtr IOSurfaceGetHeight(IntPtr surface);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern UIntPtr IOSurfaceGetBytesPerRow(IntPtr surface);
+
+    private const uint kIOSurfaceLockReadOnly = 0x1;
+
+    public static unsafe void WriteAsPpm(IntPtr surface, string outPath, Exclr8Cef.Cef.CefColorType format)
+    {
+        // Trust the IOSurface's own dimensions over the reported
+        // coded_size — coded_size can include extra rows/columns for
+        // GPU alignment that aren't real content.
+        int w = (int)IOSurfaceGetWidth(surface);
+        int h = (int)IOSurfaceGetHeight(surface);
+        int stride = (int)IOSurfaceGetBytesPerRow(surface);
+        bool bgra = format == Exclr8Cef.Cef.CefColorType.Bgra8888;
+
+        if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, out _) != 0)
+            throw new InvalidOperationException("IOSurfaceLock failed");
+        try
+        {
+            byte* baseAddr = (byte*)IOSurfaceGetBaseAddress(surface);
+            if (baseAddr == null) throw new InvalidOperationException("IOSurfaceGetBaseAddress returned null");
+
+            // PPM (P6): magic + dims + max + raw RGB bytes. Tools that
+            // read PPM: Preview.app, GIMP, ImageMagick, ffmpeg, sips.
+            using var fs = new FileStream(outPath, FileMode.Create, FileAccess.Write);
+            var header = System.Text.Encoding.ASCII.GetBytes($"P6\n{w} {h}\n255\n");
+            fs.Write(header, 0, header.Length);
+
+            var row = new byte[w * 3];
+            for (int y = 0; y < h; ++y)
+            {
+                byte* src = baseAddr + (long)y * stride;
+                if (bgra)
+                {
+                    for (int x = 0; x < w; ++x)
+                    {
+                        row[x * 3 + 0] = src[x * 4 + 2];  // R
+                        row[x * 3 + 1] = src[x * 4 + 1];  // G
+                        row[x * 3 + 2] = src[x * 4 + 0];  // B
+                    }
+                }
+                else  // RGBA
+                {
+                    for (int x = 0; x < w; ++x)
+                    {
+                        row[x * 3 + 0] = src[x * 4 + 0];
+                        row[x * 3 + 1] = src[x * 4 + 1];
+                        row[x * 3 + 2] = src[x * 4 + 2];
+                    }
+                }
+                fs.Write(row, 0, row.Length);
+            }
+        }
+        finally
+        {
+            IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, out _);
+        }
+    }
 }

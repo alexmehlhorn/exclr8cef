@@ -902,12 +902,13 @@ public static class Cef
 
     /// <summary>
     /// CEF's <c>cef_color_type_t</c> — pixel format reported by
-    /// <see cref="CefBrowser.AcceleratedPaint"/>.
+    /// <see cref="CefBrowser.AcceleratedPaint"/>. Values mirror CEF's
+    /// header order (NOT alphabetical): RGBA = 0, BGRA = 1.
     /// </summary>
     public enum CefColorType
     {
-        Bgra8888 = 0,
-        Rgba8888 = 1,
+        Rgba8888 = 0,
+        Bgra8888 = 1,
     }
 
     /// <summary>
