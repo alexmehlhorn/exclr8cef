@@ -62,6 +62,24 @@ internal static unsafe partial class Excef
     public static extern double excef_get_zoom_level(int browser_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_notify_move_or_resize_started(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_notify_screen_info_changed(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_replace_misspelling(int browser_id, [NativeTypeName("const char *")] sbyte* word);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_add_word_to_dictionary(int browser_id, [NativeTypeName("const char *")] sbyte* word);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_frame_lifecycle_callback([NativeTypeName("excef_frame_lifecycle_cb_t")] delegate* unmanaged[Cdecl]<int, int, sbyte*, sbyte*, sbyte*, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_main_frame_changed_callback([NativeTypeName("excef_main_frame_changed_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_copy(int browser_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]

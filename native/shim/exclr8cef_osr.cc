@@ -88,6 +88,8 @@ std::map<int, CefRefPtr<CefRegistration>> g_devtools_observers;
 std::mutex g_devtools_observers_mu;
 excef_before_popup_cb_t g_before_popup_cb = nullptr;
 excef_cert_error_cb_t g_cert_error_cb = nullptr;
+excef_frame_lifecycle_cb_t g_frame_lifecycle_cb = nullptr;
+excef_main_frame_changed_cb_t g_main_frame_changed_cb = nullptr;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -591,6 +593,53 @@ bool Exclr8CefOsrHandler::OnKeyEvent(CefRefPtr<CefBrowser> /*browser*/,
                            static_cast<int>(event.modifiers),
                            event.windows_key_code, event.native_key_code,
                            event.is_system_key ? 1 : 0) != 0;
+}
+
+// ---- CefFrameHandler ------------------------------------------------------
+
+namespace {
+// Pull the fields we hand to the host out of a frame. Frame methods are
+// safe to call from the UI thread; the callback is invoked synchronously.
+void EmitFrame(int browser_id, int event_type, bool reattached_unused,
+                CefRefPtr<CefFrame> frame) {
+    (void)reattached_unused;
+    if (!g_frame_lifecycle_cb || !frame) return;
+    std::string fid = frame->GetIdentifier().ToString();
+    std::string name = frame->GetName().ToString();
+    std::string url = frame->GetURL().ToString();
+    std::string parent;
+    if (auto p = frame->GetParent()) parent = p->GetIdentifier().ToString();
+    g_frame_lifecycle_cb(browser_id, event_type,
+                          fid.c_str(), parent.c_str(),
+                          name.c_str(), url.c_str(),
+                          frame->IsMain() ? 1 : 0);
+}
+}  // namespace
+
+void Exclr8CefOsrHandler::OnFrameCreated(CefRefPtr<CefBrowser> /*browser*/,
+                                          CefRefPtr<CefFrame> frame) {
+    EmitFrame(id_, 0, false, frame);
+}
+
+void Exclr8CefOsrHandler::OnFrameAttached(CefRefPtr<CefBrowser> /*browser*/,
+                                           CefRefPtr<CefFrame> frame,
+                                           bool /*reattached*/) {
+    EmitFrame(id_, 1, false, frame);
+}
+
+void Exclr8CefOsrHandler::OnFrameDetached(CefRefPtr<CefBrowser> /*browser*/,
+                                           CefRefPtr<CefFrame> frame) {
+    EmitFrame(id_, 2, false, frame);
+}
+
+void Exclr8CefOsrHandler::OnMainFrameChanged(CefRefPtr<CefBrowser> /*browser*/,
+                                              CefRefPtr<CefFrame> old_frame,
+                                              CefRefPtr<CefFrame> new_frame) {
+    if (!g_main_frame_changed_cb) return;
+    std::string oldId, newId;
+    if (old_frame) oldId = old_frame->GetIdentifier().ToString();
+    if (new_frame) newId = new_frame->GetIdentifier().ToString();
+    g_main_frame_changed_cb(id_, oldId.c_str(), newId.c_str());
 }
 
 bool Exclr8CefOsrHandler::OnCertificateError(
@@ -1429,6 +1478,42 @@ extern "C" double excef_get_zoom_level(int browser_id) {
     if (it == exclr8cef::g_osr_browsers.end()) return 0.0;
     auto browser = it->second->browser();
     return browser ? browser->GetHost()->GetZoomLevel() : 0.0;
+}
+
+extern "C" void excef_notify_move_or_resize_started(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto browser = it->second->browser();
+    if (browser) browser->GetHost()->NotifyMoveOrResizeStarted();
+}
+
+extern "C" void excef_notify_screen_info_changed(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto browser = it->second->browser();
+    if (browser) browser->GetHost()->NotifyScreenInfoChanged();
+}
+
+extern "C" void excef_replace_misspelling(int browser_id, const char* word) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto browser = it->second->browser();
+    if (browser) browser->GetHost()->ReplaceMisspelling(CefString(word ? word : ""));
+}
+
+extern "C" void excef_add_word_to_dictionary(int browser_id, const char* word) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto browser = it->second->browser();
+    if (browser) browser->GetHost()->AddWordToDictionary(CefString(word ? word : ""));
+}
+
+extern "C" void excef_set_frame_lifecycle_callback(excef_frame_lifecycle_cb_t cb) {
+    exclr8cef::g_frame_lifecycle_cb = cb;
+}
+
+extern "C" void excef_set_main_frame_changed_callback(excef_main_frame_changed_cb_t cb) {
+    exclr8cef::g_main_frame_changed_cb = cb;
 }
 
 namespace {

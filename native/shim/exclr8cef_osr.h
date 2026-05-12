@@ -14,6 +14,7 @@
 #include "include/cef_life_span_handler.h"
 #include "include/cef_accessibility_handler.h"
 #include "include/cef_focus_handler.h"
+#include "include/cef_frame_handler.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_permission_handler.h"
@@ -40,7 +41,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefAccessibilityHandler,
                             public CefPermissionHandler,
                             public CefFocusHandler,
-                            public CefKeyboardHandler {
+                            public CefKeyboardHandler,
+                            public CefFrameHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -65,6 +67,7 @@ public:
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
     CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
+    CefRefPtr<CefFrameHandler> GetFrameHandler() override { return this; }
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -209,6 +212,18 @@ public:
     bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
                      const CefKeyEvent& event,
                      CefEventHandle os_event) override;
+
+    // CefFrameHandler
+    void OnFrameCreated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame) override;
+    void OnFrameAttached(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame,
+                          bool reattached) override;
+    void OnFrameDetached(CefRefPtr<CefBrowser> browser,
+                          CefRefPtr<CefFrame> frame) override;
+    void OnMainFrameChanged(CefRefPtr<CefBrowser> browser,
+                              CefRefPtr<CefFrame> old_frame,
+                              CefRefPtr<CefFrame> new_frame) override;
 
     bool StartDragging(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefDragData> drag_data,

@@ -330,6 +330,18 @@ public sealed class CefBrowser : IDisposable
     public event EventHandler<PreKeyEventArgs>? KeyEvent;
 
     /// <summary>
+    /// CefFrameHandler frame lifecycle: created / attached / detached.
+    /// Fires for every frame in the browser (main + iframes).
+    /// </summary>
+    public event EventHandler<FrameLifecycleEventArgs>? FrameLifecycle;
+
+    /// <summary>
+    /// CefFrameHandler::OnMainFrameChanged. Fires on cross-process navigations
+    /// when the main frame is replaced by a new one (rare but real).
+    /// </summary>
+    public event EventHandler<MainFrameChangedEventArgs>? MainFrameChanged;
+
+    /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
     /// If subscription happens after the browser is already initialised,
@@ -551,6 +563,67 @@ public sealed class CefBrowser : IDisposable
         {
             _zoomLevel = value;
             if (!_closed) Excef.excef_set_zoom_level(Id, value);
+        }
+    }
+
+    /// <summary>
+    /// Read the browser's current zoom level directly from CEF (rather
+    /// than the cached host-side value). 0.0 == 100%; each ±1 ≈ 1.2×.
+    /// </summary>
+    public double GetZoomLevel()
+        => _closed ? _zoomLevel : Excef.excef_get_zoom_level(Id);
+
+    /// <summary>
+    /// Tell CEF the hosting window has started a move/resize gesture. CEF
+    /// uses this as a hint to defer IME composition windows and to lower
+    /// some perf timers until the gesture ends.
+    /// </summary>
+    public void NotifyMoveOrResizeStarted()
+    {
+        if (!_closed) Excef.excef_notify_move_or_resize_started(Id);
+    }
+
+    /// <summary>
+    /// Tell CEF the screen info changed (DPI / display / monitor switch).
+    /// CEF will re-query <see cref="SetDeviceScaleFactor"/> and viewport size.
+    /// </summary>
+    public void NotifyScreenInfoChanged()
+    {
+        if (!_closed) Excef.excef_notify_screen_info_changed(Id);
+    }
+
+    // ---- Spellcheck -----------------------------------------------------
+
+    /// <summary>
+    /// Replace the misspelled word at the current selection with the
+    /// provided replacement. Pair with <see cref="ContextMenuEventArgs"/>
+    /// — read MisspelledWord and Suggestions from the params dict.
+    /// </summary>
+    public void ReplaceMisspelling(string word)
+    {
+        ArgumentNullException.ThrowIfNull(word);
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(word);
+            try { Excef.excef_replace_misspelling(Id, p); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
+        }
+    }
+
+    /// <summary>
+    /// Add a word to the browser's custom spellcheck dictionary so it
+    /// stops being flagged as misspelled in this profile.
+    /// </summary>
+    public void AddWordToDictionary(string word)
+    {
+        ArgumentNullException.ThrowIfNull(word);
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(word);
+            try { Excef.excef_add_word_to_dictionary(Id, p); }
+            finally { Marshal.FreeCoTaskMem((IntPtr)p); }
         }
     }
 
@@ -1129,6 +1202,11 @@ public sealed class CefBrowser : IDisposable
     internal void RaiseGotFocus() => GotFocus?.Invoke(this, EventArgs.Empty);
     internal void RaisePreKey(PreKeyEventArgs args) => PreKeyEvent?.Invoke(this, args);
     internal void RaiseKeyEvent(PreKeyEventArgs args) => KeyEvent?.Invoke(this, args);
+
+    internal void RaiseFrameLifecycle(FrameLifecycleEventArgs args)
+        => FrameLifecycle?.Invoke(this, args);
+    internal void RaiseMainFrameChanged(MainFrameChangedEventArgs args)
+        => MainFrameChanged?.Invoke(this, args);
 
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
@@ -2064,5 +2142,52 @@ public sealed class ConsoleMessageEventArgs : EventArgs
         Message = message;
         Source = source;
         Line = line;
+    }
+}
+
+/// <summary>Which CefFrameHandler event was raised.</summary>
+public enum FrameLifecycleEvent
+{
+    Created = 0,
+    Attached = 1,
+    Detached = 2,
+}
+
+/// <summary>
+/// Args for CefFrameHandler frame events. The IDs are CefFrame::GetIdentifier
+/// strings (stable across the frame's lifetime within a process).
+/// </summary>
+public sealed class FrameLifecycleEventArgs : EventArgs
+{
+    public FrameLifecycleEvent Event { get; }
+    public string FrameId { get; }
+    /// <summary>Empty for the main frame (no parent).</summary>
+    public string ParentFrameId { get; }
+    /// <summary>Frame name from &lt;iframe name=...&gt; or window.name. May be empty.</summary>
+    public string Name { get; }
+    public string Url { get; }
+    public bool IsMain { get; }
+    public FrameLifecycleEventArgs(FrameLifecycleEvent ev, string frameId, string parentFrameId, string name, string url, bool isMain)
+    {
+        Event = ev;
+        FrameId = frameId;
+        ParentFrameId = parentFrameId;
+        Name = name;
+        Url = url;
+        IsMain = isMain;
+    }
+}
+
+/// <summary>Args for CefFrameHandler::OnMainFrameChanged.</summary>
+public sealed class MainFrameChangedEventArgs : EventArgs
+{
+    /// <summary>Empty when the main frame is being created for the first time.</summary>
+    public string OldFrameId { get; }
+    /// <summary>Empty when the main frame is going away (browser closing).</summary>
+    public string NewFrameId { get; }
+    public MainFrameChangedEventArgs(string oldFrameId, string newFrameId)
+    {
+        OldFrameId = oldFrameId;
+        NewFrameId = newFrameId;
     }
 }

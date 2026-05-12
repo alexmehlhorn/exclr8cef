@@ -167,6 +167,43 @@ EXCEF_API void excef_set_device_scale_factor(int browser_id, float scale);
 EXCEF_API void excef_set_zoom_level(int browser_id, double level);
 EXCEF_API double excef_get_zoom_level(int browser_id);
 
+// Notify Chromium that the browser's hosting window has started moving
+// or resizing (IME composition window placement, perf hints).
+EXCEF_API void excef_notify_move_or_resize_started(int browser_id);
+// Notify Chromium the screen info changed (DPI / display change after
+// drag between monitors). Same call as SetDeviceScaleFactor + a generic
+// re-query trigger.
+EXCEF_API void excef_notify_screen_info_changed(int browser_id);
+
+// Spellcheck (right-click "Add to Dictionary" / "Replace") wired into
+// CefBrowserHost. The misspelled-word + suggestions come from
+// CefContextMenuParams in the ContextMenu event.
+EXCEF_API void excef_replace_misspelling(int browser_id, const char* word);
+EXCEF_API void excef_add_word_to_dictionary(int browser_id, const char* word);
+
+// ---- Frame handler (iframe lifecycle) ---------------------------------
+//
+// CefFrameHandler. Fires for every frame in the browser — main + iframes.
+// Useful for automation that needs to track when iframes appear /
+// disappear, and for cross-origin frame inventory.
+//
+// `frame_id` is a stable identifier (CefFrame::GetIdentifier — string
+// in CEF 124+).
+
+typedef void (*excef_frame_lifecycle_cb_t)(int browser_id,
+                                             int event_type,  // 0=created, 1=attached, 2=detached
+                                             const char* frame_id,
+                                             const char* parent_frame_id,
+                                             const char* name,
+                                             const char* url,
+                                             int is_main);
+EXCEF_API void excef_set_frame_lifecycle_callback(excef_frame_lifecycle_cb_t cb);
+
+typedef void (*excef_main_frame_changed_cb_t)(int browser_id,
+                                                 const char* old_frame_id,
+                                                 const char* new_frame_id);
+EXCEF_API void excef_set_main_frame_changed_callback(excef_main_frame_changed_cb_t cb);
+
 // Clipboard / editing primitives. Operate on the browser's focused frame.
 // CEF in OSR mode does not auto-execute these from keyboard accelerators;
 // the host must invoke them when Cmd/Ctrl + C / V / X / A / Z / Y is pressed.

@@ -945,6 +945,8 @@ public static class Cef
                 Excef.excef_set_devtools_message_callback(&DevToolsMessageTrampoline);
                 Excef.excef_set_string_visitor_callback(&StringVisitorTrampoline);
                 Excef.excef_set_nav_entry_callback(&NavEntryTrampoline);
+                Excef.excef_set_frame_lifecycle_callback(&FrameLifecycleTrampoline);
+                Excef.excef_set_main_frame_changed_callback(&MainFrameChangedTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1598,6 +1600,35 @@ public static class Cef
         {
             b.RaisePainted((IntPtr)buffer, width, height);
         }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void FrameLifecycleTrampoline(
+        int browserId, int eventType, sbyte* frameId, sbyte* parentFrameId,
+        sbyte* name, sbyte* url, int isMain)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new FrameLifecycleEventArgs(
+            (FrameLifecycleEvent)eventType,
+            Marshal.PtrToStringUTF8((IntPtr)frameId) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)parentFrameId) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)name) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+            isMain != 0);
+        try { b.RaiseFrameLifecycle(args); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void MainFrameChangedTrampoline(
+        int browserId, sbyte* oldFrameId, sbyte* newFrameId)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new MainFrameChangedEventArgs(
+            Marshal.PtrToStringUTF8((IntPtr)oldFrameId) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)newFrameId) ?? "");
+        try { b.RaiseMainFrameChanged(args); }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
