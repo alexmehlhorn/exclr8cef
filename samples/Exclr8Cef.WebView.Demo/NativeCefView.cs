@@ -6,14 +6,14 @@ using Exclr8Cef;
 namespace Exclr8Cef.WebView.Demo;
 
 /// <summary>
-/// Embeds an Alloy-runtime CEF browser as a native child view (NSView /
-/// HWND / X11 Window) inside Avalonia via <see cref="NativeControlHost"/>.
+/// Embeds an Alloy-runtime CEF browser as a native child view (NSView on
+/// macOS, HWND on Windows) inside Avalonia via <see cref="NativeControlHost"/>.
 /// Renders without OSR — CEF paints directly into the platform window.
 ///
 /// Limitations:
 /// - Alloy runtime only (Chrome runtime can't be embedded).
-/// - macOS only in this v0 (uses excef_create_browser_view which calls
-///   SetAsChild — Win/Linux equivalent C ABI not exposed yet).
+/// - macOS + Windows supported; Linux/X11 needs the matching native shim
+///   path (excef_create_browser_view on Linux is not yet implemented).
 /// </summary>
 public class NativeCefView : NativeControlHost
 {
@@ -25,15 +25,28 @@ public class NativeCefView : NativeControlHost
     private IntPtr _hostView;
     private bool _browserAttached;
 
+    // Avalonia's NativeControlHost expects a platform-specific handle
+    // type string. NSView for Cocoa, HWND for Win32. The shim returns
+    // the matching native handle from excef_create_embedded_host on each
+    // platform — we just have to label it correctly here.
+    private static string PlatformHandleKind =>
+        OperatingSystem.IsWindows() ? "HWND" :
+        OperatingSystem.IsMacOS()   ? "NSView" :
+        // Avalonia's Linux/X11 backend uses "XID". Without a Linux
+        // implementation in the shim this branch will misbehave, but at
+        // least the cast is the right shape if/when that lands.
+        "XID";
+
     protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
     {
-        // Phase 1: create an empty NSView and return it. Avalonia will
-        // parent it into the visual tree before our ArrangeOverride fires.
+        // Phase 1: create an empty native widget and return it. Avalonia
+        // will parent it into the visual tree before our ArrangeOverride
+        // fires (HiDPI / effective DPI is only known after parenting).
         var bounds = Bounds;
         int w = (int)bounds.Width  > 0 ? (int)bounds.Width  : 800;
         int h = (int)bounds.Height > 0 ? (int)bounds.Height : 600;
         _hostView = Cef.CreateEmbeddedHost(w, h);
-        return new PlatformHandle(_hostView, "NSView");
+        return new PlatformHandle(_hostView, PlatformHandleKind);
     }
 
     protected override Size ArrangeOverride(Size finalSize)

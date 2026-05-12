@@ -25,6 +25,8 @@ set(SHIM_SRCS
 )
 if(OS_MAC)
     list(APPEND SHIM_SRCS exclr8cef_mac.mm)
+elseif(OS_WINDOWS)
+    list(APPEND SHIM_SRCS exclr8cef_win.cc)
 endif()
 
 # ---- Shared library: the C ABI surface ------------------------------------

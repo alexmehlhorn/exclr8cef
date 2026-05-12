@@ -308,7 +308,14 @@ void AddCustomScheme(const std::string& name, int options) {
             serialized += std::to_string(g_custom_schemes[i].options);
         }
     }
+#if defined(_WIN32)
+    // _putenv_s is the MSVC-correct equivalent of POSIX setenv. The empty
+    // string clears (vs. POSIX's separate unsetenv) but we always have a
+    // non-empty serialized list when we get here.
+    _putenv_s("EXCLR8CEF_SCHEMES", serialized.c_str());
+#else
     setenv("EXCLR8CEF_SCHEMES", serialized.c_str(), /*overwrite=*/1);
+#endif
 }
 
 // Load the scheme list from the environment (used by subprocesses, which

@@ -35,7 +35,7 @@ public static class CefPrint
         public IntPtr footer_template;
     }
 
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl)]
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern unsafe int excef_print_to_pdf_with_settings(
         int browser_id,
         sbyte* path,

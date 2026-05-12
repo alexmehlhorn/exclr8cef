@@ -8,25 +8,33 @@
 //   a PNG via the DevTools protocol (Page.captureScreenshot), and exits.
 //   Useful for automated visual diffing / archiving / vision pipelines.
 //
-// Must be run inside the Exclr8Cef.ConsoleDemo.app bundle produced by
-// scripts/build-console-demo.sh — CEF's library loader needs the Chromium
-// Embedded Framework framework adjacent to the executable inside a .app.
+// macOS: must be run inside the Exclr8Cef.ConsoleDemo.app bundle
+//   produced by scripts/build-console-demo.sh — CEF's library loader
+//   needs the Chromium Embedded Framework framework adjacent to the
+//   executable inside a .app.
+//
+// Windows: the helper subprocess is a sibling .exe next to the main
+//   executable; layout is flat (no bundle), produced by the win build
+//   script (TBD — see scripts/).
 
 using Exclr8Cef;
 
 var versions = Cef.GetVersions();
 Console.WriteLine($"Exclr8Cef {versions.Shim} — running CEF {versions.Cef} (Chromium {versions.Chromium})");
 
-// Compute the helper subprocess path inside the .app bundle.
-// The bundle layout (set up by build-console-demo.sh) is:
-//   <App>.app/Contents/MacOS/Exclr8Cef.ConsoleDemo
-//   <App>.app/Contents/Frameworks/exclr8cef_demo Helper.app/Contents/MacOS/exclr8cef_demo Helper
-// AppContext.BaseDirectory points at Contents/MacOS.
-var helperPath = Path.GetFullPath(Path.Combine(
-    AppContext.BaseDirectory,
-    "..", "Frameworks",
-    "exclr8cef_demo Helper.app", "Contents", "MacOS",
-    "exclr8cef_demo Helper"));
+// Helper subprocess path differs per OS:
+//   macOS:   <App>.app/Contents/Frameworks/exclr8cef_demo Helper.app/Contents/MacOS/exclr8cef_demo Helper
+//   Windows: <dir>/exclr8cef_demo_helper.exe (sibling of the main .exe)
+//   Linux:   <dir>/exclr8cef_demo_helper      (same idea, no extension)
+var helperPath = OperatingSystem.IsMacOS()
+    ? Path.GetFullPath(Path.Combine(
+          AppContext.BaseDirectory,
+          "..", "Frameworks",
+          "exclr8cef_demo Helper.app", "Contents", "MacOS",
+          "exclr8cef_demo Helper"))
+    : OperatingSystem.IsWindows()
+        ? Path.Combine(AppContext.BaseDirectory, "exclr8cef_demo_helper.exe")
+        : Path.Combine(AppContext.BaseDirectory, "exclr8cef_demo_helper");
 
 Console.WriteLine($"Helper subprocess: {helperPath}");
 Console.WriteLine($"Exists: {File.Exists(helperPath)}");

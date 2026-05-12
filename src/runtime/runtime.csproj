@@ -39,9 +39,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="$(Exclr8CefStagingDir)\runtimes\**\*"
+    <None Include="$(Exclr8CefStagingDir)/runtimes/**/*"
           Pack="true"
-          PackagePath="runtimes\" />
+          PackagePath="runtimes/" />
   </ItemGroup>
 
 </Project>
