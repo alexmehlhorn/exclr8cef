@@ -36,7 +36,7 @@ public partial class IsolatedSessionWindow : Window
         Closed += (_, _) => { _context?.Dispose(); _context = null; };
     }
 
-    private void OnReloadClick(object? sender, RoutedEventArgs e) => Browser.Reload();
+    private void OnReloadClick(object? sender, RoutedEventArgs e) => Browser.Browser?.Reload();
 
     private void OnAddressKeyDown(object? sender, KeyEventArgs e)
     {

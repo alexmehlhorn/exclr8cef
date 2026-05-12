@@ -109,6 +109,13 @@ public class WebView : Control, IWebView
     /// </summary>
     public event EventHandler? BrowserReady;
 
+    /// <summary>
+    /// Fires when teardown is about to begin (host window closing).
+    /// Setting <see cref="BrowserClosingEventArgs.Cancel"/> = true vetoes
+    /// it — the browser stays alive. Useful for save-state prompts.
+    /// </summary>
+    public event EventHandler<BrowserClosingEventArgs>? BrowserClosing;
+
     /// <summary>Fires after the underlying browser has been fully closed.</summary>
     public event EventHandler? BrowserClosed;
 
@@ -285,11 +292,11 @@ public class WebView : Control, IWebView
             switch (e.Key)
             {
                 case Key.OemPlus:
-                case Key.Add:        ZoomIn();    return;
+                case Key.Add:        _browser.ZoomLevel += 0.5; return;
                 case Key.OemMinus:
-                case Key.Subtract:   ZoomOut();   return;
+                case Key.Subtract:   _browser.ZoomLevel -= 0.5; return;
                 case Key.D0:
-                case Key.NumPad0:    ResetZoom(); return;
+                case Key.NumPad0:    _browser.ZoomLevel = 0;    return;
                 case Key.C:          _browser.Copy();      return;
                 case Key.V:          _browser.Paste();     return;
                 case Key.X:          _browser.Cut();       return;
@@ -346,50 +353,15 @@ public class WebView : Control, IWebView
         }
     }
 
-    // ---- Avalonia-friendly delegating methods --------------------------
-    //
-    // Most hosts can use `webView.Browser.GoBack()` etc. directly; these
-    // shortcuts exist so XAML data-binding scenarios don't need a null
-    // check on Browser when the control isn't yet ready.
-
-    /// <summary>Load the given URL. Equivalent to setting <see cref="Url"/>.</summary>
-    public void LoadUrl(string url) => _browser?.LoadUrl(url);
-    public void GoBack()      => _browser?.GoBack();
-    public void GoForward()   => _browser?.GoForward();
-    public void Reload(bool ignoreCache = false) => _browser?.Reload(ignoreCache);
-    public void StopLoad()    => _browser?.StopLoad();
-    public void ShowDevTools()  => _browser?.ShowDevTools();
-    public void CloseDevTools() => _browser?.CloseDevTools();
-    public void ExecuteJavaScript(string code) => _browser?.ExecuteJavaScript(code);
-
-    private const double ZoomStep = 0.5;
-    public double ZoomLevel
-    {
-        get => _browser?.ZoomLevel ?? 0;
-        set { if (_browser is not null) _browser.ZoomLevel = value; }
-    }
-    public void ZoomIn()    => ZoomLevel = ZoomLevel + ZoomStep;
-    public void ZoomOut()   => ZoomLevel = ZoomLevel - ZoomStep;
-    public void ResetZoom() => ZoomLevel = 0;
-
-    public void Copy()      => _browser?.Copy();
-    public void Paste()     => _browser?.Paste();
-    public void Cut()       => _browser?.Cut();
-    public void SelectAll() => _browser?.SelectAll();
-    public void Undo()      => _browser?.Undo();
-    public void Redo()      => _browser?.Redo();
-
-    public Task<string> EvaluateJavaScriptAsync(string code)
-        => _browser is null ? Task.FromResult("null") : _browser.EvaluateJavaScriptAsync(code);
-
-    public Task<bool> PrintToPdfAsync(string path)
-        => _browser is null ? Task.FromResult(false) : _browser.PrintToPdfAsync(path);
+    // ---- OSR paint-pipeline internals (control-owned, not browser) ----
 
     /// <summary>
     /// Drop the cached paint bitmap and request a redraw. Useful when the
     /// control's bounds are about to change drastically and showing a brief
     /// black frame is preferable to a stretched / squished old bitmap until
-    /// CEF's next paint lands.
+    /// CEF's next paint lands. OSR-only — there is no equivalent on
+    /// <see cref="NativeWebView"/> because the native widget owns its
+    /// paint surface.
     /// </summary>
     public void InvalidateBitmap()
     {
@@ -398,20 +370,26 @@ public class WebView : Control, IWebView
         InvalidateVisual();
     }
 
-    /// <summary>
-    /// Close the underlying CEF browser and release the bitmap. Idempotent.
-    /// Called automatically when the hosted <see cref="Window"/> closes.
-    /// </summary>
-    public void Close()
+    // Internal teardown wired from the host-window close handler. Public
+    // consumers who need to close the browser explicitly should call
+    // <c>webView.Browser?.Close(force: …)</c> directly — that's the same
+    // surface as every other browser operation.
+    //
+    // Returns true if teardown ran; false if a BrowserClosing handler
+    // vetoed it (so the caller can keep the host window open).
+    private bool Teardown()
     {
-        if (_browser is not null)
-        {
-            UnsubscribeBrowserEvents(_browser);
-            _browser.Close(force: true);
-            _browser = null;
-        }
+        if (_browser is null) return true;  // already torn down — fine to "close"
+        var args = new BrowserClosingEventArgs();
+        try { BrowserClosing?.Invoke(this, args); }
+        catch { /* a misbehaving handler doesn't get to wedge teardown */ }
+        if (args.Cancel) return false;
+        UnsubscribeBrowserEvents(_browser);
+        _browser.Close(force: true);
+        _browser = null;
         _bitmap?.Dispose();
         _bitmap = null;
+        return true;
     }
 
     // ---- Avalonia integration ------------------------------------------
@@ -442,7 +420,13 @@ public class WebView : Control, IWebView
         base.OnDetachedFromVisualTree(e);
     }
 
-    private void OnHostWindowClosing(object? sender, WindowClosingEventArgs e) => Close();
+    private void OnHostWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        // If the consumer vetoes via BrowserClosing, also cancel the
+        // window's own close — otherwise we'd be left with a dead
+        // WebView in a still-open window.
+        if (!Teardown()) e.Cancel = true;
+    }
 
     protected override Size ArrangeOverride(Size finalSize)
     {

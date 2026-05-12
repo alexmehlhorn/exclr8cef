@@ -114,6 +114,17 @@ public class NativeWebView : NativeControlHost, IWebView
     /// </summary>
     public event EventHandler? BrowserReady;
 
+    /// <summary>
+    /// Fires when teardown is about to begin (Avalonia destroying the
+    /// hosted native widget). Setting <see cref="BrowserClosingEventArgs.Cancel"/>
+    /// = true is honoured by <see cref="NativeWebView"/> but cannot stop
+    /// Avalonia's native-control destruction — it's effectively a "last
+    /// chance to save state" hook, not a real veto on the embedded path.
+    /// (For a true veto, intercept the host window's <c>Closing</c> event
+    /// upstream.)
+    /// </summary>
+    public event EventHandler<BrowserClosingEventArgs>? BrowserClosing;
+
     /// <summary>Fires after the underlying browser has been fully closed.</summary>
     public event EventHandler? BrowserClosed;
 
@@ -191,71 +202,35 @@ public class NativeWebView : NativeControlHost, IWebView
 
     protected override void DestroyNativeControlCore(IPlatformHandle control)
     {
-        // Avalonia is tearing down the hosted widget; close the browser
-        // through the same path a user-driven Close() would take so the
+        // Avalonia is tearing down the hosted widget; close the underlying
+        // browser through the same private teardown path so the
         // unsubscribe / null-out sequence stays consistent.
-        Close();
+        Teardown();
         _browserAttached = false;
         _hostView = IntPtr.Zero;
         base.DestroyNativeControlCore(control);
     }
 
-    // ---- Convenience methods (mirror of WebView's surface) ------------
+    // Internal teardown wired from DestroyNativeControlCore. Public
+    // consumers who need to close the browser explicitly should call
+    // <c>webView.Browser?.Close(force: …)</c> directly — that's the same
+    // surface as every other browser operation.
     //
-    // Most hosts can reach the same functionality via webView.Browser.<x>()
-    // directly; these shortcuts exist so XAML data-binding scenarios and
-    // toolbar wiring don't need a null check on Browser when the control
-    // isn't yet ready. Parity with WebView is intentional — swapping
-    // between the two controls is mechanical.
-
-    /// <summary>Load the given URL. Equivalent to setting <see cref="Url"/>.</summary>
-    public void LoadUrl(string url) => _browser?.LoadUrl(url);
-    public void GoBack()      => _browser?.GoBack();
-    public void GoForward()   => _browser?.GoForward();
-    public void Reload(bool ignoreCache = false) => _browser?.Reload(ignoreCache);
-    public void StopLoad()    => _browser?.StopLoad();
-    public void ShowDevTools()  => _browser?.ShowDevTools();
-    public void CloseDevTools() => _browser?.CloseDevTools();
-    public void ExecuteJavaScript(string code) => _browser?.ExecuteJavaScript(code);
-
-    private const double ZoomStep = 0.5;
-    public double ZoomLevel
+    // BrowserClosing fires before the close happens so the host can do
+    // save-state work; Cancel doesn't actually block the native widget
+    // being destroyed (Avalonia drives that — see comment on the event).
+    private void Teardown()
     {
-        get => _browser?.ZoomLevel ?? 0;
-        set { if (_browser is not null) _browser.ZoomLevel = value; }
-    }
-    public void ZoomIn()    => ZoomLevel = ZoomLevel + ZoomStep;
-    public void ZoomOut()   => ZoomLevel = ZoomLevel - ZoomStep;
-    public void ResetZoom() => ZoomLevel = 0;
-
-    public void Copy()      => _browser?.Copy();
-    public void Paste()     => _browser?.Paste();
-    public void Cut()       => _browser?.Cut();
-    public void SelectAll() => _browser?.SelectAll();
-    public void Undo()      => _browser?.Undo();
-    public void Redo()      => _browser?.Redo();
-
-    public Task<string> EvaluateJavaScriptAsync(string code)
-        => _browser is null ? Task.FromResult("null") : _browser.EvaluateJavaScriptAsync(code);
-
-    public Task<bool> PrintToPdfAsync(string path)
-        => _browser is null ? Task.FromResult(false) : _browser.PrintToPdfAsync(path);
-
-    /// <summary>
-    /// Close the underlying CEF browser. Idempotent. Force-closes (skips
-    /// the page's <c>onbeforeunload</c>) to match <see cref="WebView.Close"/>
-    /// — appropriate for window-teardown paths. Use
-    /// <c>webView.Browser?.Close(force: false)</c> directly if you need
-    /// graceful close semantics.
-    /// </summary>
-    public void Close()
-    {
-        if (_browser is not null)
-        {
-            UnsubscribeBrowserEvents(_browser);
-            _browser.Close(force: true);
-            _browser = null;
-        }
+        if (_browser is null) return;
+        var args = new BrowserClosingEventArgs();
+        try { BrowserClosing?.Invoke(this, args); }
+        catch { /* misbehaving handler doesn't wedge teardown */ }
+        // We intentionally ignore args.Cancel on this path because Avalonia
+        // is already destroying the hosted widget — keeping the CefBrowser
+        // alive on a dead NSView/HWND would crash on next paint.
+        UnsubscribeBrowserEvents(_browser);
+        _browser.Close(force: true);
+        _browser = null;
     }
 
     // ---- Browser event routing → Avalonia property updates ------------

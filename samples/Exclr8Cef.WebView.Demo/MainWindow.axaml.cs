@@ -856,15 +856,20 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnBackClick(object? sender, RoutedEventArgs e) => Browser.GoBack();
-    private void OnForwardClick(object? sender, RoutedEventArgs e) => Browser.GoForward();
+    // Toolbar handlers route through the underlying CefBrowser exposed by
+    // the control. The control deliberately doesn't ship LoadUrl/GoBack/
+    // ShowDevTools/Zoom-style conveniences — toolbars belong to consumer
+    // host code, not the control surface.
+    private void OnBackClick(object? sender, RoutedEventArgs e) => Browser.Browser?.GoBack();
+    private void OnForwardClick(object? sender, RoutedEventArgs e) => Browser.Browser?.GoForward();
     private void OnReloadClick(object? sender, RoutedEventArgs e)
     {
-        if (Browser.IsLoading) Browser.StopLoad();
-        else Browser.Reload();
+        if (Browser.Browser is not { } b) return;
+        if (Browser.IsLoading) b.StopLoad();
+        else b.Reload();
     }
-    private void OnStopClick(object? sender, RoutedEventArgs e) => Browser.StopLoad();
-    private void OnDevToolsClick(object? sender, RoutedEventArgs e) => Browser.ShowDevTools();
+    private void OnStopClick(object? sender, RoutedEventArgs e) => Browser.Browser?.StopLoad();
+    private void OnDevToolsClick(object? sender, RoutedEventArgs e) => Browser.Browser?.ShowDevTools();
 
     private void OnIsolatedClick(object? sender, RoutedEventArgs e)
     {
@@ -872,20 +877,18 @@ public partial class MainWindow : Window
         window.Show(this);
     }
 
+    private const double ZoomStep = 0.5;
     private void OnZoomInClick(object? sender, RoutedEventArgs e)
     {
-        Browser.ZoomIn();
-        UpdateZoomUi();
+        if (Browser.Browser is { } b) { b.ZoomLevel += ZoomStep; UpdateZoomUi(); }
     }
     private void OnZoomOutClick(object? sender, RoutedEventArgs e)
     {
-        Browser.ZoomOut();
-        UpdateZoomUi();
+        if (Browser.Browser is { } b) { b.ZoomLevel -= ZoomStep; UpdateZoomUi(); }
     }
     private void OnZoomResetClick(object? sender, RoutedEventArgs e)
     {
-        Browser.ResetZoom();
-        UpdateZoomUi();
+        if (Browser.Browser is { } b) { b.ZoomLevel = 0; UpdateZoomUi(); }
     }
 
     private void UpdateZoomUi()
@@ -902,7 +905,11 @@ public partial class MainWindow : Window
     {
         try
         {
-            var result = await Browser.EvaluateJavaScriptAsync(
+            if (Browser.Browser is not { } b)
+            {
+                StatusText.Text = "No browser yet."; return;
+            }
+            var result = await b.EvaluateJavaScriptAsync(
                 "({ title: document.title, h1: document.querySelector('h1')?.innerText, " +
                 "buttonText: document.querySelector('button')?.innerText, " +
                 "url: location.href, " +
@@ -940,7 +947,7 @@ public partial class MainWindow : Window
         SavePdfButton.IsEnabled = false;
         try
         {
-            bool ok = await Browser.PrintToPdfAsync(path);
+            bool ok = Browser.Browser is { } b && await b.PrintToPdfAsync(path);
             StatusText.Text = ok ? $"Saved: {path}" : "PDF export failed.";
             LogEvent("pdf", ok ? path : "failed");
         }

@@ -38,29 +38,34 @@ public partial class CompareWindow : Window
     }
 
     // ---- OSR pane handlers --------------------------------------------
+    //
+    // Both panes go through the underlying CefBrowser (webView.Browser) —
+    // the controls deliberately don't expose toolbar conveniences. Use
+    // the Url property for navigation (it routes through to LoadUrl
+    // internally on the next OnPropertyChanged).
 
-    private void OnOsrBack(object? sender, RoutedEventArgs e)    => OsrBrowser.GoBack();
-    private void OnOsrForward(object? sender, RoutedEventArgs e) => OsrBrowser.GoForward();
-    private void OnOsrReload(object? sender, RoutedEventArgs e)  => OsrBrowser.Reload();
+    private void OnOsrBack(object? sender, RoutedEventArgs e)    => OsrBrowser.Browser?.GoBack();
+    private void OnOsrForward(object? sender, RoutedEventArgs e) => OsrBrowser.Browser?.GoForward();
+    private void OnOsrReload(object? sender, RoutedEventArgs e)  => OsrBrowser.Browser?.Reload();
     private void OnOsrUrlKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter || e.Key == Key.Return)
         {
-            OsrBrowser.LoadUrl(OsrUrlBox.Text ?? "about:blank");
+            OsrBrowser.Url = OsrUrlBox.Text ?? "about:blank";
             e.Handled = true;
         }
     }
 
     // ---- Embedded pane handlers ---------------------------------------
 
-    private void OnNativeBack(object? sender, RoutedEventArgs e)    => NativeBrowser.GoBack();
-    private void OnNativeForward(object? sender, RoutedEventArgs e) => NativeBrowser.GoForward();
-    private void OnNativeReload(object? sender, RoutedEventArgs e)  => NativeBrowser.Reload();
+    private void OnNativeBack(object? sender, RoutedEventArgs e)    => NativeBrowser.Browser?.GoBack();
+    private void OnNativeForward(object? sender, RoutedEventArgs e) => NativeBrowser.Browser?.GoForward();
+    private void OnNativeReload(object? sender, RoutedEventArgs e)  => NativeBrowser.Browser?.Reload();
     private void OnNativeUrlKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter || e.Key == Key.Return)
         {
-            NativeBrowser.LoadUrl(NativeUrlBox.Text ?? "about:blank");
+            NativeBrowser.Url = NativeUrlBox.Text ?? "about:blank";
             e.Handled = true;
         }
     }

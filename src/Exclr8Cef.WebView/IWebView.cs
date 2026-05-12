@@ -5,17 +5,25 @@ namespace Exclr8Cef.WebView;
 /// <see cref="WebView"/> (OSR — paints into Avalonia's compositor) and
 /// <see cref="NativeWebView"/> (embedded — hosts a native NSView/HWND).
 ///
+/// <para>Scope</para>
+///
+/// The controls are deliberately *just the browser surface*: state that
+/// XAML binds to, plus access to the underlying <see cref="CefBrowser"/>
+/// for everything else. No toolbar conveniences, no DevTools shortcuts,
+/// no clipboard wrappers — those belong on the consumer's host UI, which
+/// drives the browser via <c>webView.Browser</c>.
+///
 /// <para>What this interface gives you</para>
 ///
 /// Code-level polymorphism. A ViewModel can hold an <see cref="IWebView"/>
-/// reference and switch the underlying concrete control without rewriting
-/// the calling code:
+/// reference and call into either concrete control identically:
 ///
 /// <code>
 /// public class TabViewModel
 /// {
-///     public IWebView Browser { get; set; } = default!;
-///     public void Navigate(string url) => Browser.LoadUrl(url);
+///     public IWebView View { get; set; } = default!;
+///     public void Navigate(string url) =&gt; View.Url = url;
+///     public void Reload() =&gt; View.Browser?.Reload();
 /// }
 /// </code>
 ///
@@ -32,23 +40,20 @@ namespace Exclr8Cef.WebView;
 /// The two controls derive from different Avalonia framework types
 /// (<c>Avalonia.Controls.Control</c> for the OSR-rendered path,
 /// <c>Avalonia.Controls.NativeControlHost</c> for the foreign-widget path).
-/// C# single inheritance + the framework-imposed hierarchy means a shared
-/// abstract base isn't expressible. An interface is the lightest mechanism
-/// that captures the contract without forcing either control to swap its
+/// C# single inheritance + the framework hierarchy mean a shared abstract
+/// base isn't expressible. An interface is the lightest mechanism that
+/// captures the contract without forcing either control to swap its
 /// rendering model.
-///
-/// <para>What's intentionally NOT on this interface</para>
-///
-/// Mode-specific helpers (<c>InvalidateBitmap</c> on the OSR side; future
-/// GPU-specific hooks on the embedded side) live on the concrete classes
-/// only. Anything beyond the symmetric Avalonia-friendly surface should be
-/// reached via <see cref="Browser"/> directly.
 /// </summary>
 public interface IWebView
 {
     // ---- State (XAML-bindable on the concrete types) -----------------
 
-    /// <summary>Two-way: setting navigates; getter follows page navigations.</summary>
+    /// <summary>
+    /// Two-way: setting this navigates the browser; getter follows page
+    /// navigations (set <see cref="Url"/> or use <c>Browser.LoadUrl</c> /
+    /// <c>LoadRequest</c> for richer navigation).
+    /// </summary>
     string? Url { get; set; }
 
     /// <summary>Current document title.</summary>
@@ -60,13 +65,14 @@ public interface IWebView
     bool CanGoBack { get; }
     bool CanGoForward { get; }
 
-    // ---- Identity ----------------------------------------------------
+    // ---- Browser surface ---------------------------------------------
 
     /// <summary>
     /// The underlying tech-neutral browser. Null until the first arrange
-    /// creates it, and after <see cref="Close"/>. Use for anything beyond
-    /// the common surface — <c>browser.ConsoleMessage</c>, <c>FileDialog</c>,
-    /// <c>AudioPacket</c>, etc.
+    /// creates it, and after teardown. Use for everything beyond the
+    /// state-binding surface — navigation methods, DevTools, JS, console,
+    /// downloads, dialogs, audio, frame capture, hit-test, accessibility,
+    /// spellcheck, find-in-page, etc.
     /// </summary>
     CefBrowser? Browser { get; }
 
@@ -74,61 +80,40 @@ public interface IWebView
     int BrowserId { get; }
 
     /// <summary>
-    /// Optional isolated request context (separate cookies / cache / storage
-    /// from other browsers). MUST be set before the control is laid out the
-    /// first time — after the underlying <see cref="CefBrowser"/> is created,
-    /// changes are ignored.
+    /// Optional isolated request context (separate cookies / cache /
+    /// storage from other browsers). MUST be set before the control is
+    /// laid out for the first time — after the underlying
+    /// <see cref="CefBrowser"/> is created, changes are ignored.
     /// </summary>
     CefRequestContext? RequestContext { get; set; }
 
-    // ---- Lifecycle events -------------------------------------------
+    // ---- Lifecycle events --------------------------------------------
 
-    /// <summary>Fires once after the underlying browser is created and attached.</summary>
+    /// <summary>
+    /// Fires once after the underlying browser is created and attached.
+    /// Subscribe to per-browser events (<c>ConsoleMessage</c>, dialogs,
+    /// downloads, etc.) on <see cref="Browser"/> in this handler.
+    /// </summary>
     event EventHandler? BrowserReady;
+
+    /// <summary>
+    /// Fires when teardown is about to begin (host window closing, native
+    /// widget being destroyed). Setting <see cref="BrowserClosingEventArgs.Cancel"/>
+    /// = true vetoes the teardown — the browser stays alive. Useful for
+    /// prompting the user, saving state, etc.
+    /// </summary>
+    event EventHandler<BrowserClosingEventArgs>? BrowserClosing;
 
     /// <summary>Fires after the underlying browser has been fully closed.</summary>
     event EventHandler? BrowserClosed;
+}
 
-    // ---- Navigation -------------------------------------------------
-
-    /// <summary>Load the given URL. Equivalent to setting <see cref="Url"/>.</summary>
-    void LoadUrl(string url);
-    void GoBack();
-    void GoForward();
-    void Reload(bool ignoreCache = false);
-    void StopLoad();
-    /// <summary>Close the underlying browser. Idempotent.</summary>
-    void Close();
-
-    // ---- DevTools ---------------------------------------------------
-
-    void ShowDevTools();
-    void CloseDevTools();
-
-    // ---- JavaScript -------------------------------------------------
-
-    void ExecuteJavaScript(string code);
-    Task<string> EvaluateJavaScriptAsync(string code);
-
-    // ---- Zoom -------------------------------------------------------
-
-    /// <summary>0.0 = 100%. Each ±1 step ≈ 1.2× (Chromium convention).</summary>
-    double ZoomLevel { get; set; }
-    void ZoomIn();
-    void ZoomOut();
-    void ResetZoom();
-
-    // ---- Clipboard / editing ---------------------------------------
-
-    void Copy();
-    void Paste();
-    void Cut();
-    void SelectAll();
-    void Undo();
-    void Redo();
-
-    // ---- PDF --------------------------------------------------------
-
-    /// <summary>Render the current page as a PDF at <paramref name="path"/>.</summary>
-    Task<bool> PrintToPdfAsync(string path);
+/// <summary>Args for <see cref="IWebView.BrowserClosing"/>.</summary>
+public sealed class BrowserClosingEventArgs : EventArgs
+{
+    /// <summary>
+    /// Set to <c>true</c> to veto the teardown — the browser stays open.
+    /// Defaults to <c>false</c> (allow teardown to proceed).
+    /// </summary>
+    public bool Cancel { get; set; }
 }
