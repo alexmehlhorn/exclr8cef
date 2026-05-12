@@ -130,7 +130,7 @@ libcef.{dylib,dll,so}           ← Chromium Embedded Framework
 
 **`Exclr8Cef`** — framework-agnostic. Use from any .NET host. Public surface: `Cef.*` static facade, `CefBrowser`, `CefRequestContext`, `CefVersions`. Raw P/Invokes are `internal`.
 
-**`Exclr8Cef.WebView`** — Avalonia integration. Adds the `WebView` control.
+**`Exclr8Cef.WebView`** — Avalonia integration. Adds the `WebView` control. Builds against Avalonia 12.
 
 **`Exclr8Cef.Print`** — optional package for advanced PDF print settings.
 

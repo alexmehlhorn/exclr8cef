@@ -18,10 +18,10 @@ permissions:
 env:
   DOTNET_NOLOGO: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
-  # CI builds publish a pre-release version per push, e.g. 0.6.0-ci.42, to
+  # CI builds publish a pre-release version per push, e.g. 0.7.0-ci.42, to
   # GitHub Packages (nuget.pkg.github.com). Tag-driven proper releases on
   # nuget.org are handled by release.yml.
-  CI_VERSION: 0.6.0-ci.${{ github.run_number }}
+  CI_VERSION: 0.7.0-ci.${{ github.run_number }}
 
 jobs:
   build:
