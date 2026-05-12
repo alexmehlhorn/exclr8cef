@@ -72,6 +72,8 @@ void ApplyHostInitSettings(CefSettings& settings);
 // Custom-scheme registry shared with exclr8cef.cc (where the C ABI lives).
 void AddCustomScheme(const std::string& name, int options);
 std::vector<std::string> GetRegisteredSchemeNames();
+// Extra Chromium switches set by the host via excef_add_command_line_switch.
+void AddExtraCommandLineSwitch(const std::string& name, const std::string& value);
 // Hydrate the scheme registry from the EXCLR8CEF_SCHEMES env var. The
 // browser process exports the env var (via AddCustomScheme); subprocesses
 // (renderer/GPU/utility/network) inherit it on spawn and call this helper

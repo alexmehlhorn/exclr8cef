@@ -100,6 +100,30 @@ struct CustomSchemeEntry {
 std::vector<CustomSchemeEntry> g_custom_schemes;
 std::mutex g_custom_schemes_mu;
 
+// Extra Chromium switches the host wants applied via
+// OnBeforeCommandLineProcessing. Set via excef_add_command_line_switch
+// before init. {name, value} — value may be empty for boolean switches.
+struct ExtraSwitch { std::string name; std::string value; };
+std::vector<ExtraSwitch> g_extra_switches;
+std::mutex g_extra_switches_mu;
+
+void ApplyExtraSwitches(CefRefPtr<CefCommandLine> command_line) {
+    std::lock_guard<std::mutex> lock(g_extra_switches_mu);
+    for (const auto& s : g_extra_switches) {
+        if (command_line->HasSwitch(s.name)) continue;
+        if (s.value.empty()) command_line->AppendSwitch(s.name);
+        else                 command_line->AppendSwitchWithValue(s.name, s.value);
+    }
+}
+}  // namespace
+
+void AddExtraCommandLineSwitch(const std::string& name, const std::string& value) {
+    std::lock_guard<std::mutex> lock(g_extra_switches_mu);
+    g_extra_switches.push_back({name, value});
+}
+
+namespace {
+
 class Exclr8CefWindowDelegate : public CefWindowDelegate {
 public:
     Exclr8CefWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
@@ -215,6 +239,7 @@ void Exclr8CefApp::OnBeforeCommandLineProcessing(
         // auto-grants and macOS' TCC provides the user-facing prompt the
         // first time a real device is touched.
         command_line->AppendSwitch("enable-media-stream");
+        ApplyExtraSwitches(command_line);
         return;
     }
 
@@ -228,6 +253,7 @@ void Exclr8CefApp::OnBeforeCommandLineProcessing(
     if (!command_line->HasSwitch("enable-media-stream")) {
         command_line->AppendSwitch("enable-media-stream");
     }
+    ApplyExtraSwitches(command_line);
 
     // Subprocess (renderer / GPU / utility / network). Inherit scheme
     // registrations from the env var the browser process exported, so the

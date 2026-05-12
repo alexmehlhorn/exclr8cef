@@ -137,6 +137,11 @@ extern "C" void excef_quit_message_loop(void) {
     CefQuitMessageLoop();
 }
 
+extern "C" void excef_add_command_line_switch(const char* name, const char* value) {
+    if (!name || !*name) return;
+    exclr8cef::AddExtraCommandLineSwitch(name, value ? value : "");
+}
+
 // ---- Lifecycle (Windows/Linux) -------------------------------------------
 //
 // macOS-specific implementations live in exclr8cef_mac.mm because they

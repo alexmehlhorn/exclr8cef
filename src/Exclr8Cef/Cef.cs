@@ -437,6 +437,30 @@ public static class Cef
     /// <summary>Iterates the currently-live OSR browsers.</summary>
     public static IEnumerable<CefBrowser> Browsers => s_browsers.Values;
 
+    /// <summary>
+    /// Append an extra Chromium command-line switch that will be applied
+    /// at <c>OnBeforeCommandLineProcessing</c> time in BOTH the main and
+    /// subprocess command lines. Examples:
+    /// <c>AddCommandLineSwitch("enable-features", "WebGPU,WebAssemblyDynamicTiering")</c>,
+    /// <c>AddCommandLineSwitch("disable-blink-features", "AutomationControlled")</c>.
+    /// MUST be called before any Initialize* call.
+    /// </summary>
+    public static void AddCommandLineSwitch(string name, string? value = null)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        unsafe
+        {
+            sbyte* n = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
+            sbyte* v = value is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(value);
+            try { Excef.excef_add_command_line_switch(n, v); }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)n);
+                if (v != null) Marshal.FreeCoTaskMem((IntPtr)v);
+            }
+        }
+    }
+
     // ---- Cookies (process-wide cookie manager) -------------------------
 
     public sealed record CookieInfo(
@@ -920,6 +944,7 @@ public static class Cef
                 Excef.excef_set_key_event_callback(&KeyEventTrampoline);
                 Excef.excef_set_devtools_message_callback(&DevToolsMessageTrampoline);
                 Excef.excef_set_string_visitor_callback(&StringVisitorTrampoline);
+                Excef.excef_set_nav_entry_callback(&NavEntryTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1182,6 +1207,37 @@ public static class Cef
 
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<string>> s_stringVisitorRequests = new();
     internal static int s_nextStringVisitorId;
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, TaskCompletionSource<System.Collections.Generic.List<NavigationEntry>>> s_navEntryRequests = new();
+    internal static int s_nextNavEntryId;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void NavEntryTrampoline(int requestId, int done, int isCurrent,
+        sbyte* url, sbyte* displayUrl, sbyte* originalUrl, sbyte* title,
+        int transition, int httpStatus, long completionMs, int isValid)
+    {
+        if (!s_navEntryRequests.TryGetValue(requestId, out var tcs))
+            return;
+        if (done != 0)
+        {
+            if (s_navEntryRequests.TryRemove(requestId, out var doneTcs))
+            {
+                if (!s_navEntryAccum.TryRemove(requestId, out var list))
+                    list = new System.Collections.Generic.List<NavigationEntry>();
+                doneTcs.TrySetResult(list);
+            }
+            return;
+        }
+        var entry = new NavigationEntry(
+            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)displayUrl) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)originalUrl) ?? "",
+            Marshal.PtrToStringUTF8((IntPtr)title) ?? "",
+            transition, httpStatus, completionMs, isValid != 0, isCurrent != 0);
+        s_navEntryAccum.GetOrAdd(requestId, _ => new System.Collections.Generic.List<NavigationEntry>()).Add(entry);
+    }
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<int, System.Collections.Generic.List<NavigationEntry>> s_navEntryAccum = new();
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void StringVisitorTrampoline(int requestId, sbyte* value)

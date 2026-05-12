@@ -82,6 +82,7 @@ excef_pre_key_cb_t g_pre_key_cb = nullptr;
 excef_key_event_cb_t g_key_event_cb = nullptr;
 excef_devtools_message_cb_t g_devtools_message_cb = nullptr;
 excef_string_visitor_cb_t g_string_visitor_cb = nullptr;
+excef_nav_entry_cb_t g_nav_entry_cb = nullptr;
 // Per-browser DevTools observer registrations (keep alive while open).
 std::map<int, CefRefPtr<CefRegistration>> g_devtools_observers;
 std::mutex g_devtools_observers_mu;
@@ -1335,6 +1336,66 @@ extern "C" int excef_create_request_context(const char* cache_path) {
     return handle;
 }
 
+namespace {
+CefRefPtr<CefRequestContext> ResolveContext(int handle) {
+    if (handle == 0) return CefRequestContext::GetGlobalContext();
+    std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
+    auto it = exclr8cef::g_request_contexts.find(handle);
+    if (it == exclr8cef::g_request_contexts.end()) return nullptr;
+    return it->second;
+}
+}  // namespace
+
+extern "C" int excef_set_preference(int context_handle,
+                                      const char* name,
+                                      const char* value_json) {
+    auto ctx = ResolveContext(context_handle);
+    if (!ctx || !name) return 0;
+    CefRefPtr<CefValue> value;
+    if (value_json && *value_json) {
+        value = CefParseJSON(value_json, JSON_PARSER_RFC);
+    } else {
+        value = CefValue::Create();
+        value->SetNull();
+    }
+    if (!value) return 0;
+    CefString err;
+    return ctx->SetPreference(name, value, err) ? 1 : 0;
+}
+
+extern "C" const char* excef_get_preference(int context_handle, const char* name) {
+    auto ctx = ResolveContext(context_handle);
+    if (!ctx || !name) return nullptr;
+    if (!ctx->HasPreference(name)) return nullptr;
+    CefRefPtr<CefValue> value = ctx->GetPreference(name);
+    if (!value) return nullptr;
+    CefString json = CefWriteJSON(value, JSON_WRITER_DEFAULT);
+    std::string s = json.ToString();
+    char* out = static_cast<char*>(std::malloc(s.size() + 1));
+    if (!out) return nullptr;
+    std::memcpy(out, s.data(), s.size());
+    out[s.size()] = 0;
+    return out;
+}
+
+extern "C" void excef_free_string(const char* s) {
+    if (s) std::free(const_cast<char*>(s));
+}
+
+extern "C" int excef_clear_http_auth_credentials(int context_handle) {
+    auto ctx = ResolveContext(context_handle);
+    if (!ctx) return 0;
+    ctx->ClearHttpAuthCredentials(nullptr);
+    return 1;
+}
+
+extern "C" int excef_close_all_connections(int context_handle) {
+    auto ctx = ResolveContext(context_handle);
+    if (!ctx) return 0;
+    ctx->CloseAllConnections(nullptr);
+    return 1;
+}
+
 extern "C" void excef_release_request_context(int handle) {
     if (handle == 0) return;
     std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
@@ -1652,6 +1713,100 @@ extern "C" int excef_get_frame_text(int browser_id, int request_id) {
     auto frame = b->GetMainFrame();
     if (!frame) return 0;
     frame->GetText(new StringRelay(request_id));
+    return 1;
+}
+
+extern "C" void excef_set_nav_entry_callback(excef_nav_entry_cb_t cb) {
+    exclr8cef::g_nav_entry_cb = cb;
+}
+
+extern "C" int excef_load_request(int browser_id,
+                                    const char* method,
+                                    const char* url,
+                                    const unsigned char* post_body,
+                                    int post_length,
+                                    const char* headers_string) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b || !url) return 0;
+    auto frame = b->GetMainFrame();
+    if (!frame) return 0;
+    CefRefPtr<CefRequest> req = CefRequest::Create();
+    req->SetURL(url);
+    if (method && *method) req->SetMethod(method);
+    if (post_body && post_length > 0) {
+        CefRefPtr<CefPostData> pd = CefPostData::Create();
+        CefRefPtr<CefPostDataElement> el = CefPostDataElement::Create();
+        el->SetToBytes(static_cast<size_t>(post_length), post_body);
+        pd->AddElement(el);
+        req->SetPostData(pd);
+    }
+    if (headers_string && *headers_string) {
+        CefRequest::HeaderMap headers;
+        const char* p = headers_string;
+        while (*p) {
+            const char* line_end = std::strchr(p, '\n');
+            std::string line = line_end ? std::string(p, line_end - p) : std::string(p);
+            auto colon = line.find(':');
+            if (colon != std::string::npos) {
+                std::string n = line.substr(0, colon);
+                std::string v = line.substr(colon + 1);
+                // trim leading space
+                while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
+                headers.insert({n, v});
+            }
+            if (!line_end) break;
+            p = line_end + 1;
+        }
+        req->SetHeaderMap(headers);
+    }
+    frame->LoadRequest(req);
+    return 1;
+}
+
+namespace {
+class NavEntryRelay : public CefNavigationEntryVisitor {
+public:
+    explicit NavEntryRelay(int request_id) : request_id_(request_id) {}
+    bool Visit(CefRefPtr<CefNavigationEntry> entry, bool current,
+                int /*index*/, int total) override {
+        if (!exclr8cef::g_nav_entry_cb) return false;
+        std::string url = entry->GetURL().ToString();
+        std::string display = entry->GetDisplayURL().ToString();
+        std::string original = entry->GetOriginalURL().ToString();
+        std::string title = entry->GetTitle().ToString();
+        CefBaseTime t = entry->GetCompletionTime();
+        // Convert CefBaseTime to ms since unix epoch (approx).
+        long long ms = static_cast<long long>(t.val / 1000);
+        exclr8cef::g_nav_entry_cb(request_id_, /*done=*/0,
+                                    current ? 1 : 0,
+                                    url.c_str(), display.c_str(), original.c_str(),
+                                    title.c_str(),
+                                    static_cast<int>(entry->GetTransitionType()),
+                                    entry->GetHttpStatusCode(),
+                                    ms,
+                                    entry->IsValid() ? 1 : 0);
+        // Continue iterating; we mark done in a final call below in the
+        // C ABI entry point after Visit returns.
+        return true;
+    }
+    int id() const { return request_id_; }
+private:
+    int request_id_;
+    IMPLEMENT_REFCOUNTING(NavEntryRelay);
+};
+}  // namespace
+
+extern "C" int excef_get_navigation_entries(int browser_id, int request_id, int current_only) {
+    auto b = exclr8cef::GetOsrBrowser(browser_id);
+    if (!b) return 0;
+    CefRefPtr<NavEntryRelay> visitor = new NavEntryRelay(request_id);
+    b->GetHost()->GetNavigationEntries(visitor, current_only != 0);
+    // Send a final done marker so the host knows iteration is finished.
+    // (CEF synchronously calls Visit() once per entry on TID_UI before
+    // GetNavigationEntries returns, so this is safe to do here.)
+    if (exclr8cef::g_nav_entry_cb) {
+        exclr8cef::g_nav_entry_cb(request_id, 1, 0, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 0);
+    }
     return 1;
 }
 

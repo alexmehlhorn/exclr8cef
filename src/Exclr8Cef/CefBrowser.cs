@@ -409,6 +409,64 @@ public sealed class CefBrowser : IDisposable
     /// <summary>
     /// Load arbitrary HTML into the main frame without a network round-trip.
     /// </summary>
+    /// <summary>
+    /// Load a fully-configured HTTP request (custom method, post body,
+    /// headers). For simple GETs use <see cref="LoadUrl"/>.
+    /// </summary>
+    /// <param name="method">HTTP method ("GET", "POST", ...)</param>
+    /// <param name="url">target URL</param>
+    /// <param name="postBody">optional request body</param>
+    /// <param name="headers">optional headers as "Name: Value\nName: Value"</param>
+    public void LoadRequest(string method, string url, byte[]? postBody = null, string? headers = null)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        ArgumentNullException.ThrowIfNull(url);
+        if (_closed) return;
+        unsafe
+        {
+            sbyte* m = (sbyte*)Marshal.StringToCoTaskMemUTF8(method);
+            sbyte* u = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
+            sbyte* h = headers is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(headers);
+            try
+            {
+                if (postBody is null || postBody.Length == 0)
+                {
+                    Excef.excef_load_request(Id, m, u, null, 0, h);
+                }
+                else
+                {
+                    fixed (byte* p = postBody)
+                        Excef.excef_load_request(Id, m, u, p, postBody.Length, h);
+                }
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)m);
+                Marshal.FreeCoTaskMem((IntPtr)u);
+                if (h != null) Marshal.FreeCoTaskMem((IntPtr)h);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the back/forward navigation entries for this browser via
+    /// CefBrowserHost::GetNavigationEntries.
+    /// </summary>
+    /// <param name="currentOnly">If true, returns just the current entry; otherwise the whole history.</param>
+    public Task<System.Collections.Generic.List<NavigationEntry>> GetNavigationEntriesAsync(bool currentOnly = false)
+    {
+        if (_closed) return Task.FromException<System.Collections.Generic.List<NavigationEntry>>(new InvalidOperationException("browser closed"));
+        int reqId = Interlocked.Increment(ref Cef.s_nextNavEntryId);
+        var tcs = new TaskCompletionSource<System.Collections.Generic.List<NavigationEntry>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Cef.s_navEntryRequests[reqId] = tcs;
+        if (Excef.excef_get_navigation_entries(Id, reqId, currentOnly ? 1 : 0) == 0)
+        {
+            Cef.s_navEntryRequests.TryRemove(reqId, out _);
+            tcs.TrySetException(new InvalidOperationException("browser unknown"));
+        }
+        return tcs.Task;
+    }
+
     public void LoadString(string html, string? virtualUrl = null)
     {
         ArgumentNullException.ThrowIfNull(html);
@@ -1735,6 +1793,18 @@ public sealed class DragImageEventArgs : EventArgs
         HotspotY = hotspotY;
     }
 }
+
+/// <summary>One entry from <see cref="CefBrowser.GetNavigationEntriesAsync"/>.</summary>
+public sealed record NavigationEntry(
+    string Url,
+    string DisplayUrl,
+    string OriginalUrl,
+    string Title,
+    int TransitionType,
+    int HttpStatusCode,
+    long CompletionTimeMs,
+    bool IsValid,
+    bool IsCurrent);
 
 /// <summary>Args for <see cref="CefBrowser.DevToolsMessage"/>.</summary>
 public sealed class DevToolsMessageEventArgs : EventArgs

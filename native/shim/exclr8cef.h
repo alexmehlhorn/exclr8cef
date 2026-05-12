@@ -954,6 +954,38 @@ EXCEF_API void excef_resolve_js_invoke(unsigned long long token,
                                         int success,
                                         const char* result_json);
 
+// ---- Navigation: LoadRequest + history --------------------------------
+//
+// Beyond LoadUrl (GET, no headers), CEF lets you load via CefRequest:
+// arbitrary HTTP method, post body, custom headers, referrer policy.
+// The main-frame is the target.
+
+EXCEF_API int excef_load_request(int browser_id,
+                                  const char* method,
+                                  const char* url,
+                                  const unsigned char* post_body,
+                                  int post_length,
+                                  const char* headers_string);
+
+// Navigation history — visit entries via CefBrowserHost::GetNavigationEntries.
+// `current_only` = 1 yields just the current entry; 0 yields all.
+// Fires the visitor callback once per entry, terminated with done=1.
+typedef void (*excef_nav_entry_cb_t)(int request_id,
+                                       int done,
+                                       int is_current,
+                                       const char* url,
+                                       const char* display_url,
+                                       const char* original_url,
+                                       const char* title,
+                                       int transition_type,
+                                       int http_status_code,
+                                       long long completion_time_ms,
+                                       int is_valid);
+EXCEF_API void excef_set_nav_entry_callback(excef_nav_entry_cb_t cb);
+EXCEF_API int excef_get_navigation_entries(int browser_id,
+                                            int request_id,
+                                            int current_only);
+
 // ---- Frame operations -------------------------------------------------
 //
 // Operate on the browser's main frame. CefFrame::GetSource gives the
@@ -975,6 +1007,16 @@ EXCEF_API int excef_get_frame_text(int browser_id, int request_id);
 EXCEF_API int excef_load_string(int browser_id,
                                  const char* html,
                                  const char* url);
+
+// ---- Init: extra Chromium switches ------------------------------------
+//
+// Append a Chromium command-line switch (with optional value) that
+// `OnBeforeCommandLineProcessing` will apply to both the main and
+// subprocess command lines. Use for things like
+// "enable-features=WebGPU,WebAssemblyDynamicTiering" or
+// "disable-blink-features=AutomationControlled". MUST be called before
+// any Initialize* function.
+EXCEF_API void excef_add_command_line_switch(const char* name, const char* value);
 
 // ---- DevTools protocol (CDP) messaging --------------------------------
 //
@@ -1109,6 +1151,30 @@ EXCEF_API int excef_create_request_context(const char* cache_path);
 // Drop our refcount on the context. The CEF instance is still kept alive
 // by any in-flight browsers using it.
 EXCEF_API void excef_release_request_context(int context_handle);
+
+// Preferences (Chromium-internal settings). Keyed by dotted name:
+// `proxy.mode`, `webrtc.ip_handling_policy`, `intl.accept_languages`,
+// `safebrowsing.enabled`, `autoplay.policy`, `spellcheck.languages`, etc.
+// `value_json` is JSON-encoded (string, number, bool, object, array).
+// Use context_handle=0 for the global request context.
+// Returns 1 on success.
+EXCEF_API int excef_set_preference(int context_handle,
+                                     const char* name,
+                                     const char* value_json);
+
+// Returns the pref as JSON, or NULL if unset. Caller must free via
+// excef_free_string. Use context_handle=0 for the global context.
+EXCEF_API const char* excef_get_preference(int context_handle, const char* name);
+
+// Frees a string returned by excef_get_preference / similar APIs.
+EXCEF_API void excef_free_string(const char* s);
+
+// Network controls per-context. Useful for sign-out / identity switching.
+// Returns 1 on success.
+EXCEF_API int excef_clear_http_auth_credentials(int context_handle);
+EXCEF_API int excef_close_all_connections(int context_handle);
+// Note: ClearCertificateExceptions was removed from CefRequestContext in
+// recent CEF; equivalent path is via DevTools Security.setIgnoreCertificateErrors.
 
 // Variant of excef_create_offscreen_browser that creates the browser in
 // a specific request context. Pass context_handle=0 to use the global

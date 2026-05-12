@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Exclr8Cef.Native;
 
 namespace Exclr8Cef;
@@ -31,7 +32,61 @@ public sealed class CefRequestContext : IDisposable
     /// </summary>
     public void Dispose()
     {
+        // Don't release handle 0 — that's the global context, owned by CEF itself.
         int h = System.Threading.Interlocked.Exchange(ref _handle, 0);
-        if (h != 0) Excef.excef_release_request_context(h);
+        if (h > 0) Excef.excef_release_request_context(h);
     }
+
+    /// <summary>
+    /// Set a Chromium preference by dotted name with a JSON value.
+    /// Examples: <c>proxy.mode</c> ("direct" | "auto_detect" | "fixed_servers"),
+    /// <c>intl.accept_languages</c>, <c>webrtc.ip_handling_policy</c>,
+    /// <c>spellcheck.languages</c>. Returns true if accepted.
+    /// </summary>
+    public bool SetPreference(string name, string valueJson)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        unsafe
+        {
+            sbyte* n = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
+            sbyte* v = valueJson is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(valueJson);
+            try { return Excef.excef_set_preference(_handle, n, v) != 0; }
+            finally
+            {
+                Marshal.FreeCoTaskMem((IntPtr)n);
+                if (v != null) Marshal.FreeCoTaskMem((IntPtr)v);
+            }
+        }
+    }
+
+    /// <summary>Read a preference as JSON, or null if unset.</summary>
+    public string? GetPreference(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        unsafe
+        {
+            sbyte* n = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
+            try
+            {
+                sbyte* p = Excef.excef_get_preference(_handle, n);
+                if (p == null) return null;
+                string s = Marshal.PtrToStringUTF8((IntPtr)p) ?? "";
+                Excef.excef_free_string(p);
+                return s;
+            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)n); }
+        }
+    }
+
+    /// <summary>Drop cached HTTP-Basic / NTLM / Digest credentials.</summary>
+    public void ClearHttpAuthCredentials() => Excef.excef_clear_http_auth_credentials(_handle);
+
+    /// <summary>Tear down all live TCP connections (useful on logout).</summary>
+    public void CloseAllConnections() => Excef.excef_close_all_connections(_handle);
+
+    /// <summary>
+    /// Process-wide / global request context — used by browsers created
+    /// without a specific context.
+    /// </summary>
+    public static CefRequestContext Global { get; } = new CefRequestContext(0);
 }
