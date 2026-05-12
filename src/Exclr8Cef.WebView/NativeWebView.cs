@@ -32,7 +32,7 @@ namespace Exclr8Cef.WebView;
 ///
 /// Linux/X11 is not yet wired in the native shim — only macOS and Windows.
 /// </summary>
-public class NativeWebView : NativeControlHost
+public class NativeWebView : NativeControlHost, IWebView
 {
     public static readonly StyledProperty<string?> UrlProperty =
         AvaloniaProperty.Register<NativeWebView, string?>(nameof(Url), "about:blank");

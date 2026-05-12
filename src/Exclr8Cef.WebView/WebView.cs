@@ -26,7 +26,7 @@ namespace Exclr8Cef.WebView;
 /// from here for ergonomics, but the <see cref="CefBrowser"/> instance is
 /// itself tech-neutral.
 /// </summary>
-public class WebView : Control
+public class WebView : Control, IWebView
 {
     public static readonly StyledProperty<string?> UrlProperty =
         AvaloniaProperty.Register<WebView, string?>(nameof(Url), "about:blank");
