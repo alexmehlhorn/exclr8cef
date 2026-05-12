@@ -14,7 +14,7 @@
   <PropertyGroup Label="Packaging">
     <PackageId>Exclr8Cef</PackageId>
     <Version Condition="'$(Exclr8CefVersion)' != ''">$(Exclr8CefVersion)</Version>
-    <Version Condition="'$(Exclr8CefVersion)' == ''">0.7.2</Version>
+    <Version Condition="'$(Exclr8CefVersion)' == ''">0.8.0</Version>
     <Authors>Exclr8</Authors>
     <Description>.NET bindings for Exclr8CEF — a custom Chromium binding tracking upstream CEF. Framework-agnostic; usable from console / WPF / MAUI / ASP.NET / services. Avalonia integration ships in Exclr8Cef.WebView.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
