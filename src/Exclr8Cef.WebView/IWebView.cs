@@ -22,7 +22,7 @@ namespace Exclr8Cef.WebView;
 /// public class TabViewModel
 /// {
 ///     public IWebView View { get; set; } = default!;
-///     public void Navigate(string url) =&gt; View.Url = url;
+///     public void Navigate(string url) =&gt; View.NavigateToUrl(url);
 ///     public void Reload() =&gt; View.Browser?.Reload();
 /// }
 /// </code>
@@ -50,11 +50,25 @@ public interface IWebView
     // ---- State (XAML-bindable on the concrete types) -----------------
 
     /// <summary>
-    /// Two-way: setting this navigates the browser; getter follows page
-    /// navigations (set <see cref="Url"/> or use <c>Browser.LoadUrl</c> /
-    /// <c>LoadRequest</c> for richer navigation).
+    /// Two-way: the current document URL. The setter is provided for XAML
+    /// initial-value syntax and two-way binding scenarios; it delegates to
+    /// <see cref="NavigateToUrl"/>. For code-driven navigation prefer
+    /// <see cref="NavigateToUrl"/> directly — it reads as the command it
+    /// is (this property reads as state).
     /// </summary>
     string? Url { get; set; }
+
+    // ---- Navigation -------------------------------------------------
+
+    /// <summary>
+    /// Navigate the browser to the given URL. Equivalent to setting the
+    /// <see cref="Url"/> property, but reads as the command it is.
+    ///
+    /// <para>For richer navigation (POST body, custom headers, ignore-cache
+    /// reload, etc.) go through <see cref="Browser"/>:
+    /// <c>browser.LoadRequest("POST", url, body, headers)</c>.</para>
+    /// </summary>
+    void NavigateToUrl(string url);
 
     /// <summary>Current document title.</summary>
     string Title { get; }

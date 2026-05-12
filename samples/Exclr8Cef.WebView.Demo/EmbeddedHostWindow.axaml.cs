@@ -19,7 +19,7 @@ public partial class EmbeddedHostWindow : Window
         DataContext = this;
         if (!string.IsNullOrEmpty(initialUrl))
         {
-            BrowserView.Url = initialUrl;
+            BrowserView.Url = initialUrl;  // local NativeCefView — plain prop, read on first arrange
             UrlBox.Text = initialUrl;
         }
         LogEvent("init", $"window opened — {BrowserView.Url}");

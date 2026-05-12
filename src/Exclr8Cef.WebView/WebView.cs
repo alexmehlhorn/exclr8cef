@@ -53,6 +53,12 @@ public class WebView : Control, IWebView
         set => SetValue(UrlProperty, value);
     }
 
+    /// <summary>
+    /// Navigate the browser to the given URL. Equivalent to
+    /// <c>Url = url</c> but reads as the command it is.
+    /// </summary>
+    public void NavigateToUrl(string url) => Url = url;
+
     private string _title = "";
     public string Title
     {

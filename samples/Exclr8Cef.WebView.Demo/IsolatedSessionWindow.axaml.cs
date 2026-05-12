@@ -25,7 +25,7 @@ public partial class IsolatedSessionWindow : Window
         // isolation across runs.
         _context = Cef.CreateRequestContext();
         Browser.RequestContext = _context;
-        Browser.Url = "https://httpbin.org/cookies";
+        Browser.NavigateToUrl("https://httpbin.org/cookies");
         AddressBox.Text = Browser.Url;
         Browser.PropertyChanged += (_, e) =>
         {
@@ -44,7 +44,7 @@ public partial class IsolatedSessionWindow : Window
         {
             var url = AddressBox.Text ?? "";
             if (!url.Contains("://")) url = "https://" + url;
-            Browser.Url = url;
+            Browser.NavigateToUrl(url);
             e.Handled = true;
         }
     }

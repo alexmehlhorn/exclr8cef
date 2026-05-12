@@ -32,7 +32,7 @@ public partial class MainWindow : Window
 
         // Load the test page through our custom app:// scheme — proves
         // the resource handler delivers a top-level navigation cleanly.
-        Browser.Url = "app://demo/test-page.html";
+        Browser.NavigateToUrl("app://demo/test-page.html");
 
         Browser.PropertyChanged += OnBrowserPropertyChanged;
 
@@ -933,7 +933,7 @@ public partial class MainWindow : Window
             {
                 url = "https://" + url;
             }
-            Browser.Url = url;
+            Browser.NavigateToUrl(url);
             e.Handled = true;
         }
     }

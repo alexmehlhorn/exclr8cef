@@ -51,7 +51,7 @@ public partial class CompareWindow : Window
     {
         if (e.Key == Key.Enter || e.Key == Key.Return)
         {
-            OsrBrowser.Url = OsrUrlBox.Text ?? "about:blank";
+            OsrBrowser.NavigateToUrl(OsrUrlBox.Text ?? "about:blank");
             e.Handled = true;
         }
     }
@@ -65,7 +65,7 @@ public partial class CompareWindow : Window
     {
         if (e.Key == Key.Enter || e.Key == Key.Return)
         {
-            NativeBrowser.Url = NativeUrlBox.Text ?? "about:blank";
+            NativeBrowser.NavigateToUrl(NativeUrlBox.Text ?? "about:blank");
             e.Handled = true;
         }
     }
