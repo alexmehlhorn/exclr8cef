@@ -35,5 +35,11 @@
     <string>1</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Access camera for getUserMedia.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Access microphone for getUserMedia.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Access location for geolocation API.</string>
 </dict>
 </plist>

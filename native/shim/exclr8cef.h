@@ -87,8 +87,34 @@ EXCEF_API void excef_do_message_loop_work(void);
 //   - On macOS the NSView is returned with +1 retain; AppKit/ARC consumes it.
 // The CEF browser is created asynchronously and added as a subview of the
 // returned host view.
+// Returns the host NSView and writes the browser id to *out_browser_id
+// (writes 0 on failure). The browser id lets the host wire up the per-
+// browser event surface (load / console / drag / permission / …) the
+// same way CreateOffscreenBrowser does.
 EXCEF_API void* excef_create_browser_view(int width, int height,
-                                          const char* url);
+                                          const char* url,
+                                          int* out_browser_id);
+
+// Two-phase embedded-browser creation, recommended over the all-in-one
+// excef_create_browser_view when hosting inside a UI framework that
+// parents the returned NSView after the call (Avalonia NativeControlHost,
+// WPF HwndHost-equivalent, etc).
+//
+// Phase 1: create an empty host NSView. The host returns this to the UI
+// framework, which parents it into the window hierarchy.
+EXCEF_API void* excef_create_embedded_host(int width, int height);
+// Phase 2: with the host now parented to its window, attach a CEF browser
+// to it. Chromium's renderer reads backingScaleFactor at CreateBrowser
+// time — calling Phase 2 after parenting fixes initial DSF detection on
+// Retina displays. Returns the new browser id (>0) or 0 on failure.
+EXCEF_API int excef_attach_embedded_browser(void* host_view, int width, int height,
+                                             const char* url);
+
+// Resize a browser view previously returned by excef_create_browser_view.
+// Walks the host view's direct subviews and resizes them so the embedded
+// Chromium browser tracks the host's layout. Call on every layout change
+// from the UI framework. macOS-only for v0.
+EXCEF_API void excef_resize_browser_view(void* host_view, int width, int height);
 
 // ---- Off-screen rendering (OSR) ------------------------------------------
 //

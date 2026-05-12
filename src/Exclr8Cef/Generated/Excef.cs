@@ -32,7 +32,16 @@ internal static unsafe partial class Excef
     public static extern void excef_do_message_loop_work();
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void* excef_create_browser_view(int width, int height, [NativeTypeName("const char *")] sbyte* url);
+    public static extern void* excef_create_browser_view(int width, int height, [NativeTypeName("const char *")] sbyte* url, int* out_browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void* excef_create_embedded_host(int width, int height);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_attach_embedded_browser(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resize_browser_view(void* host_view, int width, int height);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_initialize_offscreen(int argc, [NativeTypeName("char **")] sbyte** argv, [NativeTypeName("const char *")] sbyte* subprocess_path, [NativeTypeName("excef_schedule_pump_work_t")] delegate* unmanaged[Cdecl]<long, void> schedule_callback);

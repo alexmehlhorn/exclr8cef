@@ -21,6 +21,14 @@ internal static class Program
         int subproc = Cef.ExecuteProcess(args);
         if (subproc >= 0) return subproc;
 
+        // --mode=windowed: pure CEF Chrome-runtime browser window (no Avalonia, no OSR).
+        // --mode=embedded: Avalonia hosts an embedded Alloy CEF browser via native NSView.
+        // Default: OSR Avalonia demo.
+        if (args.Any(a => a.Equals("--mode=windowed", StringComparison.OrdinalIgnoreCase)))
+            return RunWindowed(args);
+        if (args.Any(a => a.Equals("--mode=embedded", StringComparison.OrdinalIgnoreCase)))
+            return RunEmbedded(args);
+
         Console.WriteLine($"Exclr8Cef {Cef.GetVersions().Shim} — OSR Avalonia demo");
 
         // Resolve helper subprocess path. macOS uses the bundled
@@ -65,13 +73,13 @@ internal static class Program
         });
 
         // Register `app://` custom scheme so the demo's static assets can be
-        // served from disk via a real host/path URL. The CEF forum
-        // consensus is to use STANDARD alone for top-level navigation —
-        // SECURE / CORS_ENABLED add security-policy checks that can abort
-        // navigation to the custom scheme with net::ERR_ABORTED. Add them
-        // later if you actually need secure-context or cross-origin
-        // semantics for your scheme.
-        Cef.RegisterCustomScheme("app", standard: true, secure: false, corsEnabled: false);
+        // served from disk via a real host/path URL.
+        // secure=true is required to expose secure-context web APIs on
+        // app:// pages (navigator.mediaDevices, Notification, geolocation).
+        // Without secure=true Chromium hides navigator.mediaDevices entirely.
+        // standard=true alone keeps top-level navigation working; secure on
+        // top of that is safe for our usage (no cross-origin / CORS needed).
+        Cef.RegisterCustomScheme("app", standard: true, secure: true, corsEnabled: false);
         Cef.SchemeRequest += OnSchemeRequest;
 
         // CEF in OSR mode (windowless rendering + external pump).
@@ -94,6 +102,121 @@ internal static class Program
     private static void SchedulePumpWork(long delayMs)
     {
         // No-op: the AfterSetup timer drives CEF unconditionally.
+    }
+
+    // Alloy-runtime browser hosted inside an Avalonia NativeControlHost.
+    // CEF renders into a real NSView/HWND that Avalonia positions as a
+    // child of the host window. Hardware-accelerated by Chromium, no
+    // paint-buffer copy. But: Alloy only, so no Chrome permission UI.
+    private static int RunEmbedded(string[] args)
+    {
+        Console.WriteLine($"Exclr8Cef {Cef.GetVersions().Shim} — embedded (native + Avalonia host) demo");
+        // Do NOT touch Dispatcher.UIThread before BuildAvaloniaApp.SetupWithLifetime —
+        // it lazily initialises and accessing it early leaves it in a no-platform
+        // state that breaks Dispatcher.MainLoop later.
+
+        string? helperPath = null;
+        if (OperatingSystem.IsMacOS())
+        {
+            helperPath = Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory, "..", "Frameworks",
+                "exclr8cef_demo Helper.app", "Contents", "MacOS",
+                "exclr8cef_demo Helper"));
+        }
+
+        // Avalonia first — otherwise CEF's ExtensionDropdownHandler obj-c
+        // class collides with libAvaloniaNative and crashes.
+        // Override the default MainWindow factory so App.axaml.cs doesn't
+        // create an OSR MainWindow during framework init.
+        // Honor an optional --url= override so spawned instances can open
+        // a specific page (e.g. the "New: pure Chrome" button passes
+        // --url=https://www.exclr8.co.za).
+        var urlOverride = args.FirstOrDefault(a => a.StartsWith("--url=", StringComparison.OrdinalIgnoreCase))?.Substring("--url=".Length);
+        App.MainWindowFactory = () => new EmbeddedHostWindow(urlOverride);
+        // Strip --mode= args before passing to Avalonia (Avalonia's arg
+        // parser doesn't recognise it and may misbehave on macOS).
+        var avalArgs = args.Where(a => !a.StartsWith("--mode=", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var lifetime = new ClassicDesktopStyleApplicationLifetime { Args = avalArgs };
+        BuildAvaloniaApp().SetupWithLifetime(lifetime);
+
+        var v = Cef.GetVersions();
+        var platform = OperatingSystem.IsMacOS()
+            ? "(Macintosh; Intel Mac OS X 10_15_7)"
+            : OperatingSystem.IsWindows()
+                ? "(Windows NT 10.0; Win64; x64)"
+                : "(X11; Linux x86_64)";
+        Cef.SetInitSettings(new Cef.CefSettings
+        {
+            CachePath = Path.Combine(AppContext.BaseDirectory, "cef-cache-embedded"),
+            UserAgent = $"Mozilla/5.0 {platform} AppleWebKit/537.36 (KHTML, like Gecko) "
+                      + $"Chrome/{v.Chromium} Safari/537.36 Exclr8CefDemo/{v.Shim}",
+            PersistSessionCookies = true,
+            LogSeverity = Cef.CefLogSeverity.Warning,
+        });
+
+        // Same app:// scheme setup as the OSR demo so test-page.html loads.
+        Cef.RegisterCustomScheme("app", standard: true, secure: true, corsEnabled: false);
+        Cef.SchemeRequest += OnSchemeRequest;
+
+        // Use the OSR init path even though we'll create windowed browsers.
+        // `windowless_rendering_enabled = true` forces Alloy runtime globally
+        // and prevents CEF from doing the NSApp-claiming work that breaks
+        // Avalonia's main loop. Individual browsers can still be windowed
+        // (our excef_create_browser_view uses SetAsChild + ALLOY).
+        // The pump timer is created by BuildAvaloniaApp().AfterSetup —
+        // no extra timer here.
+        Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
+
+        try { return lifetime.Start(avalArgs); }
+        finally { Cef.Shutdown(); }
+    }
+
+    // Pure-CEF Chrome-runtime windowed mode. No Avalonia, no OSR — CEF
+    // owns a real top-level window with the full Chrome browser UI
+    // (omnibox, permission bubbles, notification UI). Different runtime,
+    // different behavior — useful comparison for permission flows.
+    private static int RunWindowed(string[] args)
+    {
+        Console.WriteLine($"Exclr8Cef {Cef.GetVersions().Shim} — windowed (Chrome runtime) demo");
+
+        string? helperPath = null;
+        if (OperatingSystem.IsMacOS())
+        {
+            helperPath = Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory, "..", "Frameworks",
+                "exclr8cef_demo Helper.app", "Contents", "MacOS",
+                "exclr8cef_demo Helper"));
+        }
+
+        var v = Cef.GetVersions();
+        var platform = OperatingSystem.IsMacOS()
+            ? "(Macintosh; Intel Mac OS X 10_15_7)"
+            : OperatingSystem.IsWindows()
+                ? "(Windows NT 10.0; Win64; x64)"
+                : "(X11; Linux x86_64)";
+        // Separate cache dir so the OSR parent process can keep its lock
+        // on cef-cache/ while we launch with our own profile.
+        Cef.SetInitSettings(new Cef.CefSettings
+        {
+            CachePath = Path.Combine(AppContext.BaseDirectory, "cef-cache-windowed"),
+            UserAgent = $"Mozilla/5.0 {platform} AppleWebKit/537.36 (KHTML, like Gecko) "
+                      + $"Chrome/{v.Chromium} Safari/537.36 Exclr8CefDemo/{v.Shim}",
+            PersistSessionCookies = true,
+            LogSeverity = Cef.CefLogSeverity.Warning,
+        });
+
+        Cef.RegisterCustomScheme("app", standard: true, secure: true, corsEnabled: false);
+        Cef.SchemeRequest += OnSchemeRequest;
+
+        Cef.Initialize(args, helperPath);
+
+        // Optional --url= override; defaults to the demo test page.
+        var urlArg = args.FirstOrDefault(a => a.StartsWith("--url=", StringComparison.OrdinalIgnoreCase));
+        var url = urlArg is null ? "app://demo/test-page.html" : urlArg.Substring("--url=".Length);
+        Cef.CreateBrowser(url);
+        Cef.RunMessageLoop();
+        Cef.Shutdown();
+        return 0;
     }
 
     /// <summary>

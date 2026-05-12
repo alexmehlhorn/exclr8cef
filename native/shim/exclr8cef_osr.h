@@ -42,7 +42,12 @@ public:
                         excef_paint_callback_t paint_cb);
 
     // CefClient
-    CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
+    // GetRenderHandler returns nullptr when no paint callback is registered
+    // — that's how we reuse this class for the embedded (non-OSR) browser
+    // path. CEF in windowed mode won't request OSR rendering if we say no
+    // render handler, but all the other handlers (load / display / drag /
+    // permission / …) still fire so the event surface is the same.
+    CefRefPtr<CefRenderHandler> GetRenderHandler() override { return paint_cb_ ? this : nullptr; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
@@ -306,6 +311,14 @@ private:
 // Exposed so optional extensions (e.g. exclr8cef_print.cc) can act on a
 // browser without reaching into the OSR handler map directly.
 CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id);
+
+// Embedded-browser helpers — let exclr8cef_mac.mm reuse the OSR handler
+// (with paint_cb=null) for windowed browsers so the same event surface
+// fires through the same trampolines.
+int AllocateBrowserId();
+void RegisterOsrHandler(int browser_id, CefRefPtr<Exclr8CefOsrHandler> handler);
+void UnregisterOsrHandler(int browser_id);
+Exclr8CefOsrHandler* LookupOsrHandler(int browser_id);
 
 }  // namespace exclr8cef
 

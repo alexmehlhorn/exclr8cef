@@ -192,6 +192,7 @@
       <a href="#permissions">Permissions</a>
       <a href="#popup">Popup intercept</a>
       <a href="#cert">TLS cert errors</a>
+      <a href="#vision">Vision &amp; hit-test</a>
       <a href="#crash">Renderer crash</a>
       <a href="#config">Init settings</a>
     </div>
@@ -290,20 +291,23 @@
     <h2>Permissions</h2>
     <p class="lede"><code>CefPermissionHandler</code> is wired
        (<code>OnShowPermissionPrompt</code> + <code>OnRequestMediaAccessPermission</code>)
-       and will fire for any permission type Chromium routes through it. In
-       Alloy + OSR mode (this demo's runtime), Chromium short-circuits most
-       common permissions to deny before reaching the handler — Notifications,
-       Geolocation, Camera/Microphone all hit this path. The handler ABI is
-       still exported for hosts using Chrome runtime or for permission types
-       (clipboard, pointer-lock, fullscreen) that do route through. Buttons
-       below show the actual page-side outcome.</p>
+       and will fire for any permission type Chromium routes through it.
+       Mic / Camera work via <code>--enable-media-stream</code> — Chromium
+       auto-grants and macOS provides the actual TCC prompt the first time
+       a real device is touched. Notifications and Geolocation aren't
+       supported in Alloy + OSR — the underlying Chromium subsystems aren't
+       initialized, so the request is denied upstream of the handler.</p>
     <div class="row">
-      <button id="pNotify">Notifications</button>
-      <button id="pGeo">Geolocation</button>
-      <button id="pMic">Microphone</button>
-      <button id="pCam">Camera</button>
+      <button id="pMic" title="getUserMedia({audio:true}) → real mic. macOS TCC prompts on first use.">Microphone</button>
+      <button id="pCam" title="getUserMedia({video:true}) → real camera. macOS TCC prompts on first use.">Camera</button>
+      <button id="pNotify" title="Notification.requestPermission() — Alloy+OSR has no notification subsystem; always denies.">Notifications ⚠</button>
+      <button id="pGeo" title="navigator.geolocation.getCurrentPosition — needs Chrome runtime + API key.">Geolocation ⚠</button>
     </div>
     <p><small id="permOut">(no result yet)</small></p>
+    <p><small>⚠ marked types are denied by Chromium before reaching
+       <code>CefPermissionHandler</code> in Alloy + OSR. Other permission
+       types (clipboard / pointer-lock / fullscreen) do route through the
+       handler when the page triggers them.</small></p>
   </section>
 
   <section id="popup">
@@ -328,6 +332,39 @@
       <a href="https://self-signed.badssl.com/" target="_self">self-signed.badssl.com</a>
       <a href="https://expired.badssl.com/" target="_self">expired.badssl.com</a>
       <a href="https://wrong.host.badssl.com/" target="_self">wrong.host.badssl.com</a>
+    </div>
+  </section>
+
+  <section id="vision">
+    <h2>Vision &amp; hit-test (Phase 7)</h2>
+    <p class="lede">Phase 7 exposes the OSR paint buffer and a DOM hit-test
+       to in-process AI / automation hosts — no CDP screenshot round-trip,
+       no encoding hop. Two entry points:</p>
+    <ul>
+      <li><b>Capture PNG</b> toolbar button — saves the latest paint buffer
+          (BGRA8888, top-left, device-scaled physical pixels) as a PNG to
+          <code>/tmp/exclr8cef-snapshot-*.png</code>. The host calls
+          <code>browser.TryCaptureLastFrame(out bytes, out w, out h)</code>;
+          consumes the frame as a managed byte[]. Click below to trigger
+          a capture from the page via the JS bridge.</li>
+      <li><b>Hit-test mode</b> toolbar toggle — when on, clicks on the page
+          are intercepted by the host's Tunnel-phase handler, which calls
+          <code>browser.HitTestAtAsync(x, y)</code> (JS-bridged
+          <code>document.elementFromPoint</code>). The event console logs
+          tag / id / text / rect for the element under the cursor. Use the
+          probe targets below.</li>
+    </ul>
+    <div class="row">
+      <button id="vCapture">Capture (via JS bridge)</button>
+      <span id="vCapOut" style="font-family:monospace;color:var(--ok)"></span>
+    </div>
+    <p>Enable <b>Hit-test mode</b> in the toolbar, then click any of these
+       to confirm the DOM probe returns different element data per target:</p>
+    <div class="row" id="vHitTargets">
+      <button id="vHitBtn">button#vHitBtn</button>
+      <a id="vHitLink" href="#vision">a#vHitLink</a>
+      <span id="vHitSpan" style="background:var(--bg2);padding:6px 10px;border-radius:4px">span#vHitSpan with some text inside</span>
+      <div id="vHitBox" role="region" style="background:#1e1e2e;border:1px dashed var(--line);padding:14px 20px;border-radius:6px">role=region div</div>
     </div>
   </section>
 
@@ -706,6 +743,18 @@
   // Popup intercept
   $('#popOpen').addEventListener('click', () => {
     window.open('https://example.com', '_blank', 'width=400,height=300');
+  });
+
+  // Vision: page-driven capture trigger via the JS bridge. The host
+  // listens for method='capture' on JsInvoke and runs the same save-PNG
+  // path the toolbar button uses.
+  $('#vCapture').addEventListener('click', () => {
+    if (window.exclr8cef && window.exclr8cef.invoke) {
+      window.exclr8cef.invoke('capture', JSON.stringify({source: 'page-button'}));
+      document.getElementById('vCapOut').textContent = '→ requested at ' + new Date().toLocaleTimeString();
+    } else {
+      document.getElementById('vCapOut').textContent = 'JS bridge not installed';
+    }
   });
 </script>
 </body>

@@ -80,6 +80,79 @@ public partial class MainWindow : Window
         LogEvent("hit-test", _hitTestMode ? "enabled — click to probe" : "disabled");
     }
 
+    private void OnEmbeddedClick(object? sender, RoutedEventArgs e) => SpawnDemoMode("--mode=embedded", "embedded");
+    private void SpawnDemoMode(string modeArg, string logTag)
+    {
+        try
+        {
+            System.Diagnostics.ProcessStartInfo psi;
+            if (OperatingSystem.IsMacOS())
+            {
+                string bundle = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", ".."));
+                psi = new System.Diagnostics.ProcessStartInfo { FileName = "open", UseShellExecute = false };
+                psi.ArgumentList.Add("-n"); psi.ArgumentList.Add("-a"); psi.ArgumentList.Add(bundle);
+                psi.ArgumentList.Add("--args"); psi.ArgumentList.Add(modeArg);
+            }
+            else
+            {
+                psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName!,
+                    UseShellExecute = false,
+                };
+                psi.ArgumentList.Add(modeArg);
+            }
+            System.Diagnostics.Process.Start(psi);
+            LogEvent(logTag, $"spawned {modeArg}");
+        }
+        catch (Exception ex) { LogEvent(logTag, $"failed: {ex.Message}"); }
+    }
+
+    private void OnWindowedClick(object? sender, RoutedEventArgs e)
+    {
+        // Spawn the same binary as a separate process with --mode=windowed.
+        // CefSettings.windowless_rendering_enabled is process-wide, so we
+        // can't mix OSR + Chrome-runtime windowed in one process. The
+        // windowed mode uses a separate cef-cache-windowed/ dir so it
+        // doesn't fight us for the OSR cache lock.
+        try
+        {
+            System.Diagnostics.ProcessStartInfo psi;
+            if (OperatingSystem.IsMacOS())
+            {
+                // Resolve the .app bundle: AppContext.BaseDirectory is
+                // <bundle>/Contents/MacOS — go up two levels to the bundle.
+                string bundle = Path.GetFullPath(Path.Combine(
+                    AppContext.BaseDirectory, "..", ".."));
+                psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "open",
+                    UseShellExecute = false,
+                };
+                psi.ArgumentList.Add("-n");          // always new instance
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(bundle);
+                psi.ArgumentList.Add("--args");
+                psi.ArgumentList.Add("--mode=windowed");
+            }
+            else
+            {
+                psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName!,
+                    UseShellExecute = false,
+                };
+                psi.ArgumentList.Add("--mode=windowed");
+            }
+            System.Diagnostics.Process.Start(psi);
+            LogEvent("windowed", "spawned --mode=windowed");
+        }
+        catch (Exception ex)
+        {
+            LogEvent("windowed", $"failed: {ex.Message}");
+        }
+    }
+
     private void OnCapturePngClick(object? sender, RoutedEventArgs e)
     {
         if (Browser.Browser is not { } b) { LogEvent("capture", "no browser"); return; }
@@ -274,6 +347,11 @@ public partial class MainWindow : Window
         if (e.Method == "a11y" && Browser.Browser is { } b)
         {
             b.SetAccessibilityEnabled(e.ArgsJson == "on");
+        }
+        // Page-driven capture trigger — same path as the toolbar button.
+        if (e.Method == "capture")
+        {
+            Dispatcher.UIThread.Post(() => OnCapturePngClick(this, new RoutedEventArgs()));
         }
     }
 
@@ -916,6 +994,8 @@ public sealed class CategoryToBrushConverter : IValueConverter
         ["cert"]            = SolidColorBrush.Parse("#f38ba8"),
         ["hit-test"]        = SolidColorBrush.Parse("#89dceb"),
         ["capture"]         = SolidColorBrush.Parse("#a6e3a1"),
+        ["windowed"]        = SolidColorBrush.Parse("#fab387"),
+        ["embedded"]        = SolidColorBrush.Parse("#cba6f7"),
     };
 
     private static readonly IBrush Fallback = SolidColorBrush.Parse("#a6adc8");

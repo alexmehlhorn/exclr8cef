@@ -185,7 +185,23 @@ void Exclr8CefApp::OnBeforeCommandLineProcessing(
         // AddCustomScheme), not via cmdline (Chromium filters custom
         // switches before passing cmdline to children).
         command_line->AppendSwitch("use-mock-keychain");
+        // Allow getUserMedia in OSR + Alloy. Without this Chromium denies
+        // before reaching CefPermissionHandler. With it set, Chromium
+        // auto-grants and macOS' TCC provides the user-facing prompt the
+        // first time a real device is touched.
+        command_line->AppendSwitch("enable-media-stream");
         return;
+    }
+
+    // Subprocess (renderer / GPU / utility / network). Inherit scheme
+    // registrations from the env var the browser process exported, so the
+    // OnRegisterCustomSchemes call that fires next has them.
+    // ALSO re-apply --enable-media-stream here: Chromium strips custom
+    // switches when forwarding cmdline to subprocesses, but OnBeforeCommandLineProcessing
+    // runs before Chromium parses the cmdline, so we can re-add it. The
+    // renderer needs it for getUserMedia to actually work.
+    if (!command_line->HasSwitch("enable-media-stream")) {
+        command_line->AppendSwitch("enable-media-stream");
     }
 
     // Subprocess (renderer / GPU / utility / network). Inherit scheme

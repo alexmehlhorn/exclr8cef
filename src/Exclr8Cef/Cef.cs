@@ -65,6 +65,7 @@ public static class Cef
     public static void Initialize(string[]? args = null, string? subprocessPath = null)
     {
         args ??= Environment.GetCommandLineArgs();
+        RegisterEventCallbacks();  // idempotent — wires all per-browser trampolines
         unsafe
         {
             sbyte** argv = AllocArgv(args, out int argc);
@@ -96,6 +97,7 @@ public static class Cef
         ArgumentNullException.ThrowIfNull(schedulePumpWork);
         args ??= Environment.GetCommandLineArgs();
         s_scheduleCallback = schedulePumpWork;
+        RegisterEventCallbacks();
 
         unsafe
         {
@@ -260,16 +262,84 @@ public static class Cef
     /// Create a native host view containing a CEF browser. Returns a handle
     /// to an <c>NSView</c> on macOS. Caller takes ownership.
     /// </summary>
-    public static IntPtr CreateBrowserView(int width, int height, string url)
+    public static IntPtr CreateBrowserView(int width, int height, string url) =>
+        CreateBrowserView(width, height, url, out _);
+
+    /// <summary>
+    /// Create a native host view containing a CEF browser. The host view
+    /// is returned (an <c>NSView</c> handle on macOS); <paramref name="browser"/>
+    /// gets the corresponding <see cref="CefBrowser"/> instance so the host
+    /// can subscribe to per-browser events the same way as
+    /// <see cref="CreateOffscreenBrowser"/>.
+    /// </summary>
+    public static IntPtr CreateBrowserView(int width, int height, string url, out CefBrowser? browser)
     {
         ArgumentNullException.ThrowIfNull(url);
+        RegisterEventCallbacks();  // make sure per-browser trampolines are wired
+        browser = null;
+        unsafe
+        {
+            sbyte* ptr = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
+            int id = 0;
+            try
+            {
+                void* viewPtr = Excef.excef_create_browser_view(width, height, ptr, &id);
+                if (viewPtr == null) return IntPtr.Zero;
+                if (id > 0)
+                {
+                    browser = new CefBrowser(id);
+                    s_browsers[id] = browser;
+                }
+                return (IntPtr)viewPtr;
+            }
+            finally { Marshal.FreeCoTaskMem((IntPtr)ptr); }
+        }
+    }
+
+    /// <summary>
+    /// Resize a host view returned by <see cref="CreateBrowserView"/>.
+    /// Call on every layout change so the embedded Chromium tracks the
+    /// host's size.
+    /// </summary>
+    public static void ResizeBrowserView(IntPtr hostView, int width, int height)
+    {
+        if (hostView == IntPtr.Zero || width <= 0 || height <= 0) return;
+        unsafe { Excef.excef_resize_browser_view((void*)hostView, width, height); }
+    }
+
+    /// <summary>
+    /// Phase 1 of two-phase embedded browser creation: allocate an empty
+    /// host NSView. Return it to the UI framework via NativeControlHost so
+    /// it gets parented to the window. Then call
+    /// <see cref="AttachEmbeddedBrowser"/> after parenting — at that point
+    /// Chromium can read the correct backingScaleFactor.
+    /// </summary>
+    public static IntPtr CreateEmbeddedHost(int width, int height)
+    {
+        unsafe { return (IntPtr)Excef.excef_create_embedded_host(width, height); }
+    }
+
+    /// <summary>
+    /// Phase 2 of two-phase embedded browser creation: attach a CEF
+    /// browser to a previously-created host NSView. Returns the browser
+    /// instance, or null on failure. Wires up to <see cref="s_browsers"/>
+    /// so the per-browser event surface fires.
+    /// </summary>
+    public static CefBrowser? AttachEmbeddedBrowser(IntPtr hostView, int width, int height, string url)
+    {
+        if (hostView == IntPtr.Zero) return null;
+        ArgumentNullException.ThrowIfNull(url);
+        RegisterEventCallbacks();
         unsafe
         {
             sbyte* ptr = (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
             try
             {
-                void* viewPtr = Excef.excef_create_browser_view(width, height, ptr);
-                return (IntPtr)viewPtr;
+                int id = Excef.excef_attach_embedded_browser((void*)hostView, width, height, ptr);
+                if (id <= 0) return null;
+                var browser = new CefBrowser(id);
+                s_browsers[id] = browser;
+                return browser;
             }
             finally { Marshal.FreeCoTaskMem((IntPtr)ptr); }
         }

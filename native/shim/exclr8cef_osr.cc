@@ -1167,6 +1167,16 @@ CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id) {
     return it->second->browser();
 }
 
+int AllocateBrowserId() { return g_next_id++; }
+void RegisterOsrHandler(int browser_id, CefRefPtr<Exclr8CefOsrHandler> handler) {
+    g_osr_browsers[browser_id] = handler;
+}
+void UnregisterOsrHandler(int browser_id) { g_osr_browsers.erase(browser_id); }
+Exclr8CefOsrHandler* LookupOsrHandler(int browser_id) {
+    auto it = g_osr_browsers.find(browser_id);
+    return it == g_osr_browsers.end() ? nullptr : it->second.get();
+}
+
 }  // namespace exclr8cef
 
 // ---- C ABI implementations ------------------------------------------------
