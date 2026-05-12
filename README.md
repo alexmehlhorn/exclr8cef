@@ -174,7 +174,7 @@ CEF is process-global: exactly one init call per process lifetime. The controls 
 | `Cef.InitializeForOsr` | Alloy global | ✓ | ✓ | ✗ |
 | `Cef.Initialize` (default) | Chrome | ✗ | ✗ | ✓ |
 
-`Cef.InitializeForOsr` is the right choice for any Avalonia app — it sets `windowless_rendering_enabled = true` (which *enables* OSR without forbidding windowed Alloy browsers) and uses an external message pump so Avalonia stays in charge of the platform run loop. You can then mix `WebView` and `NativeWebView` instances freely in the same window.
+`Cef.InitializeForOsr` is the right choice for any Avalonia app — it sets `windowless_rendering_enabled = true` (which *enables* OSR without forbidding windowed Alloy browsers) and uses an external message pump so Avalonia stays in charge of the platform run loop. You can then mix `WebView` and `NativeWebView` instances freely in the same window — see `samples/Exclr8Cef.WebView.Demo --mode=compare` for a working example.
 
 ### Build from source (macOS arm64)
 
@@ -200,7 +200,11 @@ open samples/Exclr8Cef.WebView.Demo/bin/Release/Exclr8Cef.WebView.Demo.app
 
 ## Demos
 
-- **`samples/Exclr8Cef.WebView.Demo`** — full Avalonia app. Three modes: OSR (default), embedded native widget (`--mode=embedded`), and windowed Chrome runtime (`--mode=windowed`). Toolbar covers ◀ ▶ ⟳ ✕ Hit-test Capture-PNG DevTools Isolated Run-JS Save-PDF + zoom; the test page exercises every event surface and the host-side event console pane color-codes every fired callback.
+- **`samples/Exclr8Cef.WebView.Demo`** — full Avalonia app, four modes:
+  - **default** — OSR via the shipped `cef:WebView`. Full toolbar (◀ ▶ ⟳ ✕ Hit-test Capture-PNG DevTools Isolated Run-JS Save-PDF + zoom), URL bar, sectioned `app://`-served test page exercising every event surface, host-side event console color-coding every fired callback.
+  - **`--mode=embedded`** — Avalonia hosts an embedded Alloy CEF browser via `NativeControlHost`. Uses the local `NativeCefView` wrapper to show the minimum manual-integration pattern (the shipped `cef:NativeWebView` does the same with full property bindings).
+  - **`--mode=compare`** — *side-by-side*: OSR `cef:WebView` on the left, embedded `cef:NativeWebView` on the right, both shipped controls, one window, one CEF init. Each pane has its own URL bar + back/forward/reload so the two browsers can be navigated independently for visual comparison.
+  - **`--mode=windowed`** — pure-CEF Chrome-runtime window (no Avalonia, no OSR). Different runtime, different permission UI; runs as a separate process pattern.
 - **`samples/Exclr8Cef.ConsoleDemo`** — .NET-driven CEF host with no UI framework. Default mode opens `chrome://version`. Headless mode (`--url URL --screenshot OUT.png`) renders a page and writes the PNG via `Page.captureScreenshot`. Useful for automation and visual-diff pipelines.
 
 ## Repo layout
