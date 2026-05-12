@@ -54,17 +54,54 @@ JS dialogs, file dialogs, context menus, auth requests, certificate errors, perm
 
 ### DevTools / Chrome DevTools Protocol
 
-- `ExecuteDevToolsMethodAsync("Page.captureScreenshot", paramsJson)` — universal CDP escape hatch
-- `SendDevToolsMessageRaw` for fire-and-forget
-- `DevToolsMessage` event for CDP events (Network, Page, DOM, …)
-- `CapturePageAsync` is a thin wrapper
+Two layers — raw escape hatch for anything CDP can do, plus typed clients for the parts everybody reaches for.
+
+**Raw:** `ExecuteDevToolsMethodAsync(method, paramsJson)` round-trips to any CDP method; `SendDevToolsMessageRaw` is fire-and-forget; `DevToolsMessage` event streams server-pushed CDP events.
+
+**Typed domain clients** on `CefBrowser` — lazy, zero-cost when unused:
+
+| Accessor | What it gives you |
+|---|---|
+| `browser.Accessibility` | `GetFullTreeAsync()` / `QueryAsync(role, name)` / `GetPartialTreeAsync(node)` — Chromium's role-labeled semantic page model. The cheap-and-robust alternative to screenshot+OCR or HTML scraping. `NodesUpdated` event for live diffs. |
+| `browser.Dom` | `GetNodeForLocationAsync(x,y)` (proper hit-test honouring transforms / shadow DOM / `pointer-events`), `GetBoxModelAsync`, `GetContentQuadsAsync`, `ScrollIntoViewAsync`, `FocusAsync`, `QuerySelectorAsync`. |
+| `browser.DomSnapshot` | `CaptureAsync(computedStyles)` — one call returns the flattened DOM + layout + computed-styles + text + click-ability merged into row objects. Replaces 10-100 round-trips. |
+| `browser.Page` | `LifecycleEvent` (`networkIdle`, FCP, LCP — the SPA-aware "page is ready" signal that `LoadEnd` isn't), `CaptureScreenshotAsync(clip, beyondViewport, optimizeForSpeed)`, `StartScreencastAsync` + `ScreencastFrame` stream with auto-ACK back-pressure. |
+| `browser.Network` | `RequestWillBeSent` / `ResponseReceived` / `LoadingFinished` / `LoadingFailed` events, `GetResponseBodyAsync(requestId)`, `GetRequestPostDataAsync`, `SetExtraHeadersAsync`, `SetUserAgentAsync`. Read the API JSON the page is fetching instead of scraping rendered DOM. |
+| `browser.Input` | `InsertTextAsync` (bypasses keystroke-by-keystroke synthesis — works on debounce-trap and autocomplete-aware fields), `SynthesizeScrollGestureAsync` / `SynthesizeTapGestureAsync` (real touch momentum), `SetCompositionAsync` (IME / CJK). |
+| `browser.Overlay` | `HighlightNodeAsync` (inspector-style outlining), `EnterInspectModeAsync` + `InspectNodeRequested` event for click-to-pick handoff. |
+| `browser.PerformanceTimeline` | `EnableAsync("largest-contentful-paint", "layout-shift", …)` + `TimelineEventAdded` — web vitals as live events. LCP element `backendNodeId` is "the hero of the page" for AI framing. |
+| `browser.Target` | Out-of-process iframe visibility: `SetAutoAttachAsync`, `AttachedToTarget` / `DetachedFromTarget` / `TargetInfoChanged` events, `GetTargetsAsync`. |
+
+Conventions: call `EnableAsync()` on the domain once after `BrowserReady` for the ones that need it (`Accessibility`, `Network`, `Dom`, `Overlay`, `PerformanceTimeline`); `backendNodeId` is the universal cross-domain handle (links `Dom` ↔ `Accessibility` ↔ `Overlay` ↔ `DomSnapshot`); CDP continuations run on the threadpool, not the UI thread.
+
+```csharp
+// List every clickable element on the page with its accessible name.
+await browser.Accessibility.EnableAsync();
+var nodes = await browser.Accessibility.GetFullTreeAsync();
+foreach (var n in nodes.Where(n => n.Role is "button" or "link"))
+    Console.WriteLine($"{n.Role} '{n.Name}' (#{n.BackendDomNodeId})");
+
+// Read response bodies the page is fetching, no DOM scraping.
+await browser.Network.EnableAsync();
+browser.Network.LoadingFinished += async (_, ev) =>
+{
+    if (ev.EncodedDataLength > 0)
+    {
+        var body = await browser.Network.GetResponseBodyAsync(ev.RequestId);
+        Console.WriteLine(body.AsText());
+    }
+};
+```
+
+`CapturePageAsync` is preserved as a top-level screenshot convenience.
 
 ### Content interception
 
 - **Custom schemes** — `Cef.RegisterCustomScheme("app", …)` + `SchemeRequest` event for routing scheme:// URLs through .NET
 - **Per-URL claim** — `Cef.ShouldHandleResource` + `Cef.ResolveResourceHandlerRequest` serve any URL (http://, https://, file://, …) from the host with full status / mime / headers / body control
 - **Streaming response filter** — `Cef.ShouldFilterResponse` + `Cef.ResponseFilter` rewrite response bodies in flight, chunk by chunk, with `ReadOnlySpan<byte>`/`Span<byte>` at the managed surface. Use cases: script injection, CSP stripping, content-type fixups
-- **Resource-request header rewrite** — `ResourceRequest` event for per-request URL/header mutation
+- **Resource-request gate** — `ResourceRequest` event for per-request URL/header mutation (host calls `Continue()` / `Cancel()`)
+- **Resource-request observer** — `ResourceRequestObserved` is the non-gating sibling: same trigger set, auto-continues, can't stall the request pipeline. Use this for logging or `network_recent`-style activity panels. Independent of `browser.Network` (which uses CDP and gives richer metadata + body retrieval).
 
 ### Cookies & storage isolation
 
@@ -86,18 +123,29 @@ JS dialogs, file dialogs, context menus, auth requests, certificate errors, perm
 
 ### Accessibility & spellcheck
 
-- Raw Chromium accessibility tree streamed as JSON (`AccessibilityTreeChange` / `LocationChange`) — useful for automation and audits
-- `ReplaceMisspelling`, `AddWordToDictionary` for context-menu spellcheck integration
+- `browser.Accessibility` — typed CDP client returning a flat `AxNode` list (role, name, value, properties, parent/child links, `BackendDomNodeId`). See [DevTools](#devtools--chrome-devtools-protocol). The right surface for most automation / AI consumers.
+- Raw Chromium accessibility tree streamed as JSON (`AccessibilityTreeChange` / `LocationChange`) — lower-level alternative for hosts that need the CEF-side stream directly.
+- `ReplaceMisspelling`, `AddWordToDictionary` for context-menu spellcheck integration.
 
 ### Vision / automation
 
-For AI hosts that need pixel + DOM-probe access:
+For AI hosts that need pixel + DOM access. Two complementary surfaces:
 
+**Pixels:**
 - `EnableFrameCapture` + `TryCaptureLastFrame` — synchronous BGRA snapshot
 - `FrameStream` — `ChannelReader<PaintFrame>` (bounded, drop-oldest) for an agent loop
-- `HitTestAtAsync(x, y)` — returns the DOM element under a point via the JS bridge
+- `browser.Page.StartScreencastAsync` — Chromium's already-throttled, change-driven JPEG stream with ACK back-pressure. ~10× cheaper bytes/sec than the raw paint stream for an "AI watches the screen" mode.
+- `browser.Page.CaptureScreenshotAsync(clip, ...)` — element-clipped screenshots (combine with `browser.Dom.GetBoxModelAsync` to grab just one widget) or full-page (`captureBeyondViewport: true`)
 - `AcceleratedPaint` event — GPU shared-texture handle (IOSurface / D3D11 / dma-buf) per frame for hosts that want to consume paints without a CPU readback. The handle is platform-specific; the demo's `--accel-paint` mode shows the macOS IOSurface read path end-to-end.
 - `Exclr8Cef.ConsoleDemo --url URL --screenshot OUT.png` — headless screenshot CLI
+
+**Structure** (typically much cheaper than vision for the same task):
+- `browser.Accessibility.GetFullTreeAsync()` — role-labeled semantic page model ("button named 'Sign in'", "textbox labeled 'Email'") — usually the right starting point for agent targeting
+- `browser.DomSnapshot.CaptureAsync()` — flattened DOM + layout + text + click-ability across all frames in one call
+- `browser.Dom.GetNodeForLocationAsync(x, y)` — proper reverse hit-test (transforms / shadow DOM / `pointer-events` all handled)
+- `HitTestAtAsync(x, y)` — older JS-injected probe; superseded by the typed `Dom` client above but kept for compatibility
+
+See [DevTools / Chrome DevTools Protocol](#devtools--chrome-devtools-protocol) for the full typed CDP surface.
 
 ### Chrome runtime (windowed)
 
