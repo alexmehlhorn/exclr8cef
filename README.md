@@ -1,10 +1,12 @@
 # Exclr8CEF
 
-A custom .NET/Avalonia binding to Chromium. Provides an HTML rendering control with a Chromium update cadence you control.
+A custom .NET binding to Chromium via CEF, built for applications where rendering quality *is* the product. Ships an Avalonia `WebView` control plus a framework-agnostic core for any .NET host.
+
+- **Same pixels, every platform.** macOS, Windows, Linux all render through the same Chromium build.
+- **You control the cadence.** Tracks upstream Chromium within weeks via an auto-PR workflow.
+- **Permissive licence**, fully open. MIT on the binding, BSD on CEF.
 
 ## Why this exists
-
-Existing options for embedding HTML in .NET cross-platform:
 
 | Option | Engine | Issue |
 |---|---|---|
@@ -13,12 +15,94 @@ Existing options for embedding HTML in .NET cross-platform:
 | DotNetBrowser | Chromium | Commercial, proprietary |
 | CefSharp | Chromium | Tracks upstream within weeks, but Windows-only (C++/CLI) |
 
-For applications where rendering quality *is* the product, none of these fit. Exclr8CEF is built fresh to give:
+Exclr8CEF takes CefSharp's shim model and ports it to plain C++ with a C ABI for cross-platform reach. ClangSharp replaces brittle regex header parsing with proper libclang AST analysis — turning every Chromium bump into "regenerate, fix what broke, ship."
 
-- Same Chromium engine and pixels on every platform (Win/macOS/Linux)
-- Update cadence we control — target tracking upstream within weeks
-- Permissive license, fully open
-- A binding layer designed for sustainability — generated, not regex-parsed
+## Features
+
+### Rendering
+
+Two Avalonia controls ship in the same `Exclr8Cef.WebView` package — drop either (or both) into your XAML; pick per use case.
+
+- **`WebView` (OSR)** — off-screen rendering. CEF paints into a BGRA buffer → `WriteableBitmap` → Avalonia compositor. Single render surface, Avalonia effects (Opacity, RenderTransform, overlays) work on the content. Good default.
+- **`NativeWebView` (embedded)** — `NativeControlHost`-based. CEF paints directly into an NSView (macOS) or HWND (Windows). GPU path, no per-frame pixel copy — faster for video / canvas / WebGL. Trade-off: Avalonia render effects don't apply to the embedded content, and z-ordering with overlays can be awkward (native widget on top).
+- **Headless** — no UI required. Drive via `CefBrowser` + DevTools/CDP from a console host.
+
+Both controls expose the same Avalonia property surface (`Url`, `Title`, `IsLoading`, `CanGoBack`, `CanGoForward`) so swapping is mechanical. They can coexist in the same app — see [the init contract note](#process-init-contract).
+
+### Navigation & input
+
+- `LoadUrl`, `LoadRequest`, `LoadString`, `GoBack`, `GoForward`, `Reload`, `StopLoad`, `Close`
+- `GetNavigationEntriesAsync` returns the full back/forward stack
+- Mouse, wheel, keyboard, IME forwarding
+- Clipboard (`Copy`/`Paste`/`Cut`/`SelectAll`/`Undo`/`Redo`)
+- Zoom (`ZoomLevel`, `CanZoom`, `GetZoomLevel`)
+- Focus management + key-event interception
+
+### Browser events (per-browser, on `CefBrowser`)
+
+Address, title, loading state, load start/end/error, loading progress, console, status, tooltip, favicon, fullscreen, cursor, scroll offset, auto-resize, render-process gone, frame lifecycle (created/attached/detached), main-frame changed, take/got focus, pre-key/key event, audio stream started/packet/stopped/error.
+
+### Dialogs & interaction (intercept and respond, sync or async)
+
+JS dialogs, file dialogs, context menus, auth requests, certificate errors, permission prompts, media-access requests, drag-and-drop (source + target), before-popup, find-result.
+
+### JavaScript bridge
+
+- `EvaluateJavaScriptAsync(code)` — returns the JSON-serialized result
+- `ExecuteJavaScript(code)` — fire-and-forget
+- Page-side `window.exclr8cef.invoke(method, args)` returns a `Promise` — the .NET host sees a `JsInvoke` event and replies via `e.Reply(json)` / `e.ReplyError(message)`. Both directions awaitable.
+
+### DevTools / Chrome DevTools Protocol
+
+- `ExecuteDevToolsMethodAsync("Page.captureScreenshot", paramsJson)` — universal CDP escape hatch
+- `SendDevToolsMessageRaw` for fire-and-forget
+- `DevToolsMessage` event for CDP events (Network, Page, DOM, …)
+- `CapturePageAsync` is a thin wrapper
+
+### Content interception
+
+- **Custom schemes** — `Cef.RegisterCustomScheme("app", …)` + `SchemeRequest` event for routing scheme:// URLs through .NET
+- **Per-URL claim** — `Cef.ShouldHandleResource` + `Cef.ResolveResourceHandlerRequest` serve any URL (http://, https://, file://, …) from the host with full status / mime / headers / body control
+- **Streaming response filter** — `Cef.ShouldFilterResponse` + `Cef.ResponseFilter` rewrite response bodies in flight, chunk by chunk, with `ReadOnlySpan<byte>`/`Span<byte>` at the managed surface. Use cases: script injection, CSP stripping, content-type fixups
+- **Resource-request header rewrite** — `ResourceRequest` event for per-request URL/header mutation
+
+### Cookies & storage isolation
+
+- Global cookies: `Cef.GetCookiesAsync` / `SetCookie` / `DeleteCookies`
+- Per-context: `CefRequestContext.GetCookiesAsync` / `SetCookie` / `DeleteCookies`
+- `CefRequestContext` for profile-style isolation (cookies, cache, storage, prefs all partitioned)
+- Per-context preferences: `SetPreference`/`GetPreference`/`ClearHttpAuthCredentials`/`CloseAllConnections`
+
+### Audio
+
+- `EnableAudioCapture(true)` opts into tab-audio capture
+- Interleaved float-PCM via `AudioPacket` event; `AudioStreamStarted` reports channel layout + sample rate
+- Per-browser mute via `AudioMuted` property
+
+### PDF + print
+
+- `PrintToPdfAsync(path)` for default-styled PDF
+- `Exclr8Cef.Print` package for full Chromium PDF settings: paper size, margins, scale, page ranges, header/footer HTML templates with `pageNumber` / `totalPages` / `title` / `date` / `url` substitutions
+
+### Accessibility & spellcheck
+
+- Raw Chromium accessibility tree streamed as JSON (`AccessibilityTreeChange` / `LocationChange`) — useful for automation and audits
+- `ReplaceMisspelling`, `AddWordToDictionary` for context-menu spellcheck integration
+
+### Vision / automation
+
+For AI hosts that need pixel + DOM-probe access:
+
+- `EnableFrameCapture` + `TryCaptureLastFrame` — synchronous BGRA snapshot
+- `FrameStream` — `ChannelReader<PaintFrame>` (bounded, drop-oldest) for an agent loop
+- `HitTestAtAsync(x, y)` — returns the DOM element under a point via the JS bridge
+- `Exclr8Cef.ConsoleDemo --url URL --screenshot OUT.png` — headless screenshot CLI
+
+### Chrome runtime (windowed)
+
+- `OnChromeCommand` intercepts IDC_* commands
+- Menu, page-action, and toolbar-button visibility hooks
+- Useful for kiosks, app-mode windows, locking down the UI
 
 ## Architecture
 
@@ -31,8 +115,7 @@ Console / WPF / MAUI / ASP.NET / service / etc.        Avalonia desktop app
 ┌─────────────────────────────┐                  ┌─────────────────────────────┐
 │ Exclr8Cef                   │ ◄─── refs ────── │ Exclr8Cef.WebView           │
 │  ├─ Cef (static facade)     │                  │  └─ WebView (Avalonia ctrl) │
-│  ├─ CefVersions (record)    │                  └─────────────────────────────┘
-│  └─ Exclr8Cef.Native        │
+│  └─ Exclr8Cef.Native        │                  └─────────────────────────────┘
 │     (internal P/Invoke,     │
 │      ClangSharp-generated)  │
 └─────────────────────────────┘
@@ -44,85 +127,56 @@ libexclr8cef.{dylib,dll,so}     ← C++ shim, exposes a C ABI under `excef_*`
 libcef.{dylib,dll,so}           ← Chromium Embedded Framework
 ```
 
-**`Exclr8Cef`** — framework-agnostic. Use from any .NET host. Public surface: `Cef.Initialize`, `Cef.CreateBrowser`, `Cef.RunMessageLoop`, `Cef.Shutdown`, `Cef.GetVersions`. Raw P/Invokes are `internal`.
+**`Exclr8Cef`** — framework-agnostic. Use from any .NET host. Public surface: `Cef.*` static facade, `CefBrowser`, `CefRequestContext`, `CefVersions`. Raw P/Invokes are `internal`.
 
-**`Exclr8Cef.WebView`** — Avalonia integration. Adds the `WebView` control. Depends on `Exclr8Cef` and `Avalonia`.
+**`Exclr8Cef.WebView`** — Avalonia integration. Adds the `WebView` control.
 
-Subprocess hosting (renderer/GPU/utility) is in C++, matching CEF's reference implementation. No .NET runtime in helper processes.
+**`Exclr8Cef.Print`** — optional package for advanced PDF print settings.
 
-### Why this layering
+Subprocess hosting (renderer / GPU / utility) is in C++, matching CEF's reference implementation. No .NET runtime in helper processes.
 
-The two reference architectures in production today:
+## Quick start
 
-- **CefSharp** — native shim against CEF's *C++* API, thin .NET on top. Tracks Chromium within weeks. The shim catches CEF API breaks at compile time. Windows-only because it uses C++/CLI.
-- **CefGlue** — pure-managed P/Invoke against CEF's *C* API. Cross-platform but lagging 2+ years. Regex-based header parser is brittle; runtime errors scatter across hundreds of call sites.
+### Use in an Avalonia app
 
-Exclr8CEF takes CefSharp's shim model and ports it to plain C++ with a C ABI for cross-platform reach. ClangSharp replaces CefGlue's regex parser with proper libclang AST analysis — turning every CEF version bump into "regenerate, fix what broke, ship."
-
-## Status
-
-**Stages 1–5, Phases 1–7 complete on macOS arm64.** A real Avalonia desktop app with a `WebView` control that hosts an embedded Chromium browser via off-screen rendering. Win/Linux ride the same cross-platform native code but are CI-tested rather than exercised by hand.
-
-Public C# surface highlights (full API in `src/Exclr8Cef/Cef.cs` and `CefBrowser.cs`):
-
-- **Lifecycle**: `Cef.InitializeForOsr/Shutdown`, `Cef.CreateOffscreenBrowser` (returns `CefBrowser`)
-- **Navigation**: `LoadUrl/GoBack/GoForward/Reload/StopLoad/Close`
-- **Input**: mouse / wheel / keyboard / IME forwarding; clipboard + zoom
-- **Events** (per-browser, on `CefBrowser`): `AddressChanged`, `TitleChanged`, `LoadingStateChanged`, `LoadStart/End/Error`, `LoadingProgress`, `ConsoleMessage`, `StatusMessage`, `TooltipChanged`, `FaviconChanged`, `FullscreenModeChanged`, `CursorChanged`, `ScrollOffsetChanged`, `AutoResize`, `Initialized`, `Closed`, `Painted`, `PopupShow/Size/Painted`, `RenderProcessGone`
-- **Deferred-response handlers**: `JsDialog`, `FileDialog`, `ContextMenu`, `DownloadStarting/Progress`, `AuthRequest`, `FindResult`, `ResourceRequest`, `SchemeRequest`, `PermissionRequest`, `MediaAccessRequest`, `CertError`, `BeforePopup`, `DragStarted`, `DragImage`
-- **JS bridge**: `EvaluateJavaScriptAsync` (with result), `ExecuteJavaScript` (fire-and-forget), `JsInvoke` event for `window.exclr8cef.invoke(...)` calls from the page
-- **Cookies + isolation**: `Cef.GetCookiesAsync/SetCookie/DeleteCookies`, `CefRequestContext` for per-browser cookie/cache isolation
-- **Custom schemes**: `Cef.RegisterCustomScheme` + `SchemeRequest` event
-- **Accessibility**: `SetAccessibilityEnabled` + `AccessibilityTreeChange/LocationChange` (raw Chromium a11y tree as JSON)
-- **PDF**: `PrintToPdfAsync` (+ `Exclr8Cef.Print` extension for headers/footers/margins)
-- **Vision / automation**: `EnableFrameCapture`, `TryCaptureLastFrame`, `FrameStream` (`ChannelReader<PaintFrame>`), `HitTestAtAsync(x,y)` — in-process pixel + DOM-probe access for AI hosts
-
-Demo (`Exclr8Cef.WebView.Demo.app`) has a full toolbar (◀ ▶ ⟳ ✕ Hit-test Capture-PNG DevTools Isolated Run-JS Save-PDF + zoom), a URL bar, a sectioned `app://`-served test page covering every event surface, and a host-side event console pane that color-codes every fired callback.
-
-## Layout
-
-```
-exclr8cef/
-├── README.md                        # this file
-├── LICENSE                          # MIT
-├── .gitignore
-├── .config/
-│   └── dotnet-tools.json            # local tool manifest (ClangSharpPInvokeGenerator)
-├── scripts/
-│   ├── download-cef.sh              # pulls pinned CEF binaries from cef-builds.spotifycdn.com
-│   └── regenerate-bindings.sh       # runs ClangSharp on exclr8cef.h
-├── native/                          # C++ shim and subprocess helper
-│   ├── CMakeLists.txt
-│   ├── shim/                        # The C ABI surface
-│   │   ├── exclr8cef.h              # public C ABI (parsed by ClangSharp)
-│   │   ├── exclr8cef.cc             # cross-platform impl (versions, browser queue)
-│   │   ├── exclr8cef_mac.mm         # macOS: NSApplication, library loader, init/run/shutdown
-│   │   ├── exclr8cef_app.h/.cc      # CefApp + browser creation (Views framework)
-│   │   ├── exclr8cef_client.h/.cc   # CefClient (lifecycle, errors)
-│   │   └── version_probe.c          # native smoke test
-│   ├── helper/                      # Subprocess helper exe (macOS Helper.app)
-│   └── demo/                        # Visual demo: opens chrome://version
-├── src/                             # shipping .NET projects
-│   ├── Exclr8Cef/                   # framework-agnostic NuGet package
-│   │   ├── Exclr8Cef.csproj
-│   │   ├── Cef.cs                   # public static facade
-│   │   ├── CefVersions.cs           # public record
-│   │   ├── generate-bindings.rsp    # ClangSharp config
-│   │   └── Generated/               # ClangSharp output (committed; types are internal)
-│   │       ├── Excef.cs             # internal static class with [DllImport]s
-│   │       ├── excef_versions.cs    # internal struct with [InlineArray(64)] buffers
-│   │       └── *.cs                 # helper attributes
-│   ├── Exclr8Cef.WebView/           # Avalonia integration package
-│   └── runtime/                     # per-RID native runtime package template
-├── samples/                         # example apps, not packed
-│   ├── Exclr8Cef.ConsoleDemo/       # .NET-driven CEF window
-│   └── Exclr8Cef.WebView.Demo/      # Avalonia + embedded WebView
-├── tests/
-│   └── Exclr8Cef.SmokeTest/         # managed equivalent of version_probe
-├── third_party/cef/<platform>/      # extracted CEF (gitignored, ~150 MB)
+```bash
+dotnet add package Exclr8Cef.WebView
 ```
 
-## Building (macOS arm64)
+```xml
+<!-- MainWindow.axaml -->
+<Window xmlns:exclr8="clr-namespace:Exclr8Cef.WebView;assembly=Exclr8Cef.WebView">
+    <!-- OSR (default; good for most cases) -->
+    <exclr8:WebView Url="https://example.com" />
+
+    <!-- or, for media-heavy content, the embedded GPU path: -->
+    <!-- <exclr8:NativeWebView Url="https://example.com" /> -->
+</Window>
+```
+
+```csharp
+// Program.cs — initialize CEF before BuildAvaloniaApp().Start*()
+using Exclr8Cef;
+
+Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
+BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+Cef.Shutdown();
+```
+
+NuGet's `runtime.json` resolution picks the right native runtime package (`runtime.osx-arm64.Exclr8Cef`, `runtime.win-x64.Exclr8Cef`, …) automatically based on the consumer's `RuntimeIdentifier`.
+
+### Process init contract
+
+CEF is process-global: exactly one init call per process lifetime. The controls themselves don't init — the host app picks the init mode, then any combination of `WebView` / `NativeWebView` instances works under that mode.
+
+| Init call | Runtime | OSR (`WebView`) | Embedded (`NativeWebView`) | Windowed Chrome |
+|---|---|---|---|---|
+| `Cef.InitializeForOsr` | Alloy global | ✓ | ✓ | ✗ |
+| `Cef.Initialize` (default) | Chrome | ✗ | ✗ | ✓ |
+
+`Cef.InitializeForOsr` is the right choice for any Avalonia app — it sets `windowless_rendering_enabled = true` (which *enables* OSR without forbidding windowed Alloy browsers) and uses an external message pump so Avalonia stays in charge of the platform run loop. You can then mix `WebView` and `NativeWebView` instances freely in the same window.
+
+### Build from source (macOS arm64)
 
 ```bash
 # 1. Download CEF (~150 MB)
@@ -132,112 +186,62 @@ exclr8cef/
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build --parallel
 
-# 3. Stage 1: smoke test (prints linked CEF + Chromium versions)
+# 3. Smoke test (prints linked CEF + Chromium versions)
 ./native/build/shim/exclr8cef_version_probe
 
-# 4. Stage 2: open a real browser window
-open native/build/demo/Release/exclr8cef_demo.app
-
-# 5. Stage 3: regenerate C# bindings, run the managed smoke test
+# 4. Build managed bindings
 ./scripts/regenerate-bindings.sh
-dotnet run --project tests/Exclr8Cef.SmokeTest
+dotnet build src/Exclr8Cef/Exclr8Cef.csproj
 
-# 6. Stage 4a: build and launch the .NET-driven demo (.app bundle)
-./scripts/build-console-demo.sh
-open samples/Exclr8Cef.ConsoleDemo/bin/Release/Exclr8Cef.ConsoleDemo.app
-
-# 7. Stage 4c: build and launch the Avalonia + embedded WebView demo
+# 5. Launch the demo
 ./scripts/build-avalonia-demo.sh
 open samples/Exclr8Cef.WebView.Demo/bin/Release/Exclr8Cef.WebView.Demo.app
 ```
 
-Expected probe output (identical from native and .NET):
+## Demos
+
+- **`samples/Exclr8Cef.WebView.Demo`** — full Avalonia app. Three modes: OSR (default), embedded native widget (`--mode=embedded`), and windowed Chrome runtime (`--mode=windowed`). Toolbar covers ◀ ▶ ⟳ ✕ Hit-test Capture-PNG DevTools Isolated Run-JS Save-PDF + zoom; the test page exercises every event surface and the host-side event console pane color-codes every fired callback.
+- **`samples/Exclr8Cef.ConsoleDemo`** — .NET-driven CEF host with no UI framework. Default mode opens `chrome://version`. Headless mode (`--url URL --screenshot OUT.png`) renders a page and writes the PNG via `Page.captureScreenshot`. Useful for automation and visual-diff pipelines.
+
+## Repo layout
+
 ```
-Exclr8CEF shim version : 0.2.0-stage2
-CEF version            : 147.0.10
-Chromium version       : 147.0.7727.118
+exclr8cef/
+├── native/                          # C++ shim and subprocess helper
+│   ├── shim/                        # The C ABI surface
+│   │   ├── exclr8cef.h              # public C ABI (parsed by ClangSharp)
+│   │   ├── exclr8cef.cc             # cross-platform impl
+│   │   ├── exclr8cef_mac.mm         # macOS lifecycle + embedded mode
+│   │   ├── exclr8cef_win.cc         # Windows embedded mode
+│   │   ├── exclr8cef_app.cc         # CefApp + browser creation
+│   │   ├── exclr8cef_osr.cc         # OSR handler (load / display / drag / …)
+│   │   └── exclr8cef_print.cc       # optional PDF extension
+│   ├── helper/                      # Subprocess helper exe (macOS Helper.app)
+│   └── demo/                        # Native demo
+├── src/                             # shipping .NET projects
+│   ├── Exclr8Cef/                   # framework-agnostic package
+│   ├── Exclr8Cef.WebView/           # Avalonia integration
+│   ├── Exclr8Cef.Print/             # optional PDF extension
+│   └── runtime/                     # per-RID native runtime package template
+├── samples/                         # example apps
+│   ├── Exclr8Cef.ConsoleDemo/
+│   └── Exclr8Cef.WebView.Demo/
+├── tests/
+├── scripts/                         # CEF download, bindgen, demo packaging
+└── third_party/cef/<platform>/      # extracted CEF (gitignored, ~150 MB)
 ```
 
-The Stage 2 demo opens a window rendering `chrome://version` — confirming end-to-end: download → build → link → helper subprocesses → message loop → browser → Chromium pixels. The Stage 3 smoke test confirms the same path through ClangSharp-generated C# bindings.
+## CEF version policy
 
-## Roadmap
+The pinned Chromium / CEF version lives in `cef.json` at the repo root — single source of truth read by every build script and CI workflow.
 
-| Stage | Goal | Output |
-|---|---|---|
-| **1** ✓ | Scaffolding + version probe | `exclr8cef_version_probe` prints CEF + Chromium versions |
-| **2** ✓ | Full CEF init + subprocess helper | Demo opens chrome://version in a Chromium-rendered window |
-| **3** ✓ | ClangSharp binding generator + idiomatic API | Two-package split: `Exclr8Cef` (framework-agnostic) and `Exclr8Cef.WebView` (Avalonia, Stage 4b). Managed smoke test prints same versions |
-| **4a** ✓ | Console demo: .NET-driven CEF | `Exclr8Cef.ConsoleDemo.app` bundles a self-contained .NET app + CEF framework + 5 Helper.app bundles. Opens chrome://version. |
-| **4b** | Native NSView embedding (abandoned in favor of 4c) | C ABI (`excef_create_browser_view`) builds, but same-process native window embedding hits an obj-c class collision (`ExtensionDropdownHandler` in CEF vs `libAvaloniaNative.dylib`) and Cocoa run-loop ownership conflicts. Kept available in the ABI for non-Avalonia hosts. |
-| **4c** ✓ | OSR Avalonia WebView | `Exclr8Cef.WebView.WebView` control: CEF paints into BGRA buffer → `WriteableBitmap` → Avalonia draw. `Cef.InitializeForOsr` + `Cef.CreateOffscreenBrowser`. |
-| **4d** ✓ | Input forwarding + multi-browser paint dispatch | `Cef.SendMouse*` / `SendKeyEvent` / `SetBrowserFocus`. WebView forwards Pointer/Wheel/Key/TextInput events. Paint handlers keyed in a ConcurrentDictionary so multiple WebView instances coexist. |
-| **4e** ✓ | Navigation, JS, DevTools, browser events | `Cef.LoadUrl/GoBack/GoForward/Reload/StopLoad/CloseBrowser/WasHidden`, `Cef.ExecuteJavaScript`, `Cef.ShowDevTools/CloseDevTools`. Static events `Cef.AddressChanged/TitleChanged/LoadingStateChanged`. WebView surfaces `Title`, `IsLoading`, `CanGoBack`, `CanGoForward` as Avalonia properties. Demo has a full toolbar (◀ ▶ ⟳ ✕ DevTools Save PDF) plus address bar with Enter-to-navigate. |
-| **4f** ✓ | JS eval w/ result, cookies, IME, key map, browser-closed event | `Exclr8CefApp` now also implements `CefRenderProcessHandler`; helper subprocess passes the app to `CefExecuteProcess` so renderer-side IPC works. `Cef.EvaluateJavaScriptAsync` returns a JSON-serialized result via "Eval" / "EvalResult" `CefProcessMessage` round-trip. Cookie API via `CefCookieManager`: `Cef.GetCookiesAsync(url)`, `Cef.SetCookie(url, name, value, ...)`, `Cef.DeleteCookies(url, name)`. `Cef.BrowserClosed` static event from `OnBeforeClose`. IME ABI: `Cef.ImeSetComposition / ImeCommitText / ImeFinishComposing / ImeCancel`. Avalonia `Key` → Windows VK code translation in `KeyMap.cs`. Demo adds a "Run JS" button. |
-| **4g** ✓ | Avalonia IME wired into WebView | `WebViewTextInputMethodClient` extends `Avalonia.Input.TextInput.TextInputMethodClient`. `WebView` subscribes to `TextInputMethodClientRequested` and provides the client. `SetPreeditText` from the platform IME is forwarded to `Cef.ImeSetComposition`; lost focus calls `Cef.ImeCancel`. Composition events (CJK input, dead keys for diacritics) now flow into the embedded Chromium browser. |
-| **5** ✓ | Auto-update pipeline + Windows/Linux readiness | `cef.json` source-of-truth. Cross-platform shim refactor (Windows/Linux now have `excef_initialize_offscreen` / `excef_initialize_external_pump` / `excef_do_message_loop_work`). `Cef.ExecuteProcess` wrapper for Windows/Linux subprocess re-invocation. NuGet packaging: `Exclr8Cef`, `Exclr8Cef.WebView`, and `runtime.<rid>.Exclr8Cef` per-platform packages with `runtime.json` for auto RID resolution. GitHub Actions: `ci.yml` (matrix build), `upstream-check.yml` (cron PR-bot), `release.yml` (tag-driven NuGet publish). |
-| **Phase 1** ✓ | Cheap callback events per-browser | `ConsoleMessage`, `LoadStart/End/Error`, `LoadingProgress`, `StatusMessage`, `TooltipChanged`, `FaviconChanged`, `FullscreenModeChanged`, `Initialized`, `ScrollOffsetChanged`, `AutoResize`, `CanZoom`. CefBrowser instance class introduced; events become per-browser instead of static. |
-| **Phase 2** ✓ | Deferred-response handlers | Token-registry pattern: `JsDialog`, `FileDialog`, `ContextMenu`, `DownloadStarting/Progress`, `AuthRequest`, `FindResult`. CefBrowser owns the registries; OnBeforeClose cancels everything for a closing browser. |
-| **Phase 4** ✓ | CefSettings exposure, render-process termination, custom schemes, resource interception | `CefSettings` via `Cef.SetInitSettings`. `RenderProcessGone` event. `RegisterCustomScheme` + `SchemeRequest` event for `app://`-style routing (env-var propagation to subprocesses). `ResourceRequest` event for per-request header inject / cancel. |
-| **Phase 5** ✓ | OSR popups, per-browser request context, JS bridge, accessibility | `PopupShow/Size/Painted` so `<select>` dropdowns render. `CefRequestContext` for incognito-style isolation. `window.exclr8cef.invoke(method, args)` installed via `OnContextCreated` → `JsInvoke` event on host. `AccessibilityTreeChange/LocationChange` stream the Chromium a11y tree as JSON. |
-| **Phase 6** ✓ | Drag / permissions / popup intercept / TLS errors | `DragStarted`+`DragImage` (drag-target funcs + start-drag callback + ghost overlay). `PermissionRequest` + `MediaAccessRequest` (handler wired; Alloy+OSR runtime denies notifications/geolocation/getUserMedia upstream of the handler — by design). `BeforePopup` cancels at CEF layer and routes URL to host. `CertError` deferred-response with X.509 subject/issuer. |
-| **Phase 7** ✓ | Vision / automation surface | `EnableFrameCapture` + `TryCaptureLastFrame` for sync BGRA access. `FrameStream` bounded-drop-oldest channel for an agent loop. `HitTestAtAsync(x,y)` returns the DOM element at that point via the JS bridge. Demo toolbar buttons: Capture PNG, Hit-test mode. |
-| **6** | Polish | Code signing, App Store / notarization, additional handler categories (audio, keyboard, focus, print dialog), Win/Linux manual exercise. |
+- `upstream-check.yml` runs daily and opens a `chore(cef): bump to <version>` PR when a newer stable is available
+- `ci.yml` builds the 4-RID matrix on every push/PR
+- `release.yml` tags trigger a publish of `Exclr8Cef`, `Exclr8Cef.WebView`, `Exclr8Cef.Print`, and the per-RID `runtime.<rid>.Exclr8Cef` packages to nuget.org
 
 ## C ABI naming
 
-All exported symbols use the `excef_` prefix (e.g. `excef_initialize`, `excef_create_browser`). This is the surface ClangSharp parses to generate C# P/Invoke; keeping it short and consistent matters for the generator output.
-
-## CEF version pinning + auto-update
-
-The pinned CEF version lives in **`cef.json`** at the repo root — single source of truth read by every build script and CI workflow.
-
-### Manual bump
-
-```bash
-./scripts/check-cef-upstream.sh           # exit 1 if upstream is newer
-./scripts/bump-cef.sh "147.0.11+abc..."   # rewrites cef.json
-rm -rf third_party/cef/                   # force re-download
-./scripts/download-cef.sh
-cmake --build native/build --parallel
-./scripts/regenerate-bindings.sh          # if API changed
-dotnet build tests/Exclr8Cef.SmokeTest
-```
-
-### Automatic bump (on GitHub)
-
-Three workflows in `.github/workflows/`:
-
-| Workflow | Trigger | What it does |
-|---|---|---|
-| `ci.yml` | push to main, PRs | 4-RID matrix (osx-arm64, osx-x64, win-x64, linux-x64): downloads CEF, builds native shim, regenerates bindings, builds managed, runs smoke test, uploads demo binaries as artifacts |
-| `upstream-check.yml` | daily at 09:00 UTC + manual | Hits `cef-builds.spotifycdn.com/index.json`. If newer stable than `cef.json`, opens (or updates) a PR titled `chore(cef): bump to <version>`. The PR triggers `ci.yml`. |
-| `release.yml` | `v*` tag | Builds native + managed across all RIDs. Packs `runtime.<rid>.Exclr8Cef.nupkg` per platform (~135 MB compressed for macOS, smaller elsewhere) plus `Exclr8Cef.nupkg` and `Exclr8Cef.WebView.nupkg`. Pushes to `nuget.org` using the `NUGET_API_KEY` secret. |
-
-### Distribution shape
-
-NuGet packages produced per release (5 + 2 + 2 = 9 .nupkg files):
-
-```
-Exclr8Cef.<version>.nupkg                    ← managed bindings + runtime.json
-Exclr8Cef.WebView.<version>.nupkg            ← Avalonia control
-runtime.osx-arm64.Exclr8Cef.<version>.nupkg  ← native shim + CEF framework (per RID)
-runtime.osx-x64.Exclr8Cef.<version>.nupkg
-runtime.win-x64.Exclr8Cef.<version>.nupkg
-runtime.linux-x64.Exclr8Cef.<version>.nupkg
-runtime.linux-arm64.Exclr8Cef.<version>.nupkg
-```
-
-Consumers add `Exclr8Cef.WebView`. NuGet's `runtime.json` resolution picks the matching `runtime.<rid>.Exclr8Cef` automatically based on the consumer's `RuntimeIdentifier`.
-
-**macOS caveat:** the native files land in `runtimes/osx-arm64/native/` after restore but `dotnet publish` won't auto-build a `.app` bundle. Use `scripts/build-avalonia-demo.sh` as a template for the `.app` packaging step. Windows and Linux work out of the box with `dotnet publish`.
-
-### Setup needed before workflows run
-
-After `git push` to GitHub:
-
-1. Configure `NUGET_API_KEY` repo secret (Settings → Secrets and variables → Actions).
-2. Optional: create a `nuget-publish` GitHub environment that gates releases on a manual approval.
-3. The `upstream-check.yml` workflow needs `contents: write` + `pull-requests: write` (already declared in the workflow); ensure the default `GITHUB_TOKEN` permissions or branch protection allow auto-PRs.
+All exported native symbols use the `excef_` prefix (e.g. `excef_initialize`, `excef_create_browser`). This is the surface ClangSharp parses; keeping it short and consistent matters for the generator output.
 
 ## License
 
