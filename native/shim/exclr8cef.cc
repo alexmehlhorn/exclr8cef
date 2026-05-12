@@ -86,7 +86,7 @@ extern "C" void excef_set_init_settings(const excef_init_settings* in) {
 
 namespace {
 
-constexpr const char kShimVersion[] = "0.7.1";
+constexpr const char kShimVersion[] = "0.7.2";
 
 void copy_to(char* dst, size_t dst_size, const char* src) {
     if (!dst || dst_size == 0) return;

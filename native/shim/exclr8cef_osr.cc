@@ -481,17 +481,29 @@ void Exclr8CefOsrHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> /*browser*/,
                                               const RectList& /*dirtyRects*/,
                                               const CefAcceleratedPaintInfo& info) {
     if (!g_accelerated_paint_cb) return;
-    // On macOS info.shared_texture_io_surface is the IOSurface handle.
-    // On Windows / Linux the corresponding field is on the same struct
-    // (compile-time selected by cef_types_<plat>.h). Either way it's a
-    // void* — the host casts back to the platform-specific type.
+    // CefAcceleratedPaintInfo's shared-texture field name is
+    // platform-specific (compile-time selected via cef_types_<plat>.h):
+    //   macOS  : shared_texture_io_surface  (IOSurfaceRef)
+    //   Windows: shared_texture_handle      (HANDLE — NT shared handle, D3D11)
+    //   Linux  : no single handle — array of dma-buf `planes`. The C ABI
+    //            takes a single void*, so we surface nullptr; a host that
+    //            needs Linux GPU consumption has to extend the ABI to
+    //            carry the plane array. For now the event still fires so
+    //            timing / format / dims are usable.
+#if defined(__APPLE__)
+    const void* shared_handle = info.shared_texture_io_surface;
+#elif defined(_WIN32)
+    const void* shared_handle = info.shared_texture_handle;
+#else
+    const void* shared_handle = nullptr;
+#endif
     g_accelerated_paint_cb(id_,
                             static_cast<int>(type),
                             info.extra.coded_size.width,
                             info.extra.coded_size.height,
                             static_cast<int>(info.format),
                             info.extra.timestamp,
-                            info.shared_texture_io_surface);
+                            shared_handle);
 }
 
 void Exclr8CefOsrHandler::GetTouchHandleSize(CefRefPtr<CefBrowser> /*browser*/,
@@ -1358,7 +1370,7 @@ bool Exclr8CefOsrHandler::OnBeforePopup(
         int /*popup_id*/,
         const CefString& target_url,
         const CefString& target_frame_name,
-        WindowOpenDisposition target_disposition,
+        cef_window_open_disposition_t target_disposition,
         bool user_gesture,
         const CefPopupFeatures& /*popupFeatures*/,
         CefWindowInfo& /*windowInfo*/,

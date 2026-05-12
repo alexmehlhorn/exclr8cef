@@ -6,7 +6,7 @@
       dotnet pack src/runtime/runtime.csproj \
         -p:Exclr8CefRid=osx-arm64 \
         -p:Exclr8CefStagingDir=/abs/path/to/staging \
-        -p:Exclr8CefVersion=0.7.1
+        -p:Exclr8CefVersion=0.7.2
 
     Where Exclr8CefStagingDir contains a `runtimes/<rid>/native/` tree
     populated by scripts/stage-native-files.sh with libexclr8cef.{dylib,dll,so}
@@ -28,7 +28,7 @@
   <PropertyGroup Label="Packaging">
     <PackageId>runtime.$(Exclr8CefRid).Exclr8Cef</PackageId>
     <Version Condition="'$(Exclr8CefVersion)' != ''">$(Exclr8CefVersion)</Version>
-    <Version Condition="'$(Exclr8CefVersion)' == ''">0.7.1</Version>
+    <Version Condition="'$(Exclr8CefVersion)' == ''">0.7.2</Version>
     <Authors>Exclr8</Authors>
     <Description>Exclr8CEF native runtime files for $(Exclr8CefRid). Auto-resolved at restore time via runtime.json in the Exclr8Cef package.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
