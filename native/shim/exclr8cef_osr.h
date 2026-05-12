@@ -13,6 +13,7 @@
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_accessibility_handler.h"
+#include "include/cef_audio_handler.h"
 #include "include/cef_focus_handler.h"
 #include "include/cef_frame_handler.h"
 #include "include/cef_keyboard_handler.h"
@@ -42,7 +43,8 @@ class Exclr8CefOsrHandler : public CefClient,
                             public CefPermissionHandler,
                             public CefFocusHandler,
                             public CefKeyboardHandler,
-                            public CefFrameHandler {
+                            public CefFrameHandler,
+                            public CefAudioHandler {
 public:
     Exclr8CefOsrHandler(int id, int width, int height, float device_scale_factor,
                         excef_paint_callback_t paint_cb);
@@ -68,6 +70,9 @@ public:
     CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
     CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     CefRefPtr<CefFrameHandler> GetFrameHandler() override { return this; }
+    // Only opt in to audio capture when the host has installed a packet
+    // callback — otherwise CEF spends cycles streaming PCM nobody reads.
+    CefRefPtr<CefAudioHandler> GetAudioHandler() override;
 
     bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
@@ -212,6 +217,20 @@ public:
     bool OnKeyEvent(CefRefPtr<CefBrowser> browser,
                      const CefKeyEvent& event,
                      CefEventHandle os_event) override;
+
+    // CefAudioHandler
+    bool GetAudioParameters(CefRefPtr<CefBrowser> browser,
+                              CefAudioParameters& params) override;
+    void OnAudioStreamStarted(CefRefPtr<CefBrowser> browser,
+                                const CefAudioParameters& params,
+                                int channels) override;
+    void OnAudioStreamPacket(CefRefPtr<CefBrowser> browser,
+                               const float** data,
+                               int frames,
+                               int64_t pts) override;
+    void OnAudioStreamStopped(CefRefPtr<CefBrowser> browser) override;
+    void OnAudioStreamError(CefRefPtr<CefBrowser> browser,
+                              const CefString& message) override;
 
     // CefFrameHandler
     void OnFrameCreated(CefRefPtr<CefBrowser> browser,

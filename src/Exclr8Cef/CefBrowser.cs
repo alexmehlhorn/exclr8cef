@@ -341,6 +341,23 @@ public sealed class CefBrowser : IDisposable
     /// </summary>
     public event EventHandler<MainFrameChangedEventArgs>? MainFrameChanged;
 
+    /// <summary>CefAudioHandler::OnAudioStreamStarted.</summary>
+    public event EventHandler<AudioStreamStartedEventArgs>? AudioStreamStarted;
+
+    /// <summary>
+    /// CefAudioHandler::OnAudioStreamPacket. Interleaved float PCM in the
+    /// channel count + sample rate reported by AudioStreamStarted. The
+    /// buffer pointer is only valid for the duration of the handler — copy
+    /// what you need.
+    /// </summary>
+    public event EventHandler<AudioPacketEventArgs>? AudioPacket;
+
+    /// <summary>CefAudioHandler::OnAudioStreamStopped.</summary>
+    public event EventHandler? AudioStreamStopped;
+
+    /// <summary>CefAudioHandler::OnAudioStreamError — message describes the cause.</summary>
+    public event EventHandler<string>? AudioStreamError;
+
     /// <summary>
     /// Fires once, when the underlying CefBrowser is constructed and ready
     /// for operations that need a CefBrowser ref. See <see cref="IsInitialized"/>.
@@ -625,6 +642,25 @@ public sealed class CefBrowser : IDisposable
             try { Excef.excef_add_word_to_dictionary(Id, p); }
             finally { Marshal.FreeCoTaskMem((IntPtr)p); }
         }
+    }
+
+    // ---- Audio ----------------------------------------------------------
+
+    /// <summary>
+    /// Enable / disable PCM audio capture for this browser. Off by default.
+    /// When enabled, AudioStreamStarted fires once a media element begins
+    /// playing, followed by AudioPacket per chunk, ending with AudioStreamStopped.
+    /// </summary>
+    public void EnableAudioCapture(bool enable)
+    {
+        if (!_closed) Excef.excef_enable_audio_capture(Id, enable ? 1 : 0);
+    }
+
+    /// <summary>Mute / unmute this browser's audio output (independent of capture).</summary>
+    public bool AudioMuted
+    {
+        get => !_closed && Excef.excef_is_audio_muted(Id) != 0;
+        set { if (!_closed) Excef.excef_set_audio_muted(Id, value ? 1 : 0); }
     }
 
     /// <summary>
@@ -1207,6 +1243,14 @@ public sealed class CefBrowser : IDisposable
         => FrameLifecycle?.Invoke(this, args);
     internal void RaiseMainFrameChanged(MainFrameChangedEventArgs args)
         => MainFrameChanged?.Invoke(this, args);
+    internal void RaiseAudioStarted(AudioStreamStartedEventArgs args)
+        => AudioStreamStarted?.Invoke(this, args);
+    internal void RaiseAudioPacket(AudioPacketEventArgs args)
+        => AudioPacket?.Invoke(this, args);
+    internal void RaiseAudioStopped()
+        => AudioStreamStopped?.Invoke(this, EventArgs.Empty);
+    internal void RaiseAudioError(string message)
+        => AudioStreamError?.Invoke(this, message);
 
     /// <summary>
     /// Enable / disable the accessibility-tree event stream. Off by
@@ -2189,5 +2233,59 @@ public sealed class MainFrameChangedEventArgs : EventArgs
     {
         OldFrameId = oldFrameId;
         NewFrameId = newFrameId;
+    }
+}
+
+/// <summary>
+/// Stream parameters reported by CefAudioHandler::OnAudioStreamStarted.
+/// <see cref="Channels"/> is what subsequent <see cref="AudioPacketEventArgs"/>
+/// callbacks will deliver in interleaved order.
+/// </summary>
+public sealed class AudioStreamStartedEventArgs : EventArgs
+{
+    /// <summary>cef_channel_layout_t enum value (raw integer).</summary>
+    public int ChannelLayout { get; }
+    public int SampleRate { get; }
+    public int FramesPerBuffer { get; }
+    public int Channels { get; }
+    public AudioStreamStartedEventArgs(int channelLayout, int sampleRate, int framesPerBuffer, int channels)
+    {
+        ChannelLayout = channelLayout;
+        SampleRate = sampleRate;
+        FramesPerBuffer = framesPerBuffer;
+        Channels = channels;
+    }
+}
+
+/// <summary>
+/// A single audio packet of interleaved float PCM. <see cref="Buffer"/>
+/// points at <c>Frames × Channels</c> floats; the pointer is only valid
+/// for the duration of the handler. Copy what you need.
+/// </summary>
+public sealed class AudioPacketEventArgs : EventArgs
+{
+    /// <summary>Pointer to <c>Frames × Channels</c> interleaved float32 samples.</summary>
+    public IntPtr Buffer { get; }
+    public int Frames { get; }
+    public int Channels { get; }
+    /// <summary>Presentation timestamp in microseconds since stream start.</summary>
+    public long PtsMicroseconds { get; }
+    public AudioPacketEventArgs(IntPtr buffer, int frames, int channels, long ptsUs)
+    {
+        Buffer = buffer;
+        Frames = frames;
+        Channels = channels;
+        PtsMicroseconds = ptsUs;
+    }
+
+    /// <summary>Convenience: copy the PCM into a managed float[] sized Frames*Channels.</summary>
+    public unsafe float[] CopyToArray()
+    {
+        var arr = new float[Frames * Channels];
+        fixed (float* dst = arr)
+        {
+            System.Buffer.MemoryCopy((void*)Buffer, dst, arr.Length * sizeof(float), arr.Length * sizeof(float));
+        }
+        return arr;
     }
 }

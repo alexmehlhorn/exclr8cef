@@ -84,6 +84,28 @@ public sealed class CefRequestContext : IDisposable
     /// <summary>Tear down all live TCP connections (useful on logout).</summary>
     public void CloseAllConnections() => Excef.excef_close_all_connections(_handle);
 
+    // ---- Cookies (per-context) ----------------------------------------
+
+    /// <summary>
+    /// Read cookies from this context's cookie jar. Empty/null url returns
+    /// all cookies.
+    /// </summary>
+    public Task<List<Cef.CookieInfo>> GetCookiesAsync(string? url = null)
+        => Cef.GetCookiesAsyncInContext(_handle, url);
+
+    /// <summary>Set a cookie in this context's cookie jar.</summary>
+    public bool SetCookie(string url, string name, string value,
+                            string? domain = null, string? path = null,
+                            bool secure = false, bool httpOnly = false)
+        => Cef.SetCookieInContext(_handle, url, name, value, domain, path, secure, httpOnly);
+
+    /// <summary>
+    /// Delete cookies in this context's cookie jar matching url + name
+    /// (either or both may be empty).
+    /// </summary>
+    public void DeleteCookies(string? url = null, string? name = null)
+        => Cef.DeleteCookiesInContext(_handle, url, name);
+
     /// <summary>
     /// Process-wide / global request context — used by browsers created
     /// without a specific context.

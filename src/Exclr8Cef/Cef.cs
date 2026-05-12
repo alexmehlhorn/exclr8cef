@@ -472,9 +472,22 @@ public static class Cef
         bool HttpOnly);
 
     /// <summary>
-    /// Get cookies. Pass empty/null <paramref name="url"/> to get all cookies.
+    /// Get cookies from the global cookie manager. Pass empty/null
+    /// <paramref name="url"/> to get all cookies. For partitioned cookies
+    /// (per-profile) use <see cref="CefRequestContext.GetCookiesAsync"/>.
     /// </summary>
     public static Task<List<CookieInfo>> GetCookiesAsync(string? url = null)
+        => GetCookiesAsyncInContext(0, url);
+
+    public static bool SetCookie(string url, string name, string value,
+                                  string? domain = null, string? path = null,
+                                  bool secure = false, bool httpOnly = false)
+        => SetCookieInContext(0, url, name, value, domain, path, secure, httpOnly);
+
+    public static void DeleteCookies(string? url = null, string? name = null)
+        => DeleteCookiesInContext(0, url, name);
+
+    internal static Task<List<CookieInfo>> GetCookiesAsyncInContext(int contextHandle, string? url)
     {
         int reqId = Interlocked.Increment(ref s_nextCookieRequestId);
         var tcs = new TaskCompletionSource<List<CookieInfo>>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -485,7 +498,7 @@ public static class Cef
             sbyte* urlPtr = url is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
             try
             {
-                int got = Excef.excef_get_cookies(urlPtr, reqId);
+                int got = Excef.excef_get_cookies_in_context(contextHandle, urlPtr, reqId);
                 if (got == 0)
                 {
                     s_cookieRequests.TryRemove(reqId, out _);
@@ -500,9 +513,10 @@ public static class Cef
         return tcs.Task;
     }
 
-    public static bool SetCookie(string url, string name, string value,
-                                  string? domain = null, string? path = null,
-                                  bool secure = false, bool httpOnly = false)
+    internal static bool SetCookieInContext(int contextHandle,
+                                              string url, string name, string value,
+                                              string? domain, string? path,
+                                              bool secure, bool httpOnly)
     {
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(name);
@@ -515,8 +529,9 @@ public static class Cef
             sbyte* pathPtr = path is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(path);
             try
             {
-                return Excef.excef_set_cookie(urlPtr, namePtr, valuePtr, domainPtr, pathPtr,
-                                              secure ? 1 : 0, httpOnly ? 1 : 0) != 0;
+                return Excef.excef_set_cookie_in_context(contextHandle, urlPtr, namePtr, valuePtr,
+                                                          domainPtr, pathPtr,
+                                                          secure ? 1 : 0, httpOnly ? 1 : 0) != 0;
             }
             finally
             {
@@ -529,13 +544,13 @@ public static class Cef
         }
     }
 
-    public static void DeleteCookies(string? url = null, string? name = null)
+    internal static void DeleteCookiesInContext(int contextHandle, string? url, string? name)
     {
         unsafe
         {
             sbyte* urlPtr = url is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(url);
             sbyte* namePtr = name is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
-            try { Excef.excef_delete_cookies(urlPtr, namePtr); }
+            try { Excef.excef_delete_cookies_in_context(contextHandle, urlPtr, namePtr); }
             finally
             {
                 if (urlPtr is not null) Marshal.FreeCoTaskMem((IntPtr)urlPtr);
@@ -947,6 +962,10 @@ public static class Cef
                 Excef.excef_set_nav_entry_callback(&NavEntryTrampoline);
                 Excef.excef_set_frame_lifecycle_callback(&FrameLifecycleTrampoline);
                 Excef.excef_set_main_frame_changed_callback(&MainFrameChangedTrampoline);
+                Excef.excef_set_audio_stream_started_callback(&AudioStreamStartedTrampoline);
+                Excef.excef_set_audio_stream_packet_callback(&AudioStreamPacketTrampoline);
+                Excef.excef_set_audio_stream_stopped_callback(&AudioStreamStoppedTrampoline);
+                Excef.excef_set_audio_stream_error_callback(&AudioStreamErrorTrampoline);
             }
             s_eventsRegistered = true;
         }
@@ -1628,6 +1647,42 @@ public static class Cef
             Marshal.PtrToStringUTF8((IntPtr)oldFrameId) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)newFrameId) ?? "");
         try { b.RaiseMainFrameChanged(args); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AudioStreamStartedTrampoline(
+        int browserId, int channelLayout, int sampleRate, int framesPerBuffer, int channels)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        try { b.RaiseAudioStarted(new AudioStreamStartedEventArgs(channelLayout, sampleRate, framesPerBuffer, channels)); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AudioStreamPacketTrampoline(
+        int browserId, float* interleaved, int frames, int channels, long ptsUs)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var args = new AudioPacketEventArgs((IntPtr)interleaved, frames, channels, ptsUs);
+        try { b.RaiseAudioPacket(args); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AudioStreamStoppedTrampoline(int browserId)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        try { b.RaiseAudioStopped(); }
+        catch { }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void AudioStreamErrorTrampoline(int browserId, sbyte* message)
+    {
+        if (!s_browsers.TryGetValue(browserId, out var b)) return;
+        var msg = Marshal.PtrToStringUTF8((IntPtr)message) ?? "";
+        try { b.RaiseAudioError(msg); }
         catch { }
     }
 

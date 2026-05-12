@@ -80,6 +80,27 @@ internal static unsafe partial class Excef
     public static extern void excef_set_main_frame_changed_callback([NativeTypeName("excef_main_frame_changed_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_enable_audio_capture(int browser_id, int enable);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_audio_stream_started_callback([NativeTypeName("excef_audio_stream_started_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_audio_stream_packet_callback([NativeTypeName("excef_audio_stream_packet_cb_t")] delegate* unmanaged[Cdecl]<int, float*, int, int, long, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_audio_stream_stopped_callback([NativeTypeName("excef_audio_stream_stopped_cb_t")] delegate* unmanaged[Cdecl]<int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_audio_stream_error_callback([NativeTypeName("excef_audio_stream_error_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_audio_muted(int browser_id, int muted);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_is_audio_muted(int browser_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_copy(int browser_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -213,6 +234,15 @@ internal static unsafe partial class Excef
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_delete_cookies([NativeTypeName("const char *")] sbyte* url, [NativeTypeName("const char *")] sbyte* name);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_cookies_in_context(int context_handle, [NativeTypeName("const char *")] sbyte* url, int request_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_set_cookie_in_context(int context_handle, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("const char *")] sbyte* name, [NativeTypeName("const char *")] sbyte* value, [NativeTypeName("const char *")] sbyte* domain, [NativeTypeName("const char *")] sbyte* path, int secure, int httponly);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_delete_cookies_in_context(int context_handle, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("const char *")] sbyte* name);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_browser_closed_callback([NativeTypeName("excef_browser_closed_cb_t")] delegate* unmanaged[Cdecl]<int, void> cb);

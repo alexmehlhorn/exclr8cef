@@ -5,6 +5,8 @@
 #ifndef EXCLR8CEF_H_
 #define EXCLR8CEF_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -203,6 +205,45 @@ typedef void (*excef_main_frame_changed_cb_t)(int browser_id,
                                                  const char* old_frame_id,
                                                  const char* new_frame_id);
 EXCEF_API void excef_set_main_frame_changed_callback(excef_main_frame_changed_cb_t cb);
+
+// ---- Audio capture (CefAudioHandler) -----------------------------------
+//
+// Captures the tab's audio output. The shim interleaves the planar float
+// PCM CEF emits into a single buffer per packet so the host doesn't have
+// to dereference the channel pointer array across the FFI boundary.
+//
+// Audio capture is OFF by default; calling `excef_enable_audio_capture(id, 1)`
+// installs the handler. CEF won't emit packets until at least one media
+// element is playing.
+
+EXCEF_API void excef_enable_audio_capture(int browser_id, int enable);
+
+typedef void (*excef_audio_stream_started_cb_t)(int browser_id,
+                                                  int channel_layout,
+                                                  int sample_rate,
+                                                  int frames_per_buffer,
+                                                  int channels);
+EXCEF_API void excef_set_audio_stream_started_callback(excef_audio_stream_started_cb_t cb);
+
+// `interleaved` is a buffer of `frames * channels` float samples in CHANNEL
+// order (LRLR…). Pointer is only valid for the duration of the callback —
+// copy if you need to retain. `pts` is microseconds since stream start.
+typedef void (*excef_audio_stream_packet_cb_t)(int browser_id,
+                                                 const float* interleaved,
+                                                 int frames,
+                                                 int channels,
+                                                 int64_t pts_us);
+EXCEF_API void excef_set_audio_stream_packet_callback(excef_audio_stream_packet_cb_t cb);
+
+typedef void (*excef_audio_stream_stopped_cb_t)(int browser_id);
+EXCEF_API void excef_set_audio_stream_stopped_callback(excef_audio_stream_stopped_cb_t cb);
+
+typedef void (*excef_audio_stream_error_cb_t)(int browser_id, const char* message);
+EXCEF_API void excef_set_audio_stream_error_callback(excef_audio_stream_error_cb_t cb);
+
+// Mute / unmute the browser's audio output. Mute state is per-browser.
+EXCEF_API void excef_set_audio_muted(int browser_id, int muted);
+EXCEF_API int excef_is_audio_muted(int browser_id);
 
 // Clipboard / editing primitives. Operate on the browser's focused frame.
 // CEF in OSR mode does not auto-execute these from keyboard accelerators;
@@ -422,6 +463,16 @@ EXCEF_API int excef_set_cookie(const char* url,
 
 // Delete cookies matching url + name (either may be empty).
 EXCEF_API void excef_delete_cookies(const char* url, const char* name);
+
+// Same three operations on the cookie manager belonging to a specific
+// CefRequestContext. context_handle = 0 → global manager (same as the
+// non-suffixed variants). Lets the host partition cookies by profile.
+EXCEF_API int excef_get_cookies_in_context(int context_handle, const char* url, int request_id);
+EXCEF_API int excef_set_cookie_in_context(int context_handle, const char* url,
+                                            const char* name, const char* value,
+                                            const char* domain, const char* path,
+                                            int secure, int httponly);
+EXCEF_API void excef_delete_cookies_in_context(int context_handle, const char* url, const char* name);
 
 // ---- Browser-closed event ------------------------------------------------
 

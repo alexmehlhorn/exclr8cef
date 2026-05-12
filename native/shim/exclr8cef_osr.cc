@@ -90,6 +90,13 @@ excef_before_popup_cb_t g_before_popup_cb = nullptr;
 excef_cert_error_cb_t g_cert_error_cb = nullptr;
 excef_frame_lifecycle_cb_t g_frame_lifecycle_cb = nullptr;
 excef_main_frame_changed_cb_t g_main_frame_changed_cb = nullptr;
+excef_audio_stream_started_cb_t g_audio_started_cb = nullptr;
+excef_audio_stream_packet_cb_t g_audio_packet_cb = nullptr;
+excef_audio_stream_stopped_cb_t g_audio_stopped_cb = nullptr;
+excef_audio_stream_error_cb_t g_audio_error_cb = nullptr;
+// Per-browser audio-capture enable flag (set via excef_enable_audio_capture).
+std::map<int, bool> g_audio_enabled;
+std::mutex g_audio_enabled_mu;
 
 // Deferred-response registries (one per callback type — the CEF callback
 // shape differs across handlers). The owning browser_id lets OnBeforeClose
@@ -640,6 +647,70 @@ void Exclr8CefOsrHandler::OnMainFrameChanged(CefRefPtr<CefBrowser> /*browser*/,
     if (old_frame) oldId = old_frame->GetIdentifier().ToString();
     if (new_frame) newId = new_frame->GetIdentifier().ToString();
     g_main_frame_changed_cb(id_, oldId.c_str(), newId.c_str());
+}
+
+// ---- CefAudioHandler ------------------------------------------------------
+
+CefRefPtr<CefAudioHandler> Exclr8CefOsrHandler::GetAudioHandler() {
+    std::lock_guard<std::mutex> lock(g_audio_enabled_mu);
+    auto it = g_audio_enabled.find(id_);
+    return (it != g_audio_enabled.end() && it->second) ? this : nullptr;
+}
+
+bool Exclr8CefOsrHandler::GetAudioParameters(CefRefPtr<CefBrowser> /*browser*/,
+                                              CefAudioParameters& /*params*/) {
+    // Accept whatever CEF picked (default 48kHz stereo). Returning false
+    // here would block audio entirely; returning true lets CEF proceed.
+    return true;
+}
+
+void Exclr8CefOsrHandler::OnAudioStreamStarted(CefRefPtr<CefBrowser> /*browser*/,
+                                                const CefAudioParameters& params,
+                                                int channels) {
+    if (g_audio_started_cb) {
+        g_audio_started_cb(id_,
+                            static_cast<int>(params.channel_layout),
+                            params.sample_rate,
+                            params.frames_per_buffer,
+                            channels);
+    }
+}
+
+void Exclr8CefOsrHandler::OnAudioStreamPacket(CefRefPtr<CefBrowser> /*browser*/,
+                                                const float** data,
+                                                int frames,
+                                                int64_t pts) {
+    if (!g_audio_packet_cb || frames <= 0 || !data) return;
+    // CEF gives us planar PCM (data[c][f]). Interleave to data[f*C+c] so
+    // the host doesn't have to walk channel pointers across the FFI.
+    // The channel count isn't passed here, but it matches what was given
+    // in OnAudioStreamStarted — we cache nothing and trust the host to
+    // remember it from the stream-started callback.
+    // Allocate on stack for typical buffers (≤ 4096 frames * 8 ch * 4B = 128KB);
+    // for safety use a small fixed cap.
+    constexpr int kMaxChannels = 8;
+    int channels = 0;
+    while (channels < kMaxChannels && data[channels] != nullptr) ++channels;
+    if (channels == 0) return;
+    std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+    for (int f = 0; f < frames; ++f) {
+        for (int c = 0; c < channels; ++c) {
+            interleaved[f * channels + c] = data[c][f];
+        }
+    }
+    g_audio_packet_cb(id_, interleaved.data(), frames, channels, pts);
+}
+
+void Exclr8CefOsrHandler::OnAudioStreamStopped(CefRefPtr<CefBrowser> /*browser*/) {
+    if (g_audio_stopped_cb) g_audio_stopped_cb(id_);
+}
+
+void Exclr8CefOsrHandler::OnAudioStreamError(CefRefPtr<CefBrowser> /*browser*/,
+                                              const CefString& message) {
+    if (g_audio_error_cb) {
+        std::string m = message.ToString();
+        g_audio_error_cb(id_, m.c_str());
+    }
 }
 
 bool Exclr8CefOsrHandler::OnCertificateError(
@@ -1385,13 +1456,21 @@ extern "C" int excef_create_request_context(const char* cache_path) {
     return handle;
 }
 
-namespace {
+namespace exclr8cef {
 CefRefPtr<CefRequestContext> ResolveContext(int handle) {
     if (handle == 0) return CefRequestContext::GetGlobalContext();
-    std::lock_guard<std::mutex> lock(exclr8cef::g_request_contexts_mu);
-    auto it = exclr8cef::g_request_contexts.find(handle);
-    if (it == exclr8cef::g_request_contexts.end()) return nullptr;
+    std::lock_guard<std::mutex> lock(g_request_contexts_mu);
+    auto it = g_request_contexts.find(handle);
+    if (it == g_request_contexts.end()) return nullptr;
     return it->second;
+}
+}  // namespace exclr8cef
+
+namespace {
+// Shadow alias so the dozen existing callers below (in the anon namespace)
+// keep working with the unqualified name.
+inline CefRefPtr<CefRequestContext> ResolveContext(int handle) {
+    return exclr8cef::ResolveContext(handle);
 }
 }  // namespace
 
@@ -1514,6 +1593,52 @@ extern "C" void excef_set_frame_lifecycle_callback(excef_frame_lifecycle_cb_t cb
 
 extern "C" void excef_set_main_frame_changed_callback(excef_main_frame_changed_cb_t cb) {
     exclr8cef::g_main_frame_changed_cb = cb;
+}
+
+extern "C" void excef_enable_audio_capture(int browser_id, int enable) {
+    {
+        std::lock_guard<std::mutex> lock(exclr8cef::g_audio_enabled_mu);
+        exclr8cef::g_audio_enabled[browser_id] = enable != 0;
+    }
+    // Force CEF to re-query handlers so the toggle takes effect on the
+    // next stream-start. There's no direct "rebind" call; closing the
+    // browser or starting/stopping media triggers re-query. The host can
+    // call WasResized to nudge a layout/handler refresh.
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it != exclr8cef::g_osr_browsers.end()) {
+        auto b = it->second->browser();
+        if (b) b->GetHost()->WasResized();
+    }
+}
+
+extern "C" void excef_set_audio_stream_started_callback(excef_audio_stream_started_cb_t cb) {
+    exclr8cef::g_audio_started_cb = cb;
+}
+
+extern "C" void excef_set_audio_stream_packet_callback(excef_audio_stream_packet_cb_t cb) {
+    exclr8cef::g_audio_packet_cb = cb;
+}
+
+extern "C" void excef_set_audio_stream_stopped_callback(excef_audio_stream_stopped_cb_t cb) {
+    exclr8cef::g_audio_stopped_cb = cb;
+}
+
+extern "C" void excef_set_audio_stream_error_callback(excef_audio_stream_error_cb_t cb) {
+    exclr8cef::g_audio_error_cb = cb;
+}
+
+extern "C" void excef_set_audio_muted(int browser_id, int muted) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return;
+    auto b = it->second->browser();
+    if (b) b->GetHost()->SetAudioMuted(muted != 0);
+}
+
+extern "C" int excef_is_audio_muted(int browser_id) {
+    auto it = exclr8cef::g_osr_browsers.find(browser_id);
+    if (it == exclr8cef::g_osr_browsers.end()) return 0;
+    auto b = it->second->browser();
+    return (b && b->GetHost()->IsAudioMuted()) ? 1 : 0;
 }
 
 namespace {
@@ -2551,8 +2676,18 @@ extern "C" void excef_set_cookie_visit_callback(excef_cookie_visit_cb_t cb) {
     exclr8cef::g_cookie_visit_cb = cb;
 }
 
-extern "C" int excef_get_cookies(const char* url, int request_id) {
-    auto mgr = CefCookieManager::GetGlobalManager(nullptr);
+namespace {
+// Resolve a cookie manager from a context handle. handle=0 → global.
+CefRefPtr<CefCookieManager> CookieManagerForContext(int context_handle) {
+    if (context_handle == 0)
+        return CefCookieManager::GetGlobalManager(nullptr);
+    auto ctx = exclr8cef::ResolveContext(context_handle);
+    return ctx ? ctx->GetCookieManager(nullptr) : nullptr;
+}
+}  // namespace
+
+extern "C" int excef_get_cookies_in_context(int context_handle, const char* url, int request_id) {
+    auto mgr = CookieManagerForContext(context_handle);
     if (!mgr) return 0;
     CefRefPtr<CookieVisitorImpl> visitor(new CookieVisitorImpl(request_id));
     if (url && *url) {
@@ -2563,15 +2698,12 @@ extern "C" int excef_get_cookies(const char* url, int request_id) {
     return request_id;
 }
 
-extern "C" int excef_set_cookie(const char* url,
-                                const char* name,
-                                const char* value,
-                                const char* domain,
-                                const char* path,
-                                int secure,
-                                int httponly) {
+extern "C" int excef_set_cookie_in_context(int context_handle, const char* url,
+                                            const char* name, const char* value,
+                                            const char* domain, const char* path,
+                                            int secure, int httponly) {
     if (!url || !name) return 0;
-    auto mgr = CefCookieManager::GetGlobalManager(nullptr);
+    auto mgr = CookieManagerForContext(context_handle);
     if (!mgr) return 0;
     CefCookie c;
     CefString(&c.name).FromASCII(name);
@@ -2583,10 +2715,28 @@ extern "C" int excef_set_cookie(const char* url,
     return mgr->SetCookie(url, c, nullptr) ? 1 : 0;
 }
 
-extern "C" void excef_delete_cookies(const char* url, const char* name) {
-    auto mgr = CefCookieManager::GetGlobalManager(nullptr);
+extern "C" void excef_delete_cookies_in_context(int context_handle, const char* url, const char* name) {
+    auto mgr = CookieManagerForContext(context_handle);
     if (!mgr) return;
     mgr->DeleteCookies(url ? url : "", name ? name : "", nullptr);
+}
+
+extern "C" int excef_get_cookies(const char* url, int request_id) {
+    return excef_get_cookies_in_context(0, url, request_id);
+}
+
+extern "C" int excef_set_cookie(const char* url,
+                                const char* name,
+                                const char* value,
+                                const char* domain,
+                                const char* path,
+                                int secure,
+                                int httponly) {
+    return excef_set_cookie_in_context(0, url, name, value, domain, path, secure, httponly);
+}
+
+extern "C" void excef_delete_cookies(const char* url, const char* name) {
+    excef_delete_cookies_in_context(0, url, name);
 }
 
 // ---- Drag and drop --------------------------------------------------------
