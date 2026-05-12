@@ -48,7 +48,7 @@
                 <Button DockPanel.Dock="Right"  Name="ZoomOutButton"  Content="−"          Click="OnZoomOutClick"  Padding="8,4" />
                 <Button DockPanel.Dock="Right"  Name="ZoomResetButton" Content="100%"      Click="OnZoomResetClick" Padding="8,4" />
                 <Button DockPanel.Dock="Right"  Name="ZoomInButton"   Content="+"          Click="OnZoomInClick"   Padding="8,4" Margin="0,0,6,0" />
-                <TextBox Name="AddressBox" Watermark="URL" KeyDown="OnAddressKeyDown" VerticalAlignment="Center" />
+                <TextBox Name="AddressBox" PlaceholderText="URL" KeyDown="OnAddressKeyDown" VerticalAlignment="Center" />
             </DockPanel>
         </Border>
 
@@ -67,7 +67,7 @@
                         <TextBox Name="FindBox" Width="200" Padding="6,3" FontSize="12"
                                  Background="#11111B" Foreground="#CDD6F4"
                                  BorderBrush="#45475A"
-                                 Watermark="find on page"
+                                 PlaceholderText="find on page"
                                  KeyDown="OnFindBoxKeyDown" />
                         <TextBlock Name="FindMatchCount" Foreground="#A6ADC8"
                                    VerticalAlignment="Center" FontSize="11" MinWidth="60" />

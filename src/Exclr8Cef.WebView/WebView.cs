@@ -202,11 +202,14 @@ public class WebView : Control, IWebView
     {
         if (_browser is null) return;
         var (x, y) = DragPoint(e);
-        string? text = e.Data.Contains(DataFormats.Text) ? e.Data.GetText() : null;
+        // Avalonia 12: e.Data → e.DataTransfer, DataFormats → DataFormat,
+        // Contains via Formats.Contains, sync TryGetText / GetFiles.
+        var dt = e.DataTransfer;
+        string? text = dt.Formats.Contains(DataFormat.Text) ? dt.TryGetText() : null;
         IReadOnlyList<string>? files = null;
-        if (e.Data.Contains(DataFormats.Files))
+        if (dt.Formats.Contains(DataFormat.File))
         {
-            var items = e.Data.GetFiles();
+            var items = dt.TryGetFiles();
             if (items is not null)
             {
                 var list = new List<string>();
@@ -400,7 +403,13 @@ public class WebView : Control, IWebView
         _attached = true;
         _browser?.WasHidden(false);
 
-        if (e.Root is Window win)
+        // Avalonia 12 changed VisualTreeAttachmentEventArgs.Root's
+        // return type (the old IRenderRoot getter is gone), so binaries
+        // compiled against 11.x throw MissingMethodException when
+        // consumed under 12. TopLevel.GetTopLevel(this) is the
+        // version-agnostic way to find the hosting Window — same API
+        // on Avalonia 11 and 12.
+        if (TopLevel.GetTopLevel(this) is Window win)
         {
             _hostedWindow = win;
             win.Closing += OnHostWindowClosing;
@@ -864,13 +873,15 @@ public class WebView : Control, IWebView
             InputMapping.MapModifiers(e.KeyModifiers));
     }
 
-    protected override void OnGotFocus(GotFocusEventArgs e)
+    // Avalonia 12 unified OnGotFocus / OnLostFocus to FocusChangedEventArgs
+    // (was GotFocusEventArgs + RoutedEventArgs in 11.x).
+    protected override void OnGotFocus(FocusChangedEventArgs e)
     {
         base.OnGotFocus(e);
         _browser?.SetFocus(true);
     }
 
-    protected override void OnLostFocus(RoutedEventArgs e)
+    protected override void OnLostFocus(FocusChangedEventArgs e)
     {
         base.OnLostFocus(e);
         if (_browser is not null)

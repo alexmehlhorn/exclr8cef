@@ -16,7 +16,7 @@
         <Border Grid.Row="1" Background="#181825" Padding="8,4">
             <DockPanel LastChildFill="True">
                 <Button DockPanel.Dock="Right" Content="Reload" Click="OnReloadClick" Padding="10,4" Margin="6,0,0,0" />
-                <TextBox Name="AddressBox" Watermark="URL" KeyDown="OnAddressKeyDown" VerticalAlignment="Center" />
+                <TextBox Name="AddressBox" PlaceholderText="URL" KeyDown="OnAddressKeyDown" VerticalAlignment="Center" />
             </DockPanel>
         </Border>
         <cef:WebView Grid.Row="2" Name="Browser" />
