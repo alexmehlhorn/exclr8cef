@@ -96,6 +96,7 @@ For AI hosts that need pixel + DOM-probe access:
 - `EnableFrameCapture` + `TryCaptureLastFrame` — synchronous BGRA snapshot
 - `FrameStream` — `ChannelReader<PaintFrame>` (bounded, drop-oldest) for an agent loop
 - `HitTestAtAsync(x, y)` — returns the DOM element under a point via the JS bridge
+- `AcceleratedPaint` event — GPU shared-texture handle (IOSurface / D3D11 / dma-buf) per frame for hosts that want to consume paints without a CPU readback. The handle is platform-specific; the demo's `--accel-paint` mode shows the macOS IOSurface read path end-to-end.
 - `Exclr8Cef.ConsoleDemo --url URL --screenshot OUT.png` — headless screenshot CLI
 
 ### Chrome runtime (windowed)
@@ -155,26 +156,44 @@ dotnet add package Exclr8Cef.WebView
 ```
 
 ```csharp
-// Program.cs — initialize CEF before BuildAvaloniaApp().Start*()
+// Program.cs
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
 using Exclr8Cef;
+using Exclr8Cef.WebView;
 
-Cef.InitializeForOsr(args, helperPath, SchedulePumpWork);
-BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
-Cef.Shutdown();
+public static int Main(string[] args)
+{
+    // Windows / Linux: the same binary serves as the CEF subprocess. macOS uses
+    // a separate Helper.app bundle so this is a no-op there.
+    int subproc = Cef.ExecuteProcess(args);
+    if (subproc >= 0) return subproc;
+
+    var lifetime = new ClassicDesktopStyleApplicationLifetime { Args = args };
+    BuildAvaloniaApp().UseExclr8Cef().SetupWithLifetime(lifetime);
+    AvaloniaSetup.InitializeForOsr(args);
+    try { return lifetime.Start(args); }
+    finally { Cef.Shutdown(); }
+}
+
+public static AppBuilder BuildAvaloniaApp() =>
+    AppBuilder.Configure<App>().UsePlatformDetect();
 ```
+
+That's the whole CEF setup. `AvaloniaSetup.InitializeForOsr` auto-resolves the macOS Helper.app under the running bundle's `Contents/Frameworks/`. `UseExclr8Cef()` chains a 16ms dispatcher timer to drain CEF on the UI thread. Both XAML controls (`cef:WebView`, `cef:NativeWebView`) Just Work under this init.
 
 NuGet's `runtime.json` resolution picks the right native runtime package (`runtime.osx-arm64.Exclr8Cef`, `runtime.win-x64.Exclr8Cef`, …) automatically based on the consumer's `RuntimeIdentifier`.
 
 ### Process init contract
 
-CEF is process-global: exactly one init call per process lifetime. The controls themselves don't init — the host app picks the init mode, then any combination of `WebView` / `NativeWebView` instances works under that mode.
+CEF is process-global: exactly one init call per process lifetime. The controls themselves don't init — the host picks the init mode, then any combination of `WebView` / `NativeWebView` instances works under that mode.
 
 | Init call | Runtime | OSR (`WebView`) | Embedded (`NativeWebView`) | Windowed Chrome |
 |---|---|---|---|---|
-| `Cef.InitializeForOsr` | Alloy global | ✓ | ✓ | ✗ |
+| `AvaloniaSetup.InitializeForOsr` (or raw `Cef.InitializeForOsr`) | Alloy global | ✓ | ✓ | ✗ |
 | `Cef.Initialize` (default) | Chrome | ✗ | ✗ | ✓ |
 
-`Cef.InitializeForOsr` is the right choice for any Avalonia app — it sets `windowless_rendering_enabled = true` (which *enables* OSR without forbidding windowed Alloy browsers) and uses an external message pump so Avalonia stays in charge of the platform run loop. You can then mix `WebView` and `NativeWebView` instances freely in the same window — see `samples/Exclr8Cef.WebView.Demo --mode=compare` for a working example.
+OSR init is the right choice for any Avalonia app — it sets `windowless_rendering_enabled = true` (which *enables* OSR without forbidding windowed Alloy browsers) and uses an external message pump so Avalonia stays in charge of the platform run loop. You can then mix `WebView` and `NativeWebView` instances freely in the same window — see `samples/Exclr8Cef.WebView.Demo --mode=compare` for a working example.
 
 ### Build from source (macOS arm64)
 
@@ -205,7 +224,10 @@ open samples/Exclr8Cef.WebView.Demo/bin/Release/Exclr8Cef.WebView.Demo.app
   - **`--mode=embedded`** — Avalonia hosts an embedded Alloy CEF browser via `NativeControlHost`. Uses the local `NativeCefView` wrapper to show the minimum manual-integration pattern (the shipped `cef:NativeWebView` does the same with full property bindings).
   - **`--mode=compare`** — *side-by-side*: OSR `cef:WebView` on the left, embedded `cef:NativeWebView` on the right, both shipped controls, one window, one CEF init. Each pane has its own URL bar + back/forward/reload so the two browsers can be navigated independently for visual comparison.
   - **`--mode=windowed`** — pure-CEF Chrome-runtime window (no Avalonia, no OSR). Different runtime, different permission UI; runs as a separate process pattern.
-- **`samples/Exclr8Cef.ConsoleDemo`** — .NET-driven CEF host with no UI framework. Default mode opens `chrome://version`. Headless mode (`--url URL --screenshot OUT.png`) renders a page and writes the PNG via `Page.captureScreenshot`. Useful for automation and visual-diff pipelines.
+- **`samples/Exclr8Cef.ConsoleDemo`** — .NET-driven CEF host with no UI framework. Three modes:
+  - **default** — opens `chrome://version` in a real Chromium window
+  - **`--url URL --screenshot OUT.png`** — renders a page headless and writes the PNG via the CDP `Page.captureScreenshot` path. Useful for automation and visual-diff pipelines.
+  - **`--url URL --accel-paint OUT.ppm`** *(macOS-only proof-of-wiring)* — renders headless, captures the first paint via CEF's GPU shared-texture handle (IOSurface on macOS), reads pixels straight out of GPU memory, and writes a Netpbm PPM. Demonstrates the `AcceleratedPaint` event end to end; non-macOS hosts wire the equivalent path (D3D11 shared handle on Windows, dma-buf fd on Linux) themselves.
 
 ## Repo layout
 
