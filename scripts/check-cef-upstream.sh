@@ -5,8 +5,8 @@
 # decides whether to open a bump PR).
 #
 #   $ scripts/check-cef-upstream.sh
-#   pinned     : 148.0.10+g7ee53f5+chromium-148.0.7778.218
-#   upstream   : 148.0.10+g7ee53f5+chromium-148.0.7778.218
+#   pinned     : 150.0.9+g81b0088+chromium-150.0.7871.46
+#   upstream   : 150.0.9+g81b0088+chromium-150.0.7871.46
 #   ✓ up to date
 #
 # Set GITHUB_OUTPUT (or call with --github-output) to emit the version
