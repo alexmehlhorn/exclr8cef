@@ -57,6 +57,11 @@ if (screenshotOut is not null)
                               screenshotW, screenshotH, screenshotDsf);
 }
 
+if (args.Contains("--loadstring-test"))
+{
+    return RunLoadStringTest(args, helperPath);
+}
+
 if (accelPaintOut is not null)
 {
     if (screenshotUrl is null)
@@ -90,6 +95,90 @@ static string? GetArg(string[] argv, string name)
             return argv[i].Substring(name.Length + 1);
     }
     return null;
+}
+
+// Temporary diagnostic: exercise LoadString / data: URI navigations and
+// log exactly which load events fire for each scenario.
+static int RunLoadStringTest(string[] argv, string helperPath)
+{
+    Cef.InitializeForOsr(argv, helperPath, _ => { });
+    var browser = Cef.CreateOffscreenBrowser(800, 600, 1.0f, "about:blank");
+    if (browser is null) { Console.Error.WriteLine("create failed"); return 3; }
+
+    int loadEndCount = 0;
+    string lastLoadEndUrl = "";
+    browser.LoadStart += (_, e) =>
+        Console.WriteLine($"  [LoadStart] main={e.IsMainFrame} url={Trunc(e.Url)}");
+    browser.LoadEnd += (_, e) =>
+    {
+        loadEndCount++;
+        lastLoadEndUrl = e.Url;
+        Console.WriteLine($"  [LoadEnd]   main={e.IsMainFrame} status={e.HttpStatusCode} url={Trunc(e.Url)}");
+    };
+    browser.LoadError += (_, e) =>
+        Console.WriteLine($"  [LoadError] main={e.IsMainFrame} code={e.ErrorCode} '{e.ErrorText}' url={Trunc(e.FailedUrl)}");
+    browser.LoadingStateChanged += (_, e) =>
+        Console.WriteLine($"  [LoadState] isLoading={e.IsLoading}");
+
+    void Pump(double seconds)
+    {
+        var end = DateTime.UtcNow.AddSeconds(seconds);
+        while (DateTime.UtcNow < end) { Cef.DoMessageLoopWork(); Thread.Sleep(5); }
+    }
+    bool WaitLoadEnd(int target, double timeoutS)
+    {
+        var end = DateTime.UtcNow.AddSeconds(timeoutS);
+        while (DateTime.UtcNow < end)
+        {
+            Cef.DoMessageLoopWork(); Thread.Sleep(5);
+            if (loadEndCount >= target) return true;
+        }
+        return false;
+    }
+
+    static string Trunc(string s) => s.Length <= 90 ? s : s[..90] + $"…({s.Length} chars)";
+
+    Console.WriteLine("== step 0: initial about:blank");
+    bool ok0 = WaitLoadEnd(1, 10);
+    Console.WriteLine($"   -> LoadEnd fired: {ok0} (count={loadEndCount})");
+
+    Console.WriteLine("== step 1: LoadString small html");
+    browser.LoadString("<html><body><h1>one</h1></body></html>");
+    bool ok1 = WaitLoadEnd(2, 10);
+    Console.WriteLine($"   -> LoadEnd fired: {ok1} (count={loadEndCount})");
+
+    Console.WriteLine("== step 2: LoadString IDENTICAL html again (same data: URL)");
+    browser.LoadString("<html><body><h1>one</h1></body></html>");
+    bool ok2 = WaitLoadEnd(3, 10);
+    Console.WriteLine($"   -> LoadEnd fired: {ok2} (count={loadEndCount})");
+
+    Console.WriteLine("== step 3: LoadString different small html");
+    browser.LoadString("<html><body><h1>two</h1></body></html>");
+    bool ok3 = WaitLoadEnd(4, 10);
+    Console.WriteLine($"   -> LoadEnd fired: {ok3} (count={loadEndCount})");
+
+    Console.WriteLine("== step 4: LoadString LARGE html (~2.5 MB — over the 2 MB data: URL cap, " +
+                      "must load via the internal resource handler)");
+    string big = "<html><body><h1>big</h1><p>" +
+                 new string('x', 2_500_000) + "</p></body></html>";
+    browser.LoadString(big);
+    bool ok4 = WaitLoadEnd(5, 10)
+               && lastLoadEndUrl.StartsWith("https://loadstring.exclr8cef.internal/");
+    Console.WriteLine($"   -> LoadEnd fired via internal handler: {ok4} (count={loadEndCount}, url={Trunc(lastLoadEndUrl)})");
+
+    Console.WriteLine("== step 5: LoadString ~1.4 MB html (data: URL just under 2 MB)");
+    string medium = "<html><body><h1>med</h1><p>" +
+                    new string('y', 1_400_000) + "</p></body></html>";
+    browser.LoadString(medium);
+    bool ok5 = WaitLoadEnd(loadEndCount + 1, 10);
+    Console.WriteLine($"   -> LoadEnd fired: {ok5} (count={loadEndCount})");
+
+    Pump(0.5);
+    browser.Close();
+    Pump(1.0);
+    Cef.Shutdown();
+    Console.WriteLine($"RESULT: initial={ok0} small={ok1} sameAgain={ok2} different={ok3} largeViaHandler={ok4} medium1.4MB={ok5}");
+    return 0;
 }
 
 static int RunScreenshotMode(string[] argv, string helperPath, string url, string outPath,

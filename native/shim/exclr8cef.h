@@ -1356,10 +1356,17 @@ EXCEF_API void excef_set_string_visitor_callback(excef_string_visitor_cb_t cb);
 EXCEF_API int excef_get_frame_source(int browser_id, int request_id);
 EXCEF_API int excef_get_frame_text(int browser_id, int request_id);
 
-// Load `html` into the main frame via a data: URL — the location bar
-// will reflect that data: URL and relative-link resolution is against
-// it. Callers that need a real-looking origin should register a custom
-// scheme handler and navigate to it instead.
+// Load `html` into the main frame. Small documents travel as a
+// data:text/html;base64 URL (the location bar reflects that URL and
+// relative-link resolution is against it). Documents whose encoded URL
+// would exceed Chromium's 2 MB URL cap (≈1.5 MB of raw HTML) cannot use
+// that transport — Chromium silently drops over-long navigations at the
+// IPC boundary, no load event ever fires — so they are served instead
+// through an internal in-memory resource handler under
+// https://loadstring.exclr8cef.internal/<token> (unlimited size, normal
+// load events, synthetic secure origin). One document is retained per
+// browser (so reloads work) until the next LoadString or browser close.
+// Returns 1 on success, 0 if the browser is unknown/closed.
 EXCEF_API int excef_load_string(int browser_id,
                                  const char* html);
 

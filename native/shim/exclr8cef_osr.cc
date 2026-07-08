@@ -1236,11 +1236,110 @@ private:
     IMPLEMENT_REFCOUNTING(UrlResourceHandler);
 };
 
+// ---- LoadString large-document transport ----------------------------------
+//
+// Chromium hard-caps URLs at url::kMaxURLChars (2 MB) and silently drops
+// longer navigations at the IPC boundary — no LoadStart/LoadEnd/LoadError
+// ever fires. So HTML that would blow the cap as a base64 data: URL is
+// instead stashed here (one document per browser, replaced on each
+// oversized LoadString) and served through GetResourceHandler under a
+// synthetic https URL. `.internal` is a reserved TLD: it can never
+// resolve, and the request never reaches the network because the handler
+// claims it first. Reloads keep working because the document stays
+// registered until the next LoadString or browser close.
+constexpr const char kLoadStringUrlPrefix[] =
+    "https://loadstring.exclr8cef.internal/";
+struct PendingLoadStringDoc {
+    uint64_t token;    // distinguishes stale reloads from the current doc
+    std::string html;
+};
+std::mutex g_loadstring_mu;
+std::map<int, PendingLoadStringDoc> g_loadstring_docs;
+
+namespace {
+
+// Fully-synchronous in-memory resource handler: the body is known at
+// construction, so Open() completes immediately (no deferred callback).
+class StringResourceHandler : public CefResourceHandler {
+public:
+    StringResourceHandler(std::string body, int status, std::string content_type)
+        : body_(std::move(body)), status_(status),
+          content_type_(std::move(content_type)) {}
+
+    bool Open(CefRefPtr<CefRequest> /*request*/,
+              bool& handle_request,
+              CefRefPtr<CefCallback> /*callback*/) override {
+        handle_request = true;
+        return true;
+    }
+
+    void GetResponseHeaders(CefRefPtr<CefResponse> response,
+                            int64_t& response_length,
+                            CefString& /*redirectUrl*/) override {
+        response->SetStatus(status_);
+        // SetMimeType wants the bare type; keep the full Content-Type
+        // (with charset) in the header map — same split as the scheme
+        // handlers above.
+        auto semi = content_type_.find(';');
+        response->SetMimeType(semi == std::string::npos
+                                  ? content_type_
+                                  : content_type_.substr(0, semi));
+        CefResponse::HeaderMap headers;
+        response->GetHeaderMap(headers);
+        headers.emplace("Content-Type", content_type_);
+        response->SetHeaderMap(headers);
+        response_length = static_cast<int64_t>(body_.size());
+    }
+
+    bool Read(void* data_out, int bytes_to_read, int& bytes_read,
+              CefRefPtr<CefResourceReadCallback> /*callback*/) override {
+        if (read_pos_ >= body_.size()) { bytes_read = 0; return false; }
+        size_t n = std::min<size_t>(body_.size() - read_pos_,
+                                    static_cast<size_t>(bytes_to_read));
+        std::memcpy(data_out, body_.data() + read_pos_, n);
+        read_pos_ += n;
+        bytes_read = static_cast<int>(n);
+        return true;
+    }
+
+    void Cancel() override {}
+
+private:
+    std::string body_;
+    int status_;
+    std::string content_type_;
+    size_t read_pos_ = 0;
+    IMPLEMENT_REFCOUNTING(StringResourceHandler);
+};
+
+}  // namespace
+
 CefRefPtr<CefResourceHandler> Exclr8CefOsrHandler::GetResourceHandler(
         CefRefPtr<CefBrowser> /*browser*/,
         CefRefPtr<CefFrame> /*frame*/,
         CefRefPtr<CefRequest> request) {
-    if (!g_should_handle_resource_cb || !request) return nullptr;
+    if (!request) return nullptr;
+
+    // Internal LoadString transport — checked before the host callback so
+    // hosts can't accidentally shadow it. Runs on the CEF IO thread.
+    {
+        std::string req_url = request->GetURL().ToString();
+        if (req_url.compare(0, sizeof(kLoadStringUrlPrefix) - 1,
+                            kLoadStringUrlPrefix) == 0) {
+            std::lock_guard<std::mutex> lock(g_loadstring_mu);
+            auto it = g_loadstring_docs.find(id_);
+            if (it != g_loadstring_docs.end() &&
+                req_url == kLoadStringUrlPrefix + std::to_string(it->second.token)) {
+                return new StringResourceHandler(
+                    it->second.html, 200, "text/html; charset=utf-8");
+            }
+            // Anything else on the internal host (stale token after a newer
+            // LoadString, favicon probe) → 404, never the network.
+            return new StringResourceHandler("", 404, "text/plain");
+        }
+    }
+
+    if (!g_should_handle_resource_cb) return nullptr;
     uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
     std::string url = request->GetURL().ToString();
     std::string method = request->GetMethod().ToString();
@@ -1550,6 +1649,11 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             if (it->first == closed_id) it = g_cancelled_downloads.erase(it);
             else ++it;
         }
+    }
+    {
+        // Drop the browser's stashed LoadString document (if any).
+        std::lock_guard<std::mutex> lock(g_loadstring_mu);
+        g_loadstring_docs.erase(closed_id);
     }
     {
         std::lock_guard<std::mutex> lock(g_auth_mu);
@@ -2741,8 +2845,28 @@ extern "C" int excef_load_string(int browser_id, const char* html) {
     // URL trip. There's no way to forge a different origin from here;
     // callers that need a real-looking URL should register a custom
     // scheme handler and navigate to that instead.
-    std::string encoded = CefBase64Encode(html, strlen(html)).ToString();
-    frame->LoadURL(std::string("data:text/html;charset=utf-8;base64,") + encoded);
+    std::string url = "data:text/html;charset=utf-8;base64,";
+    url += CefBase64Encode(html, strlen(html)).ToString();
+    // Chromium hard-caps URLs at url::kMaxURLChars (2 MB) and silently
+    // DROPS longer navigations at the IPC boundary — no LoadStart /
+    // LoadEnd / LoadError ever fires. Documents that would blow the cap
+    // are served through the internal resource handler instead (see
+    // kLoadStringUrlPrefix): unlimited size, normal load events; the
+    // trade-off is the location bar shows the synthetic https URL
+    // rather than the data: URL.
+    constexpr size_t kMaxUrlChars = 2u * 1024 * 1024;
+    if (url.size() > kMaxUrlChars) {
+        uint64_t token =
+            exclr8cef::g_next_token.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(exclr8cef::g_loadstring_mu);
+            exclr8cef::g_loadstring_docs[browser_id] =
+                exclr8cef::PendingLoadStringDoc{token, std::string(html)};
+        }
+        frame->LoadURL(exclr8cef::kLoadStringUrlPrefix + std::to_string(token));
+        return 1;
+    }
+    frame->LoadURL(url);
     return 1;
 }
 

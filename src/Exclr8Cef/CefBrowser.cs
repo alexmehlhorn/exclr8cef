@@ -618,6 +618,16 @@ public sealed partial class CefBrowser : IDisposable
     /// about:blank load may still be pending and the navigation will
     /// be dropped silently. Wait for the first <c>LoadEnd</c> (or any
     /// load past about:blank) before issuing it.
+    ///
+    /// <para><b>Large documents.</b> Chromium hard-caps URLs at 2 MB, so
+    /// HTML over ~1.5 MB (base64 inflation) cannot travel as a
+    /// <c>data:</c> URL — Chromium would drop the navigation without any
+    /// load event. Such documents are served automatically through an
+    /// internal in-memory resource handler instead: same content, same
+    /// load events, no size limit — but the location bar shows
+    /// <c>https://loadstring.exclr8cef.internal/&lt;token&gt;</c> rather
+    /// than the data: URL, and the document origin is that synthetic
+    /// (secure) origin instead of an opaque data: origin.</para>
     /// </remarks>
     public void LoadString(string html)
     {
