@@ -41,11 +41,41 @@ internal static class CdpJson
     /// <summary>
     /// Parse a CDP reply JSON and return its <c>result</c> element. The
     /// caller owns the returned element (cloned, so the inner
-    /// JsonDocument is disposed before return).
+    /// JsonDocument is disposed before return). If the reply is a CDP
+    /// error (<c>{"id":N,"error":{"code":…,"message":…}}</c>) this throws
+    /// <see cref="CdpException"/> with the protocol's own message —
+    /// otherwise the caller would see an opaque
+    /// <c>KeyNotFoundException("result")</c>.
     /// </summary>
     public static JsonElement ParseResult(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.GetProperty("result").Clone();
+        var root = doc.RootElement;
+        if (root.TryGetProperty("error", out var error))
+        {
+            int code = error.TryGetProperty("code", out var c) ? c.GetInt32() : 0;
+            string message = error.TryGetProperty("message", out var m)
+                ? m.GetString() ?? "" : "";
+            throw new CdpException(code, message);
+        }
+        return root.GetProperty("result").Clone();
+    }
+}
+
+/// <summary>
+/// A CDP-level error reply — the browser understood the command and
+/// rejected it (unknown method, invalid params, target gone, …).
+/// <see cref="Code"/> and <see cref="Message"/> carry the protocol's own
+/// error fields.
+/// </summary>
+public sealed class CdpException : InvalidOperationException
+{
+    /// <summary>CDP error code (e.g. -32601 method not found).</summary>
+    public int Code { get; }
+
+    public CdpException(int code, string message)
+        : base($"CDP error {code}: {message}")
+    {
+        Code = code;
     }
 }

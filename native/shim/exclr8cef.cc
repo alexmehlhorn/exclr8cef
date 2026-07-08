@@ -86,7 +86,7 @@ extern "C" void excef_set_init_settings(const excef_init_settings* in) {
 
 namespace {
 
-constexpr const char kShimVersion[] = "0.7.2";
+constexpr const char kShimVersion[] = "0.8.0";
 
 void copy_to(char* dst, size_t dst_size, const char* src) {
     if (!dst || dst_size == 0) return;
@@ -162,7 +162,7 @@ extern "C" int excef_initialize(int argc, char** argv,
     CefSettings settings;
     settings.no_sandbox = true;
     if (subprocess_path && *subprocess_path) {
-        CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
+        CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
@@ -181,7 +181,7 @@ extern "C" int excef_initialize_external_pump(int argc, char** argv,
     settings.no_sandbox = true;
     settings.external_message_pump = true;
     if (subprocess_path && *subprocess_path) {
-        CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
+        CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
@@ -201,7 +201,7 @@ extern "C" int excef_initialize_offscreen(int argc, char** argv,
     settings.external_message_pump = true;
     settings.windowless_rendering_enabled = true;
     if (subprocess_path && *subprocess_path) {
-        CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
+        CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();

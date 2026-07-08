@@ -6,7 +6,9 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "include/base/cef_callback.h"
@@ -29,7 +31,12 @@ namespace exclr8cef {
 
 namespace {
 
-int g_next_id = 1;
+std::atomic<int> g_next_id{1};
+// Guards g_osr_browsers. The map is touched from the host's caller thread
+// (every C ABI entry point), the CEF UI thread (OnBeforeClose erase), and
+// the CEF IO thread (SchemeFactory::Create reverse lookup) — it MUST be
+// locked like every other registry in this file.
+std::mutex g_osr_browsers_mu;
 std::map<int, CefRefPtr<Exclr8CefOsrHandler>> g_osr_browsers;
 
 // Per-browser request contexts (multi-profile / incognito story).
@@ -132,8 +139,16 @@ struct PendingContextMenu {
 };
 struct PendingDownloadStart {
     int browser_id;
+    uint32_t download_id;
     CefRefPtr<CefBeforeDownloadCallback> callback;
 };
+// (browser_id, download_id) pairs the host cancelled via
+// excef_resolve_download_starting with an empty path. There is no cancel
+// on CefBeforeDownloadCallback — Continue("") means "download to the
+// default temp dir", NOT cancel — so the actual cancellation happens in
+// OnDownloadUpdated via CefDownloadItemCallback::Cancel().
+std::mutex g_cancelled_downloads_mu;
+std::set<std::pair<int, uint32_t>> g_cancelled_downloads;
 struct PendingDownloadProgress {
     int browser_id;
     CefRefPtr<CefDownloadItemCallback> callback;
@@ -231,9 +246,19 @@ public:
         // host is async (Resolve fires later), handle_request=false and
         // CEF waits for callback_->Continue(), which Resolve() invokes
         // once Open has returned.
-        in_open_ = true;
-        callback_ = callback;
+        //
+        // Open runs on the CEF IO thread; Resolve on the host thread. The
+        // in_open_/resolved_/callback_ handshake is guarded by mu_ so an
+        // async Resolve racing the tail of Open can't slip into the gap
+        // where neither side fires the callback (request hangs) or fire it
+        // while still inside Open (CEF → ERR_ABORTED).
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            in_open_ = true;
+            callback_ = callback;
+        }
         if (!g_scheme_request_cb) {
+            std::lock_guard<std::mutex> lock(mu_);
             status_code_ = 404; status_text_ = "Not Found";
             mime_type_ = "text/plain";
             resolved_ = true;
@@ -244,12 +269,18 @@ public:
             }
             g_scheme_request_cb(browser_id_, token_, url_.c_str(), method_.c_str());
         }
+        std::lock_guard<std::mutex> lock(mu_);
         in_open_ = false;
         if (resolved_) {
             // Sync path: no need for the callback (we'd call it from inside
             // Open which CEF treats as an error → net::ERR_ABORTED).
             callback_ = nullptr;
             handle_request = true;
+            // The pending entry was consumed by the sync resolve; if it's
+            // still registered (host never resolved → the 404 fallback
+            // above), drop it so it can't be resolved twice.
+            std::lock_guard<std::mutex> plock(g_scheme_mu);
+            g_scheme_pending.erase(token_);
         } else {
             handle_request = false;
         }
@@ -295,8 +326,14 @@ public:
     }
 
     void Cancel() override {
-        std::lock_guard<std::mutex> lock(g_scheme_mu);
-        g_scheme_pending.erase(token_);
+        {
+            std::lock_guard<std::mutex> lock(g_scheme_mu);
+            g_scheme_pending.erase(token_);
+        }
+        // Drop the deferred callback so a late host Resolve (already past
+        // the pending-map lookup) can't Continue() a cancelled request.
+        std::lock_guard<std::mutex> lock(mu_);
+        callback_ = nullptr;
     }
 
     // Called by excef_resolve_scheme_request. Stash the response and unblock
@@ -304,18 +341,23 @@ public:
     void Resolve(int status_code, std::string status_text,
                  std::string mime_type,
                  std::vector<uint8_t> body) {
-        status_code_ = status_code;
-        status_text_ = std::move(status_text);
-        mime_type_ = std::move(mime_type);
-        body_ = std::move(body);
-        resolved_ = true;
-        // Only Continue() if we're truly async (Open has already returned).
-        // If we're still inside Open, the sync-path check in Open will
-        // unblock CEF by setting handle_request=true.
-        if (!in_open_ && callback_) {
-            callback_->Continue();
-            callback_ = nullptr;
+        CefRefPtr<CefCallback> cb;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            status_code_ = status_code;
+            status_text_ = std::move(status_text);
+            mime_type_ = std::move(mime_type);
+            body_ = std::move(body);
+            resolved_ = true;
+            // Only Continue() if we're truly async (Open has already
+            // returned). If we're still inside Open, the sync-path check in
+            // Open will unblock CEF by setting handle_request=true.
+            if (!in_open_ && callback_) {
+                cb = callback_;
+                callback_ = nullptr;
+            }
         }
+        if (cb) cb->Continue();
     }
 
     int browser_id() const { return browser_id_; }
@@ -325,6 +367,7 @@ private:
     std::string url_;
     std::string method_;
     uint64_t token_;
+    std::mutex mu_;  // guards the Open/Resolve handshake state below
     CefRefPtr<CefCallback> callback_;
     int status_code_ = 200;
     std::string status_text_ = "OK";
@@ -345,8 +388,12 @@ public:
                                           CefRefPtr<CefFrame> /*frame*/,
                                           const CefString& /*scheme_name*/,
                                           CefRefPtr<CefRequest> request) override {
+        // Runs on the CEF IO thread — hold the lock for the whole reverse
+        // lookup so a concurrent create/close can't rebalance the map under
+        // the iteration.
         int bid = 0;
         if (browser) {
+            std::lock_guard<std::mutex> lock(g_osr_browsers_mu);
             for (const auto& [id, handler] : g_osr_browsers) {
                 if (handler->browser() && handler->browser()->IsSame(browser)) {
                     bid = id;
@@ -795,6 +842,10 @@ bool Exclr8CefOsrHandler::GetAudioParameters(CefRefPtr<CefBrowser> /*browser*/,
 void Exclr8CefOsrHandler::OnAudioStreamStarted(CefRefPtr<CefBrowser> /*browser*/,
                                                 const CefAudioParameters& params,
                                                 int channels) {
+    // Cache the channel count for OnAudioStreamPacket — CEF's packet
+    // callback doesn't carry it, and its data array has exactly this many
+    // entries with NO null terminator, so it cannot be derived by scanning.
+    audio_channels_ = channels;
     if (g_audio_started_cb) {
         g_audio_started_cb(id_,
                             static_cast<int>(params.channel_layout),
@@ -810,16 +861,12 @@ void Exclr8CefOsrHandler::OnAudioStreamPacket(CefRefPtr<CefBrowser> /*browser*/,
                                                 int64_t pts) {
     if (!g_audio_packet_cb || frames <= 0 || !data) return;
     // CEF gives us planar PCM (data[c][f]). Interleave to data[f*C+c] so
-    // the host doesn't have to walk channel pointers across the FFI.
-    // The channel count isn't passed here, but it matches what was given
-    // in OnAudioStreamStarted — we cache nothing and trust the host to
-    // remember it from the stream-started callback.
-    // Allocate on stack for typical buffers (≤ 4096 frames * 8 ch * 4B = 128KB);
-    // for safety use a small fixed cap.
-    constexpr int kMaxChannels = 8;
-    int channels = 0;
-    while (channels < kMaxChannels && data[channels] != nullptr) ++channels;
-    if (channels == 0) return;
+    // the host doesn't have to walk channel pointers across the FFI. The
+    // channel count comes from OnAudioStreamStarted (cached above) — the
+    // data array is exactly that long, so scanning for a null sentinel
+    // would read past its end.
+    int channels = audio_channels_;
+    if (channels <= 0) return;
     std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
     for (int f = 0; f < frames; ++f) {
         for (int c = 0; c < channels; ++c) {
@@ -1056,31 +1103,45 @@ public:
     bool Open(CefRefPtr<CefRequest> /*request*/,
               bool& handle_request,
               CefRefPtr<CefCallback> callback) override {
-        in_open_ = true;
-        callback_ = callback;
+        // Same locked handshake as SchemeResourceHandler::Open — see the
+        // comment there. Open runs on the CEF IO thread, Resolve on the
+        // host thread.
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            in_open_ = true;
+            callback_ = callback;
+        }
+        bool sync_resolved = false;
         {
             std::lock_guard<std::mutex> lock(g_url_handler_mu);
             auto it = g_url_handler_pending.find(token_);
             if (it != g_url_handler_pending.end()) {
                 // Sync-resolved path: host called resolve from inside the
-                // should_handle callback before we ever got here.
+                // should_handle callback before we ever got here. The
+                // entry is fully consumed — erase it so it can't be
+                // resolved a second time and doesn't outlive the request
+                // (it was previously kept "for Cancel()", but Cancel never
+                // actually erased from this map — entries leaked).
                 if (it->second.resolved) {
                     status_code_ = it->second.status_code;
                     status_text_ = std::move(it->second.status_text);
                     mime_type_ = std::move(it->second.mime_type);
                     body_ = std::move(it->second.body);
                     extra_headers_ = std::move(it->second.extra_headers);
-                    resolved_ = true;
+                    sync_resolved = true;
+                    g_url_handler_pending.erase(it);
+                } else {
+                    // Wire up the handler pointer so a still-pending async
+                    // resolve can find us.
+                    it->second.handler = this;
                 }
-                // Wire up the handler pointer so a still-pending async
-                // resolve can find us. If sync-resolved, this entry is
-                // still useful for Cancel() / cleanup.
-                it->second.handler = this;
             } else {
                 g_url_handler_pending[token_] = PendingUrlHandler{browser_id_, this};
             }
         }
+        std::lock_guard<std::mutex> lock(mu_);
         in_open_ = false;
+        if (sync_resolved) resolved_ = true;
         if (resolved_) {
             // Sync path — don't Continue() the callback (calling it from
             // inside Open is treated as net::ERR_ABORTED by CEF).
@@ -1124,24 +1185,37 @@ public:
     }
 
     void Cancel() override {
-        std::lock_guard<std::mutex> lock(g_scheme_mu);
-        g_scheme_pending.erase(token_);
+        // This handler's bookkeeping lives in g_url_handler_pending (NOT
+        // g_scheme_pending — a previous version erased from the wrong map,
+        // leaking the entry and letting a late host resolve Continue() a
+        // request CEF had already cancelled).
+        {
+            std::lock_guard<std::mutex> lock(g_url_handler_mu);
+            g_url_handler_pending.erase(token_);
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        callback_ = nullptr;
     }
 
     // Host calls excef_resolve_resource_handler_request → dispatch here.
     void Resolve(int status_code, std::string status_text,
                   std::string mime_type, std::vector<uint8_t> body,
                   std::vector<std::pair<std::string, std::string>> headers) {
-        status_code_ = status_code;
-        status_text_ = std::move(status_text);
-        mime_type_ = std::move(mime_type);
-        body_ = std::move(body);
-        extra_headers_ = std::move(headers);
-        resolved_ = true;
-        if (!in_open_ && callback_) {
-            callback_->Continue();
-            callback_ = nullptr;
+        CefRefPtr<CefCallback> cb;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            status_code_ = status_code;
+            status_text_ = std::move(status_text);
+            mime_type_ = std::move(mime_type);
+            body_ = std::move(body);
+            extra_headers_ = std::move(headers);
+            resolved_ = true;
+            if (!in_open_ && callback_) {
+                cb = callback_;
+                callback_ = nullptr;
+            }
         }
+        if (cb) cb->Continue();
     }
 
 private:
@@ -1149,6 +1223,7 @@ private:
     std::string url_;
     std::string method_;
     uint64_t token_;
+    std::mutex mu_;  // guards the Open/Resolve handshake state below
     CefRefPtr<CefCallback> callback_;
     int status_code_ = 200;
     std::string status_text_ = "OK";
@@ -1229,7 +1304,7 @@ bool Exclr8CefOsrHandler::OnBeforeDownload(CefRefPtr<CefBrowser> /*browser*/,
     uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(g_download_starting_mu);
-        g_download_starting_pending[token] = PendingDownloadStart{id_, callback};
+        g_download_starting_pending[token] = PendingDownloadStart{id_, item->GetId(), callback};
     }
     std::string url = item->GetURL().ToString();
     std::string name = suggested_name.ToString();
@@ -1243,6 +1318,21 @@ bool Exclr8CefOsrHandler::OnBeforeDownload(CefRefPtr<CefBrowser> /*browser*/,
 void Exclr8CefOsrHandler::OnDownloadUpdated(CefRefPtr<CefBrowser> /*browser*/,
                                              CefRefPtr<CefDownloadItem> item,
                                              CefRefPtr<CefDownloadItemCallback> callback) {
+    // Host-cancelled download (empty path in excef_resolve_download_starting)?
+    // This is where the cancellation actually executes — see the comment on
+    // g_cancelled_downloads.
+    {
+        std::lock_guard<std::mutex> lock(g_cancelled_downloads_mu);
+        auto key = std::make_pair(id_, item->GetId());
+        if (g_cancelled_downloads.count(key)) {
+            if (item->IsInProgress()) {
+                if (callback) callback->Cancel();
+            } else {
+                g_cancelled_downloads.erase(key);  // terminal — done tracking
+            }
+            return;  // don't surface progress for a cancelled download
+        }
+    }
     if (!g_download_progress_cb) return;
     uint64_t token = g_next_token.fetch_add(1, std::memory_order_relaxed);
     {
@@ -1357,8 +1447,11 @@ bool Exclr8CefOsrHandler::OnConsoleMessage(CefRefPtr<CefBrowser> /*browser*/,
 }
 
 void Exclr8CefOsrHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
-    browser_ = browser;
-    browser_->GetHost()->WasResized();
+    {
+        std::lock_guard<std::mutex> lock(browser_mu_);
+        browser_ = browser;
+    }
+    browser->GetHost()->WasResized();
     if (g_browser_initialized_cb) {
         g_browser_initialized_cb(id_);
     }
@@ -1431,9 +1524,10 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
         std::lock_guard<std::mutex> lock(g_download_starting_mu);
         for (auto it = g_download_starting_pending.begin(); it != g_download_starting_pending.end(); ) {
             if (it->second.browser_id == closed_id) {
-                // No Cancel() on CefBeforeDownloadCallback; pass empty path
-                // which makes CEF abort the download.
-                if (it->second.callback) it->second.callback->Continue(CefString(), /*show_dialog=*/false);
+                // Do NOT Continue() with an empty path — per CEF that means
+                // "download to the suggested name in the default temp dir",
+                // not cancel. Dropping the callback unexecuted (plus the
+                // browser itself closing) abandons the download.
                 it = g_download_starting_pending.erase(it);
             } else {
                 ++it;
@@ -1448,6 +1542,13 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
             } else {
                 ++it;
             }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_cancelled_downloads_mu);
+        for (auto it = g_cancelled_downloads.begin(); it != g_cancelled_downloads.end(); ) {
+            if (it->first == closed_id) it = g_cancelled_downloads.erase(it);
+            else ++it;
         }
     }
     {
@@ -1470,6 +1571,20 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
                 if (it->second.handler)
                     it->second.handler->Resolve(410, "Gone", "text/plain", {});
                 it = g_scheme_pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        // Same sweep for the streaming URL-handler registry — without it,
+        // pending entries (and their CefCallbacks) leak on browser close.
+        std::lock_guard<std::mutex> lock(g_url_handler_mu);
+        for (auto it = g_url_handler_pending.begin(); it != g_url_handler_pending.end(); ) {
+            if (it->second.browser_id == closed_id) {
+                if (it->second.handler)
+                    it->second.handler->Resolve(410, "Gone", "text/plain", {}, {});
+                it = g_url_handler_pending.erase(it);
             } else {
                 ++it;
             }
@@ -1544,8 +1659,14 @@ void Exclr8CefOsrHandler::OnBeforeClose(CefRefPtr<CefBrowser> /*browser*/) {
         }
     }
 
-    browser_ = nullptr;
-    g_osr_browsers.erase(id_);
+    {
+        std::lock_guard<std::mutex> lock(browser_mu_);
+        browser_ = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_osr_browsers_mu);
+        g_osr_browsers.erase(id_);
+    }
     if (g_browser_closed_cb) {
         g_browser_closed_cb(closed_id);
     }
@@ -1660,14 +1781,17 @@ void Exclr8CefOsrHandler::OnFullscreenModeChange(CefRefPtr<CefBrowser> /*browser
 void Exclr8CefOsrHandler::SetSize(int width, int height) {
     width_ = width;
     height_ = height;
-    if (browser_) browser_->GetHost()->WasResized();
+    // Called from the host thread — use the locked accessor, not browser_.
+    auto b = browser();
+    if (b) b->GetHost()->WasResized();
 }
 
 void Exclr8CefOsrHandler::SetDeviceScaleFactor(float scale) {
     if (scale <= 0.0f) return;
     if (scale == device_scale_factor_) return;
     device_scale_factor_ = scale;
-    if (browser_) browser_->GetHost()->NotifyScreenInfoChanged();
+    auto b = browser();
+    if (b) b->GetHost()->NotifyScreenInfoChanged();
 }
 
 bool Exclr8CefOsrHandler::StartDragging(CefRefPtr<CefBrowser> browser,
@@ -1746,20 +1870,25 @@ void Exclr8CefOsrHandler::UpdateDragCursor(CefRefPtr<CefBrowser> /*browser*/,
     drag_current_op_ = operation;
 }
 
-CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id) {
+CefRefPtr<Exclr8CefOsrHandler> LookupOsrHandler(int browser_id) {
+    std::lock_guard<std::mutex> lock(g_osr_browsers_mu);
     auto it = g_osr_browsers.find(browser_id);
-    if (it == g_osr_browsers.end()) return nullptr;
-    return it->second->browser();
+    return it == g_osr_browsers.end() ? nullptr : it->second;
+}
+
+CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id) {
+    auto handler = LookupOsrHandler(browser_id);
+    return handler ? handler->browser() : nullptr;
 }
 
 int AllocateBrowserId() { return g_next_id++; }
 void RegisterOsrHandler(int browser_id, CefRefPtr<Exclr8CefOsrHandler> handler) {
-    g_osr_browsers[browser_id] = handler;
+    std::lock_guard<std::mutex> lock(g_osr_browsers_mu);
+    g_osr_browsers[browser_id] = std::move(handler);
 }
-void UnregisterOsrHandler(int browser_id) { g_osr_browsers.erase(browser_id); }
-Exclr8CefOsrHandler* LookupOsrHandler(int browser_id) {
-    auto it = g_osr_browsers.find(browser_id);
-    return it == g_osr_browsers.end() ? nullptr : it->second.get();
+void UnregisterOsrHandler(int browser_id) {
+    std::lock_guard<std::mutex> lock(g_osr_browsers_mu);
+    g_osr_browsers.erase(browser_id);
 }
 
 }  // namespace exclr8cef
@@ -1778,11 +1907,11 @@ int CreateOffscreenBrowserImpl(int width, int height,
                                 int flags) {
     if (!url || width <= 0 || height <= 0) return 0;
 
-    int id = exclr8cef::g_next_id++;
+    int id = exclr8cef::AllocateBrowserId();
     auto handler = CefRefPtr<exclr8cef::Exclr8CefOsrHandler>(
         new exclr8cef::Exclr8CefOsrHandler(id, width, height,
                                             device_scale_factor, paint));
-    exclr8cef::g_osr_browsers[id] = handler;
+    exclr8cef::RegisterOsrHandler(id, handler);
 
     CefWindowInfo window_info;
     window_info.SetAsWindowless((CefWindowHandle)0);
@@ -1796,7 +1925,7 @@ int CreateOffscreenBrowserImpl(int width, int height,
     if (!CefBrowserHost::CreateBrowser(window_info, handler.get(), url,
                                        browser_settings, /*extra_info=*/nullptr,
                                        request_context)) {
-        exclr8cef::g_osr_browsers.erase(id);
+        exclr8cef::UnregisterOsrHandler(id);
         return 0;
     }
     return id;
@@ -1936,56 +2065,56 @@ extern "C" void excef_release_request_context(int handle) {
 
 extern "C" void excef_resize_offscreen_browser(int browser_id,
                                                int width, int height) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    it->second->SetSize(width, height);
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    h->SetSize(width, height);
 }
 
 extern "C" void excef_set_device_scale_factor(int browser_id, float scale) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    it->second->SetDeviceScaleFactor(scale);
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    h->SetDeviceScaleFactor(scale);
 }
 
 extern "C" void excef_set_zoom_level(int browser_id, double level) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto browser = h->browser();
     if (browser) browser->GetHost()->SetZoomLevel(level);
 }
 
 extern "C" double excef_get_zoom_level(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return 0.0;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return 0.0;
+    auto browser = h->browser();
     return browser ? browser->GetHost()->GetZoomLevel() : 0.0;
 }
 
 extern "C" void excef_notify_move_or_resize_started(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto browser = h->browser();
     if (browser) browser->GetHost()->NotifyMoveOrResizeStarted();
 }
 
 extern "C" void excef_notify_screen_info_changed(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto browser = h->browser();
     if (browser) browser->GetHost()->NotifyScreenInfoChanged();
 }
 
 extern "C" void excef_replace_misspelling(int browser_id, const char* word) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto browser = h->browser();
     if (browser) browser->GetHost()->ReplaceMisspelling(CefString(word ? word : ""));
 }
 
 extern "C" void excef_add_word_to_dictionary(int browser_id, const char* word) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto browser = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto browser = h->browser();
     if (browser) browser->GetHost()->AddWordToDictionary(CefString(word ? word : ""));
 }
 
@@ -2006,9 +2135,9 @@ extern "C" void excef_enable_audio_capture(int browser_id, int enable) {
     // next stream-start. There's no direct "rebind" call; closing the
     // browser or starting/stopping media triggers re-query. The host can
     // call WasResized to nudge a layout/handler refresh.
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it != exclr8cef::g_osr_browsers.end()) {
-        auto b = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (h) {
+        auto b = h->browser();
         if (b) b->GetHost()->WasResized();
     }
 }
@@ -2030,16 +2159,16 @@ extern "C" void excef_set_audio_stream_error_callback(excef_audio_stream_error_c
 }
 
 extern "C" void excef_set_audio_muted(int browser_id, int muted) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto b = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return;
+    auto b = h->browser();
     if (b) b->GetHost()->SetAudioMuted(muted != 0);
 }
 
 extern "C" int excef_is_audio_muted(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return 0;
-    auto b = it->second->browser();
+    auto h = exclr8cef::LookupOsrHandler(browser_id);
+    if (!h) return 0;
+    auto b = h->browser();
     return (b && b->GetHost()->IsAudioMuted()) ? 1 : 0;
 }
 
@@ -2151,9 +2280,7 @@ extern "C" void excef_resolve_resource_handler_request(
 namespace {
 
 CefRefPtr<CefFrame> get_focused_frame(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return nullptr;
-    auto browser = it->second->browser();
+    auto browser = exclr8cef::GetOsrBrowser(browser_id);
     if (!browser) return nullptr;
     auto frame = browser->GetFocusedFrame();
     return frame ? frame : browser->GetMainFrame();
@@ -2194,9 +2321,7 @@ extern "C" void excef_redo(int browser_id) {
 namespace {
 
 CefRefPtr<CefBrowser> get_browser(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return nullptr;
-    return it->second->browser();
+    return exclr8cef::GetOsrBrowser(browser_id);
 }
 
 }  // namespace
@@ -2205,9 +2330,8 @@ CefRefPtr<CefBrowser> get_browser(int browser_id) {
 
 extern "C" void excef_send_mouse_move(int browser_id, int x, int y,
                                       int modifiers, int mouse_leave) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto handler = it->second;
+    auto handler = exclr8cef::LookupOsrHandler(browser_id);
+    if (!handler) return;
     auto b = handler->browser();
     if (!b) return;
     CefMouseEvent ev;
@@ -2225,9 +2349,8 @@ extern "C" void excef_send_mouse_move(int browser_id, int x, int y,
 extern "C" void excef_send_mouse_click(int browser_id, int x, int y,
                                        int button, int mouse_up,
                                        int click_count, int modifiers) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto handler = it->second;
+    auto handler = exclr8cef::LookupOsrHandler(browser_id);
+    if (!handler) return;
     auto b = handler->browser();
     if (!b) return;
     CefMouseEvent ev;
@@ -2417,6 +2540,12 @@ extern "C" int excef_eval_javascript(int browser_id, int request_id,
 
 // ---- DevTools -------------------------------------------------------------
 
+// Default ShowDevTools — empty CefWindowInfo, lets CEF pick the host
+// platform's default (separate OS window on every platform). The
+// VibeCoder embedded-DevTools pane does NOT use this path; it spawns
+// a second NativeWebView pointed at the loopback inspector URL
+// (http://127.0.0.1:<rdp>/devtools/inspector.html?ws=…). Kept for
+// callers that want the native separate-window DevTools.
 extern "C" void excef_show_dev_tools(int browser_id) {
     auto b = get_browser(browser_id);
     if (!b) return;
@@ -2562,8 +2691,13 @@ public:
         std::string original = entry->GetOriginalURL().ToString();
         std::string title = entry->GetTitle().ToString();
         CefBaseTime t = entry->GetCompletionTime();
-        // Convert CefBaseTime to ms since unix epoch (approx).
-        long long ms = static_cast<long long>(t.val / 1000);
+        // CefBaseTime.val is MICROSECONDS since the Windows epoch
+        // (1601-01-01); convert to ms since the Unix epoch (1970-01-01).
+        // The two epochs are 11644473600 seconds apart.
+        constexpr long long kWindowsToUnixEpochUs = 11644473600LL * 1000000LL;
+        long long ms = t.val > 0
+            ? (static_cast<long long>(t.val) - kWindowsToUnixEpochUs) / 1000
+            : 0;
         exclr8cef::g_nav_entry_cb(request_id_, /*done=*/0,
                                     current ? 1 : 0,
                                     url.c_str(), display.c_str(), original.c_str(),
@@ -2613,34 +2747,109 @@ extern "C" int excef_load_string(int browser_id, const char* html) {
 }
 
 namespace {
+
+// Classify a CDP message by its TOP-LEVEL keys only. Replies look like
+// {"id":N,"result":...}; events like {"method":"...","params":...}. A
+// whole-string substring search for "id": is wrong — many events carry a
+// nested "id" key (Page.frameNavigated's frame.id, Runtime.execution-
+// ContextCreated's context.id, …) and would be misrouted as replies,
+// dropping the event and potentially resolving an unrelated pending
+// request. This scanner walks the JSON once, string- and depth-aware,
+// and only inspects keys of the root object — no allocation beyond the
+// key scratch buffer, no full parse on the (potentially large,
+// screencast-frame-sized) payload.
+bool CdpMessageIsReply(const char* data, size_t size, int* out_id) {
+    size_t i = 0;
+    auto skip_ws = [&] {
+        while (i < size && (data[i] == ' ' || data[i] == '\t' ||
+                            data[i] == '\n' || data[i] == '\r')) ++i;
+    };
+    skip_ws();
+    if (i >= size || data[i] != '{') return false;  // not an object → event
+    ++i;
+    int depth = 1;
+    bool in_string = false, escape = false;
+    std::string key;
+    while (i < size) {
+        char c = data[i];
+        if (in_string) {
+            if (escape) {
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (c == '"') {
+                in_string = false;
+                ++i;
+                if (depth == 1) {
+                    // Peek: a ':' next means `key` names a root-level member.
+                    size_t j = i;
+                    while (j < size && (data[j] == ' ' || data[j] == '\t' ||
+                                        data[j] == '\n' || data[j] == '\r')) ++j;
+                    if (j < size && data[j] == ':') {
+                        if (key == "method") return false;  // event
+                        if (key == "id") {
+                            ++j;
+                            // Same whitespace set as the pre-colon peek —
+                            // \n/\r between ':' and the number is legal JSON.
+                            while (j < size && (data[j] == ' ' || data[j] == '\t' ||
+                                                data[j] == '\n' || data[j] == '\r')) ++j;
+                            bool neg = false;
+                            if (j < size && data[j] == '-') { neg = true; ++j; }
+                            long long v = 0;
+                            bool any = false;
+                            while (j < size && data[j] >= '0' && data[j] <= '9') {
+                                if (v < 1000000000LL)  // stop growing — ids are host ints
+                                    v = v * 10 + (data[j] - '0');
+                                ++j;
+                                any = true;
+                            }
+                            if (v > 2147483647LL) v = 2147483647LL;  // clamp to int
+                            if (any) {
+                                *out_id = static_cast<int>(neg ? -v : v);
+                                return true;  // reply
+                            }
+                            return false;  // "id" with non-numeric value
+                        }
+                    }
+                }
+                continue;
+            } else if (depth == 1) {
+                key += c;
+            }
+            ++i;
+            continue;
+        }
+        switch (c) {
+            case '"':
+                in_string = true;
+                if (depth == 1) key.clear();
+                break;
+            case '{':
+            case '[':
+                ++depth;
+                break;
+            case '}':
+            case ']':
+                if (--depth == 0) return false;  // root closed, no verdict → event
+                break;
+            default:
+                break;
+        }
+        ++i;
+    }
+    return false;
+}
+
 class DevToolsObserver : public CefDevToolsMessageObserver {
 public:
     explicit DevToolsObserver(int browser_id) : browser_id_(browser_id) {}
     bool OnDevToolsMessage(CefRefPtr<CefBrowser> /*browser*/,
                             const void* message, size_t message_size) override {
         if (!exclr8cef::g_devtools_message_cb) return false;
-        // The message is a JSON byte buffer. Reply messages have an integer
-        // "id" matching what the host passed; events have no "id".
         std::string json(static_cast<const char*>(message), message_size);
-        // Inspect for "id":N to decide event vs reply.
         int message_id = 0;
-        bool is_event = true;
-        size_t pos = json.find("\"id\":");
-        if (pos != std::string::npos) {
-            is_event = false;
-            // Skip "id":
-            pos += 5;
-            // Skip whitespace
-            while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-            int sign = 1;
-            if (pos < json.size() && json[pos] == '-') { sign = -1; pos++; }
-            while (pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
-                message_id = message_id * 10 + (json[pos] - '0');
-                pos++;
-            }
-            message_id *= sign;
-        }
-        exclr8cef::g_devtools_message_cb(browser_id_, is_event ? 1 : 0, message_id, json.c_str());
+        bool is_reply = CdpMessageIsReply(json.data(), json.size(), &message_id);
+        exclr8cef::g_devtools_message_cb(browser_id_, is_reply ? 0 : 1, message_id, json.c_str());
         return false;  // don't suppress
     }
 private:
@@ -3015,14 +3224,33 @@ extern "C" void excef_resolve_download_starting(uint64_t token,
                                                   const char* path,
                                                   int show_dialog) {
     CefRefPtr<CefBeforeDownloadCallback> callback;
+    int browser_id = 0;
+    uint32_t download_id = 0;
     {
         std::lock_guard<std::mutex> lock(exclr8cef::g_download_starting_mu);
         auto it = exclr8cef::g_download_starting_pending.find(token);
         if (it == exclr8cef::g_download_starting_pending.end()) return;
         callback = it->second.callback;
+        browser_id = it->second.browser_id;
+        download_id = it->second.download_id;
         exclr8cef::g_download_starting_pending.erase(it);
     }
     if (!callback) return;
+    if ((!path || !*path) && show_dialog == 0) {
+        // Empty path + no dialog = CANCEL. Continue("") would NOT cancel —
+        // per CEF it downloads to the suggested name in the default temp
+        // directory. Instead mark the download cancelled and let
+        // OnDownloadUpdated execute the actual
+        // CefDownloadItemCallback::Cancel(); the unexecuted before-download
+        // callback is simply dropped.
+        //
+        // Empty path + show_dialog falls through to Continue("", true)
+        // below — CEF's "show the save-as dialog / you decide" signal,
+        // which the managed no-subscriber default relies on.
+        std::lock_guard<std::mutex> lock(exclr8cef::g_cancelled_downloads_mu);
+        exclr8cef::g_cancelled_downloads.emplace(browser_id, download_id);
+        return;
+    }
     CefString p;
     if (path && *path) p.FromString(path);
     bool show = show_dialog != 0;
@@ -3225,6 +3453,7 @@ public:
                 cookie.secure ? 1 : 0,
                 cookie.httponly ? 1 : 0);
             if (count == total - 1) {
+                fired_done_ = true;  // suppress the destructor's fallback done
                 exclr8cef::g_cookie_visit_cb(
                     request_id_, /*done=*/1,
                     "", "", "", "", 0, 0);
@@ -3284,10 +3513,12 @@ extern "C" int excef_set_cookie_in_context(int context_handle, const char* url,
     auto mgr = CookieManagerForContext(context_handle);
     if (!mgr) return 0;
     CefCookie c;
-    CefString(&c.name).FromASCII(name);
-    if (value) CefString(&c.value).FromASCII(value);
-    if (domain) CefString(&c.domain).FromASCII(domain);
-    if (path) CefString(&c.path).FromASCII(path);
+    // The managed side hands us UTF-8 — FromASCII would mangle any
+    // non-ASCII cookie value (common in the wild) byte-by-byte.
+    CefString(&c.name).FromString(name);
+    if (value) CefString(&c.value).FromString(value);
+    if (domain) CefString(&c.domain).FromString(domain);
+    if (path) CefString(&c.path).FromString(path);
     c.secure = secure != 0;
     c.httponly = httponly != 0;
     return mgr->SetCookie(url, c, nullptr) ? 1 : 0;
@@ -3408,9 +3639,8 @@ extern "C" void excef_drag_source_ended_at(int browser_id,
 }
 
 extern "C" void excef_drag_source_system_drag_ended(int browser_id) {
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return;
-    auto handler = it->second;
+    auto handler = exclr8cef::LookupOsrHandler(browser_id);
+    if (!handler) return;
     auto b = handler->browser();
     if (!b) return;
     b->GetHost()->DragSourceSystemDragEnded();
@@ -3481,9 +3711,7 @@ private:
 extern "C" int excef_print_to_pdf(int browser_id, const char* path,
                                   excef_pdf_done_callback_t callback) {
     if (!path) return 0;
-    auto it = exclr8cef::g_osr_browsers.find(browser_id);
-    if (it == exclr8cef::g_osr_browsers.end()) return 0;
-    auto browser = it->second->browser();
+    auto browser = exclr8cef::GetOsrBrowser(browser_id);
     if (!browser) return 0;
     CefPdfPrintSettings settings;
     browser->GetHost()->PrintToPDF(path, settings,

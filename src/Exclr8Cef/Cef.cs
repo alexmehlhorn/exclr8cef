@@ -340,6 +340,33 @@ public static partial class Cef
     }
 
     /// <summary>
+    /// Parent-aware variant of <see cref="CreateEmbeddedHost(int, int)"/>.
+    /// REQUIRED on Windows: a <c>WS_CHILD</c> HWND cannot be created
+    /// without a parent, so the parentless overload fails there. Pass the
+    /// handle the UI framework supplies (Avalonia's
+    /// <c>CreateNativeControlCore(IPlatformHandle parent)</c>). Ignored on
+    /// macOS.
+    /// </summary>
+    public static IntPtr CreateEmbeddedHost(IntPtr parent, int width, int height)
+    {
+        unsafe { return (IntPtr)Excef.excef_create_embedded_host_in_parent((void*)parent, width, height); }
+    }
+
+    /// <summary>
+    /// Release a host widget created by <see cref="CreateEmbeddedHost(int, int)"/>
+    /// (balances the native retain on macOS / destroys the HWND on
+    /// Windows). Safe to call while the attached browser is still closing —
+    /// the native side defers actual destruction until the browser's close
+    /// completes. Without this every create/destroy cycle leaks the native
+    /// widget.
+    /// </summary>
+    public static void DestroyEmbeddedHost(IntPtr hostView)
+    {
+        if (hostView == IntPtr.Zero) return;
+        unsafe { Excef.excef_destroy_embedded_host((void*)hostView); }
+    }
+
+    /// <summary>
     /// Phase 2 of two-phase embedded browser creation: attach a CEF
     /// browser to a previously-created host widget. Returns the browser
     /// instance, or null on failure. Wires up to <see cref="s_browsers"/>
@@ -872,11 +899,33 @@ public static partial class Cef
 
     public static void Shutdown()
     {
+        // Tear down live browsers' managed state FIRST so their pending
+        // awaiters (evals, DevTools methods, PDF callbacks, frame streams)
+        // complete with an error rather than hanging forever — native
+        // CefShutdown won't deliver any further callbacks to resolve them.
+        foreach (var id in s_browsers.Keys)
+        {
+            if (s_browsers.TryRemove(id, out var b))
+            {
+                try { b.RaiseClosed(); }
+                catch { }
+            }
+        }
         Excef.excef_shutdown();
         s_scheduleCallback = null;
-        s_browsers.Clear();
-        s_evalRequests.Clear();
-        s_cookieRequests.Clear();
+        var shutdownEx = new InvalidOperationException("CEF shut down");
+        // Anything still pending after RaiseClosed (requests not tracked to
+        // a live browser): fail, don't strand — Clear() would leave the
+        // awaiting Tasks incomplete forever.
+        foreach (var id in s_evalRequests.Keys)
+            if (s_evalRequests.TryRemove(id, out var tcs)) tcs.TrySetException(shutdownEx);
+        foreach (var id in s_cookieRequests.Keys)
+            if (s_cookieRequests.TryRemove(id, out var entry)) entry.Tcs.TrySetException(shutdownEx);
+        foreach (var id in s_stringVisitorRequests.Keys)
+            if (s_stringVisitorRequests.TryRemove(id, out var tcs)) tcs.TrySetException(shutdownEx);
+        foreach (var id in s_navEntryRequests.Keys)
+            if (s_navEntryRequests.TryRemove(id, out var tcs)) tcs.TrySetException(shutdownEx);
+        s_navEntryAccum.Clear();
     }
 
     // ---- Shared enums (used by CefBrowser methods + native ABI) --------

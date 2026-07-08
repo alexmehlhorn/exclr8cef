@@ -19,120 +19,142 @@ public static partial class Cef
     private static unsafe void AddressChangeTrampoline(int browserId, sbyte* url)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseAddressChanged(Marshal.PtrToStringUTF8((IntPtr)url) ?? "");
+        try { b.RaiseAddressChanged(Marshal.PtrToStringUTF8((IntPtr)url) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void TitleChangeTrampoline(int browserId, sbyte* title)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseTitleChanged(Marshal.PtrToStringUTF8((IntPtr)title) ?? "");
+        try { b.RaiseTitleChanged(Marshal.PtrToStringUTF8((IntPtr)title) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void LoadingStateTrampoline(int browserId, int isLoading, int canGoBack, int canGoForward)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseLoadingStateChanged(isLoading != 0, canGoBack != 0, canGoForward != 0);
+        try { b.RaiseLoadingStateChanged(isLoading != 0, canGoBack != 0, canGoForward != 0); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void CursorChangeTrampoline(int browserId, int cursorType)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseCursorChanged((CefCursorType)cursorType);
+        try { b.RaiseCursorChanged((CefCursorType)cursorType); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void ConsoleMessageTrampoline(int browserId, int level, sbyte* message, sbyte* source, int line)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseConsoleMessage(
-            (CefLogSeverity)level,
-            Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)source) ?? "",
-            line);
+        try
+        {
+            b.RaiseConsoleMessage(
+                (CefLogSeverity)level,
+                Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)source) ?? "",
+                line);
+        }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void LoadStartTrampoline(int browserId, int isMainFrame, sbyte* url)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseLoadStart(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? "");
+        try { b.RaiseLoadStart(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void LoadEndTrampoline(int browserId, int isMainFrame, sbyte* url, int httpStatusCode)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseLoadEnd(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? "", httpStatusCode);
+        try { b.RaiseLoadEnd(isMainFrame != 0, Marshal.PtrToStringUTF8((IntPtr)url) ?? "", httpStatusCode); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void LoadErrorTrampoline(int browserId, int isMainFrame, int errorCode, sbyte* errorText, sbyte* failedUrl)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseLoadError(
-            isMainFrame != 0,
-            (CefErrorCode)errorCode,
-            Marshal.PtrToStringUTF8((IntPtr)errorText) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)failedUrl) ?? "");
+        try
+        {
+            b.RaiseLoadError(
+                isMainFrame != 0,
+                (CefErrorCode)errorCode,
+                Marshal.PtrToStringUTF8((IntPtr)errorText) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)failedUrl) ?? "");
+        }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void LoadingProgressTrampoline(int browserId, double progress)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseLoadingProgress(progress);
+        try { b.RaiseLoadingProgress(progress); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void StatusMessageTrampoline(int browserId, sbyte* value)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseStatusMessage(Marshal.PtrToStringUTF8((IntPtr)value) ?? "");
+        try { b.RaiseStatusMessage(Marshal.PtrToStringUTF8((IntPtr)value) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void TooltipTrampoline(int browserId, sbyte* text)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseTooltipChanged(Marshal.PtrToStringUTF8((IntPtr)text) ?? "");
+        try { b.RaiseTooltipChanged(Marshal.PtrToStringUTF8((IntPtr)text) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void FaviconTrampoline(int browserId, sbyte* firstUrl)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseFaviconChanged(Marshal.PtrToStringUTF8((IntPtr)firstUrl) ?? "");
+        try { b.RaiseFaviconChanged(Marshal.PtrToStringUTF8((IntPtr)firstUrl) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void FullscreenTrampoline(int browserId, int fullscreen)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseFullscreenChanged(fullscreen != 0);
+        try { b.RaiseFullscreenChanged(fullscreen != 0); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void BrowserInitializedTrampoline(int browserId)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseInitialized();
+        try { b.RaiseInitialized(); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void ScrollOffsetTrampoline(int browserId, double x, double y)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseScrollOffset(x, y);
+        try { b.RaiseScrollOffset(x, y); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void AutoResizeTrampoline(int browserId, int w, int h)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseAutoResize(w, h);
+        try { b.RaiseAutoResize(w, h); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -153,11 +175,15 @@ public static partial class Cef
             Excef.excef_resolve_js_dialog(token, 0, null);
             return;
         }
-        b.RaiseJsDialog(
-            token,
-            (JsDialogType)dialogType,
-            Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+        try
+        {
+            b.RaiseJsDialog(
+                token,
+                (JsDialogType)dialogType,
+                Marshal.PtrToStringUTF8((IntPtr)message) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)defaultPrompt) ?? "");
+        }
+        catch { Excef.excef_resolve_js_dialog(token, 0, null); }  // safe even if the handler already resolved
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -173,40 +199,48 @@ public static partial class Cef
             Excef.excef_resolve_auth(token, null, null);
             return;
         }
-        b.RaiseAuthRequest(
-            token, isProxy != 0,
-            Marshal.PtrToStringUTF8((IntPtr)host) ?? "",
-            port,
-            Marshal.PtrToStringUTF8((IntPtr)realm) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)scheme) ?? "");
+        try
+        {
+            b.RaiseAuthRequest(
+                token, isProxy != 0,
+                Marshal.PtrToStringUTF8((IntPtr)host) ?? "",
+                port,
+                Marshal.PtrToStringUTF8((IntPtr)realm) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)scheme) ?? "");
+        }
+        catch { Excef.excef_resolve_auth(token, null, null); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void FindResultTrampoline(int browserId, int identifier, int count, int activeMatchOrdinal, int finalUpdate)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0);
+        try { b.RaiseFindResult(identifier, count, activeMatchOrdinal, finalUpdate != 0); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void PopupShowTrampoline(int browserId, int show)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaisePopupShow(show != 0);
+        try { b.RaisePopupShow(show != 0); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void PopupSizeTrampoline(int browserId, int x, int y, int w, int h)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaisePopupSize(x, y, w, h);
+        try { b.RaisePopupSize(x, y, w, h); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void PopupPaintTrampoline(int browserId, void* buffer, int width, int height)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaisePopupPainted((IntPtr)buffer, width, height);
+        try { b.RaisePopupPainted((IntPtr)buffer, width, height); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -218,24 +252,30 @@ public static partial class Cef
             Excef.excef_resolve_js_invoke(token, 0, null);
             return;
         }
-        b.RaiseJsInvoke(new JsInvokeEventArgs(
-            token,
-            Marshal.PtrToStringUTF8((IntPtr)method) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? ""));
+        try
+        {
+            b.RaiseJsInvoke(new JsInvokeEventArgs(
+                token,
+                Marshal.PtrToStringUTF8((IntPtr)method) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)argsJson) ?? ""));
+        }
+        catch { Excef.excef_resolve_js_invoke(token, 0, null); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void AccessibilityTreeTrampoline(int browserId, sbyte* json)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseAccessibilityTreeChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? "");
+        try { b.RaiseAccessibilityTreeChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void AccessibilityLocationTrampoline(int browserId, sbyte* json)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseAccessibilityLocationChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? "");
+        try { b.RaiseAccessibilityLocationChange(Marshal.PtrToStringUTF8((IntPtr)json) ?? ""); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -243,7 +283,8 @@ public static partial class Cef
         int browserId, void* buffer, int width, int height, int hotspotX, int hotspotY)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseDragImage((IntPtr)buffer, width, height, hotspotX, hotspotY);
+        try { b.RaiseDragImage((IntPtr)buffer, width, height, hotspotX, hotspotY); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -287,7 +328,8 @@ public static partial class Cef
             {
                 if (!s_navEntryAccum.TryRemove(requestId, out var list))
                     list = new System.Collections.Generic.List<NavigationEntry>();
-                doneTcs.TrySetResult(list);
+                try { doneTcs.TrySetResult(list); }
+                catch { }
             }
             return;
         }
@@ -306,7 +348,8 @@ public static partial class Cef
     private static unsafe void StringVisitorTrampoline(int requestId, sbyte* value)
     {
         if (!s_stringVisitorRequests.TryRemove(requestId, out var tcs)) return;
-        tcs.TrySetResult(Marshal.PtrToStringUTF8((IntPtr)value) ?? "");
+        try { tcs.TrySetResult(Marshal.PtrToStringUTF8((IntPtr)value) ?? ""); }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -314,14 +357,16 @@ public static partial class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
         var s = Marshal.PtrToStringUTF8((IntPtr)json) ?? "";
-        b.RaiseDevToolsMessage(isEvent != 0, messageId, s);
+        try { b.RaiseDevToolsMessage(isEvent != 0, messageId, s); }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void TakeFocusTrampoline(int browserId, int next)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseTakeFocus(next != 0);
+        try { b.RaiseTakeFocus(next != 0); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -329,7 +374,8 @@ public static partial class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
         var args = new SetFocusEventArgs((FocusSource)source);
-        b.RaiseSetFocus(args);
+        try { b.RaiseSetFocus(args); }
+        catch { return 0; }
         return args.Cancel ? 1 : 0;
     }
 
@@ -337,7 +383,8 @@ public static partial class Cef
     private static unsafe void GotFocusTrampoline(int browserId)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseGotFocus();
+        try { b.RaiseGotFocus(); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -345,7 +392,8 @@ public static partial class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
         var args = new PreKeyEventArgs((CefKeyEventType)type, (CefModifiers)mods, vk, native, isSystem != 0);
-        b.RaisePreKey(args);
+        try { b.RaisePreKey(args); }
+        catch { return 0; }
         return args.Handled ? 1 : 0;
     }
 
@@ -354,7 +402,8 @@ public static partial class Cef
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return 0;
         var args = new PreKeyEventArgs((CefKeyEventType)type, (CefModifiers)mods, vk, native, isSystem != 0);
-        b.RaiseKeyEvent(args);
+        try { b.RaiseKeyEvent(args); }
+        catch { return 0; }
         return args.Handled ? 1 : 0;
     }
 
@@ -444,7 +493,8 @@ public static partial class Cef
             Marshal.PtrToStringUTF8((IntPtr)linkUrl) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)linkTitle) ?? "",
             files);
-        return b.RaiseDragStarted(args) ? 1 : 0;
+        try { return b.RaiseDragStarted(args) ? 1 : 0; }
+        catch { return 0; }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -477,7 +527,8 @@ public static partial class Cef
         {
             // Gate subscriber owns the resolve token — they must call
             // Continue() or Cancel() on the args.
-            b.RaiseResourceRequest(token, urlStr, methodStr, typeEnum, headersStr);
+            try { b.RaiseResourceRequest(token, urlStr, methodStr, typeEnum, headersStr); }
+            catch { Excef.excef_resolve_resource_request(token, 0, null); }
         }
         else
         {
@@ -500,17 +551,22 @@ public static partial class Cef
             token, browserId,
             Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
             Marshal.PtrToStringUTF8((IntPtr)method) ?? "GET");
-        SchemeRequest?.Invoke(null, args);
+        try { SchemeRequest?.Invoke(null, args); }
+        catch { Excef.excef_resolve_scheme_request(token, 500, null, null, null, 0); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void RenderProcessGoneTrampoline(int browserId, int status, int errorCode, sbyte* errorString)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseRenderProcessGone(
-            (TerminationStatus)status,
-            errorCode,
-            Marshal.PtrToStringUTF8((IntPtr)errorString) ?? "");
+        try
+        {
+            b.RaiseRenderProcessGone(
+                (TerminationStatus)status,
+                errorCode,
+                Marshal.PtrToStringUTF8((IntPtr)errorString) ?? "");
+        }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -530,23 +586,31 @@ public static partial class Cef
             Excef.excef_resolve_download_starting(token, null, 1);
             return;
         }
-        b.RaiseDownloadStarting(
-            token, downloadId,
-            Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)suggestedName) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)mimeType) ?? "",
-            totalBytes);
+        try
+        {
+            b.RaiseDownloadStarting(
+                token, downloadId,
+                Marshal.PtrToStringUTF8((IntPtr)url) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)suggestedName) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)mimeType) ?? "",
+                totalBytes);
+        }
+        catch { Excef.excef_resolve_download_starting(token, null, 0); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe void DownloadProgressTrampoline(int browserId, ulong token, int downloadId, int percent, long received, long total, long speed, int state, sbyte* fullPath)
     {
         if (!s_browsers.TryGetValue(browserId, out var b)) return;
-        b.RaiseDownloadProgress(
-            token, downloadId,
-            percent, received, total, speed,
-            (DownloadState)state,
-            Marshal.PtrToStringUTF8((IntPtr)fullPath) ?? "");
+        try
+        {
+            b.RaiseDownloadProgress(
+                token, downloadId,
+                percent, received, total, speed,
+                (DownloadState)state,
+                Marshal.PtrToStringUTF8((IntPtr)fullPath) ?? "");
+        }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -564,7 +628,8 @@ public static partial class Cef
         }
         var raw = Marshal.PtrToStringUTF8((IntPtr)itemsJoined) ?? "";
         var items = ParseContextMenuItems(raw);
-        b.RaiseContextMenu(token, x, y, items);
+        try { b.RaiseContextMenu(token, x, y, items); }
+        catch { Excef.excef_resolve_context_menu(token, -1); }
     }
 
     private static ContextMenuItem[] ParseContextMenuItems(string raw)
@@ -603,12 +668,16 @@ public static partial class Cef
         var split = filters.Length == 0
             ? Array.Empty<string>()
             : filters.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        b.RaiseFileDialog(
-            token,
-            (FileDialogMode)mode,
-            Marshal.PtrToStringUTF8((IntPtr)title) ?? "",
-            Marshal.PtrToStringUTF8((IntPtr)defaultPath) ?? "",
-            split);
+        try
+        {
+            b.RaiseFileDialog(
+                token,
+                (FileDialogMode)mode,
+                Marshal.PtrToStringUTF8((IntPtr)title) ?? "",
+                Marshal.PtrToStringUTF8((IntPtr)defaultPath) ?? "",
+                split);
+        }
+        catch { Excef.excef_resolve_file_dialog(token, null); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -616,7 +685,8 @@ public static partial class Cef
     {
         if (s_browsers.TryRemove(browserId, out var b))
         {
-            b.RaiseClosed();
+            try { b.RaiseClosed(); }
+            catch { }
         }
     }
 
@@ -626,8 +696,12 @@ public static partial class Cef
         if (!s_evalRequests.TryRemove(requestId, out var tcs)) return;
         if (s_browsers.TryGetValue(browserId, out var browser)) browser.RemoveEvalRequest(requestId);
         var s = Marshal.PtrToStringUTF8((IntPtr)payload) ?? "";
-        if (success != 0) tcs.TrySetResult(s);
-        else tcs.TrySetException(new InvalidOperationException(string.IsNullOrEmpty(s) ? "JS eval failed" : s));
+        try
+        {
+            if (success != 0) tcs.TrySetResult(s);
+            else tcs.TrySetException(new InvalidOperationException(string.IsNullOrEmpty(s) ? "JS eval failed" : s));
+        }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -639,7 +713,8 @@ public static partial class Cef
         {
             if (s_cookieRequests.TryRemove(requestId, out var entry))
             {
-                entry.Tcs.TrySetResult(entry.List);
+                try { entry.Tcs.TrySetResult(entry.List); }
+                catch { }
             }
             return;
         }
@@ -668,7 +743,8 @@ public static partial class Cef
                 b.PdfQueue.RemoveAt(0);
             }
         }
-        cb?.Invoke(browserId, success);
+        try { cb?.Invoke(browserId, success); }
+        catch { }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -676,7 +752,8 @@ public static partial class Cef
     {
         if (s_browsers.TryGetValue(browserId, out var b))
         {
-            b.RaisePainted((IntPtr)buffer, width, height);
+            try { b.RaisePainted((IntPtr)buffer, width, height); }
+            catch { }
         }
     }
 
@@ -975,5 +1052,8 @@ public static partial class Cef
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void SchedulePumpWorkTrampoline(long delayMs)
-        => s_scheduleCallback?.Invoke(delayMs);
+        {
+        try { s_scheduleCallback?.Invoke(delayMs); }
+        catch { }
+    }
 }

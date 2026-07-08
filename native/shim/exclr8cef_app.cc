@@ -378,6 +378,22 @@ void Exclr8CefApp::OnContextCreated(CefRefPtr<CefBrowser> /*browser*/,
     global->SetValue("exclr8cef", ns, V8_PROPERTY_ATTRIBUTE_READONLY);
 }
 
+void Exclr8CefApp::OnContextReleased(CefRefPtr<CefBrowser> /*browser*/,
+                                      CefRefPtr<CefFrame> /*frame*/,
+                                      CefRefPtr<CefV8Context> context) {
+    // Drop pending invoke entries whose context is going away — without
+    // this, every navigation with an unanswered exclr8cef.invoke() pins a
+    // dead CefV8Context (and its Promise) for the renderer's lifetime.
+    std::lock_guard<std::mutex> lock(g_pending_invokes_mu);
+    for (auto it = g_pending_invokes.begin(); it != g_pending_invokes.end(); ) {
+        if (it->second.context && it->second.context->IsSame(context)) {
+            it = g_pending_invokes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 bool Exclr8CefApp::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame,

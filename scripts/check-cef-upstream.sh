@@ -5,8 +5,8 @@
 # decides whether to open a bump PR).
 #
 #   $ scripts/check-cef-upstream.sh
-#   pinned     : 147.0.10+gd58e84d+chromium-147.0.7727.118
-#   upstream   : 147.0.10+gd58e84d+chromium-147.0.7727.118
+#   pinned     : 148.0.10+g7ee53f5+chromium-148.0.7778.218
+#   upstream   : 148.0.10+g7ee53f5+chromium-148.0.7778.218
 #   ✓ up to date
 #
 # Set GITHUB_OUTPUT (or call with --github-output) to emit the version
@@ -29,29 +29,49 @@ import json, sys
 data = json.load(sys.stdin)
 plat = sys.argv[1]
 versions = data.get(plat, {}).get("versions", [])
-stable = next((v for v in versions if v.get("channel") == "stable"), None)
-if not stable:
+stables = [v for v in versions if v.get("channel") == "stable"]
+if not stables:
     sys.exit(2)
-print(stable["cef_version"])
+# The index is date-ordered, not version-ordered, and Spotify keeps
+# publishing point releases for older extended branches (e.g. 144.x
+# after 148.x shipped) — so "first stable in the list" can be an old
+# branch. Pick the highest version number instead. cef_version looks
+# like "148.0.10+g7ee53f5+chromium-148.0.7778.218"; compare the
+# numeric CEF triple, tie-break on the chromium build number.
+def key(v):
+    cv = v["cef_version"]
+    cef = tuple(int(x) for x in cv.split("+")[0].split("."))
+    chromium = tuple(int(x) for x in cv.rsplit("chromium-", 1)[1].split("."))
+    return (cef, chromium)
+print(max(stables, key=key)["cef_version"])
 ' "${PROBE_PLATFORM}")"
 
 echo "pinned    : ${PINNED}"
 echo "upstream  : ${UPSTREAM}"
+
+# Version-aware comparison: only flag a bump when upstream is strictly
+# NEWER than the pin. A plain string-inequality would also fire when the
+# pin is ahead of the newest stable (e.g. a beta pin), making CI open a
+# downgrade PR.
+NEEDS_BUMP="$(python3 -c '
+import sys
+def key(cv):
+    cef = tuple(int(x) for x in cv.split("+")[0].split("."))
+    chromium = tuple(int(x) for x in cv.rsplit("chromium-", 1)[1].split("."))
+    return (cef, chromium)
+print("true" if key(sys.argv[2]) > key(sys.argv[1]) else "false")
+' "${PINNED}" "${UPSTREAM}")"
 
 # Emit GitHub Actions outputs if running in CI.
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "pinned=${PINNED}"
     echo "upstream=${UPSTREAM}"
-    if [ "${PINNED}" = "${UPSTREAM}" ]; then
-      echo "needs_bump=false"
-    else
-      echo "needs_bump=true"
-    fi
+    echo "needs_bump=${NEEDS_BUMP}"
   } >> "${GITHUB_OUTPUT}"
 fi
 
-if [ "${PINNED}" = "${UPSTREAM}" ]; then
+if [ "${NEEDS_BUMP}" = "false" ]; then
   echo "✓ up to date"
   exit 0
 fi

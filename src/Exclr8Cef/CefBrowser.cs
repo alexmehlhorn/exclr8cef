@@ -510,13 +510,24 @@ public sealed partial class CefBrowser : IDisposable
         int reqId = Interlocked.Increment(ref Cef.s_nextStringVisitorId);
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         Cef.s_stringVisitorRequests[reqId] = tcs;
+        // Track per-browser so RaiseClosed can fail the awaiter instead of
+        // letting it hang when the browser closes mid-visit.
+        _stringVisitorRequestIds[reqId] = 0;
         if (caller(Id, reqId) == 0)
         {
             Cef.s_stringVisitorRequests.TryRemove(reqId, out _);
+            _stringVisitorRequestIds.TryRemove(reqId, out _);
             tcs.TrySetException(new InvalidOperationException("frame call failed"));
+        }
+        else
+        {
+            tcs.Task.ContinueWith(
+                t => _stringVisitorRequestIds.TryRemove(reqId, out _),
+                TaskContinuationOptions.ExecuteSynchronously);
         }
         return tcs.Task;
     }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _stringVisitorRequestIds = new();
 
     /// <summary>
     /// Load a fully-configured HTTP request (custom method, post body,
@@ -573,13 +584,22 @@ public sealed partial class CefBrowser : IDisposable
         int reqId = Interlocked.Increment(ref Cef.s_nextNavEntryId);
         var tcs = new TaskCompletionSource<System.Collections.Generic.List<NavigationEntry>>(TaskCreationOptions.RunContinuationsAsynchronously);
         Cef.s_navEntryRequests[reqId] = tcs;
+        _navEntryRequestIds[reqId] = 0;
         if (Excef.excef_get_navigation_entries(Id, reqId, currentOnly ? 1 : 0) == 0)
         {
             Cef.s_navEntryRequests.TryRemove(reqId, out _);
+            _navEntryRequestIds.TryRemove(reqId, out _);
             tcs.TrySetException(new InvalidOperationException("browser unknown"));
+        }
+        else
+        {
+            tcs.Task.ContinueWith(
+                t => _navEntryRequestIds.TryRemove(reqId, out _),
+                TaskContinuationOptions.ExecuteSynchronously);
         }
         return tcs.Task;
     }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _navEntryRequestIds = new();
 
     /// <summary>
     /// Load an HTML string into the main frame, served as a
@@ -989,6 +1009,14 @@ public sealed partial class CefBrowser : IDisposable
 
     // ---- DevTools -------------------------------------------------------
 
+    /// <summary>Open DevTools in CEF's default location for the host
+    /// platform — a separate native OS window on macOS / Windows /
+    /// Linux. Uses the DevTools front-end assets baked into the CEF
+    /// binary; works fully offline. For embedded-alongside-the-browser
+    /// DevTools, hosts should spawn a second NativeWebView pointed
+    /// at the loopback inspector URL
+    /// (<c>http://127.0.0.1:&lt;remote-debug-port&gt;/devtools/inspector.html?ws=…</c>)
+    /// instead — CEF serves that URL from its bundled resources too.</summary>
     public void ShowDevTools()  { if (!_closed) Excef.excef_show_dev_tools(Id); }
     public void CloseDevTools() { if (!_closed) Excef.excef_close_dev_tools(Id); }
 
@@ -1025,7 +1053,7 @@ public sealed partial class CefBrowser : IDisposable
     /// </remarks>
     public async Task<byte[]> CapturePageAsync(string format = "png", int? quality = null, bool captureBeyondViewport = false)
     {
-        var sb = new System.Text.StringBuilder("{\"format\":\"").Append(format).Append("\"");
+        var sb = new System.Text.StringBuilder("{\"format\":").Append(System.Text.Json.JsonSerializer.Serialize(format));
         if (quality is int q) sb.Append(",\"quality\":").Append(q);
         if (captureBeyondViewport) sb.Append(",\"captureBeyondViewport\":true");
         sb.Append("}");
@@ -1048,8 +1076,11 @@ public sealed partial class CefBrowser : IDisposable
         if (_closed) return false;
         unsafe
         {
+            // The native side wants the UTF-8 BYTE length — messageJson.Length
+            // is the UTF-16 char count, which truncates any non-ASCII payload.
+            int byteLen = System.Text.Encoding.UTF8.GetByteCount(messageJson);
             sbyte* p = (sbyte*)Marshal.StringToCoTaskMemUTF8(messageJson);
-            try { return Excef.excef_send_devtools_message(Id, p, messageJson.Length) != 0; }
+            try { return Excef.excef_send_devtools_message(Id, p, byteLen) != 0; }
             finally { Marshal.FreeCoTaskMem((IntPtr)p); }
         }
     }
@@ -1649,6 +1680,20 @@ public sealed partial class CefBrowser : IDisposable
                 tcs.TrySetException(browserClosedEx);
         }
         _evalRequestIds.Clear();
+        // Same for string-visitor (GetSource/GetText) and nav-entry awaiters.
+        foreach (var reqId in _stringVisitorRequestIds.Keys)
+        {
+            if (Cef.s_stringVisitorRequests.TryRemove(reqId, out var tcs))
+                tcs.TrySetException(browserClosedEx);
+        }
+        _stringVisitorRequestIds.Clear();
+        foreach (var reqId in _navEntryRequestIds.Keys)
+        {
+            if (Cef.s_navEntryRequests.TryRemove(reqId, out var tcs))
+                tcs.TrySetException(browserClosedEx);
+            Cef.s_navEntryAccum.TryRemove(reqId, out _);
+        }
+        _navEntryRequestIds.Clear();
         // Fail any pending DevTools method awaiters so callers' Tasks
         // complete instead of hanging.
         foreach (var kv in _devtoolsPending)

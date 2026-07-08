@@ -50,6 +50,10 @@ public:
                           CefRefPtr<CefFrame> frame,
                           CefRefPtr<CefV8Context> context) override;
 
+    void OnContextReleased(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefV8Context> context) override;
+
 private:
     IMPLEMENT_REFCOUNTING(Exclr8CefApp);
     DISALLOW_COPY_AND_ASSIGN(Exclr8CefApp);

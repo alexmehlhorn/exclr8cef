@@ -105,6 +105,19 @@ EXCEF_API void* excef_create_browser_view(int width, int height,
 // Phase 1: create an empty host NSView. The host returns this to the UI
 // framework, which parents it into the window hierarchy.
 EXCEF_API void* excef_create_embedded_host(int width, int height);
+// Parent-aware variant of the above. REQUIRED on Windows — a WS_CHILD
+// HWND cannot be created without a parent (the parentless form falls back
+// to HWND_MESSAGE there). On macOS the parent is ignored. Pass the handle
+// the UI framework provides (e.g. Avalonia's CreateNativeControlCore
+// parent).
+EXCEF_API void* excef_create_embedded_host_in_parent(void* parent,
+                                                     int width, int height);
+// Release the host widget created by excef_create_embedded_host[_in_parent]
+// (balances the retain on macOS / destroys the HWND on Windows). Safe to
+// call while the attached browser is still closing — actual destruction is
+// deferred until the browser's OnBeforeClose in that case. Call after
+// requesting browser close, once the UI framework has detached the widget.
+EXCEF_API void excef_destroy_embedded_host(void* host_view);
 // Phase 2: with the host now parented to its window, attach a CEF browser
 // to it. Chromium's renderer reads backingScaleFactor at CreateBrowser
 // time — calling Phase 2 after parenting fixes initial DSF detection on
@@ -619,8 +632,9 @@ EXCEF_API void excef_set_virtual_keyboard_callback(excef_virtual_keyboard_cb_t c
 //   - Linux: gbm BO file descriptor (int via void*)
 //
 // The handle is owned by CEF and recycled — host code MUST copy / consume
-// before this callback returns. format is cef_color_type_t (0=BGRA8888,
-// 1=RGBA8888). timestamp_us is microseconds since capture start.
+// before this callback returns. format is cef_color_type_t (0=RGBA8888,
+// 1=BGRA8888 — CEF header order; the managed CefColorType enum matches).
+// timestamp_us is microseconds since capture start.
 typedef void (*excef_accelerated_paint_cb_t)(int browser_id,
                                                 int element_type,
                                                 int coded_width,

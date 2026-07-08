@@ -19,6 +19,8 @@
 #include "exclr8cef_osr.h"
 
 #include <map>
+#include <mutex>
+#include <set>
 
 namespace {
 std::unique_ptr<CefScopedLibraryLoader> g_library_loader;
@@ -77,7 +79,7 @@ extern "C" int excef_initialize(int argc, char** argv,
         settings.no_sandbox = true;
         if (subprocess_path && *subprocess_path) {
             CefString(&settings.browser_subprocess_path)
-                .FromASCII(subprocess_path);
+                .FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
         }
         exclr8cef::ApplyHostInitSettings(settings);
 
@@ -125,7 +127,7 @@ static int initialize_with_pump_impl(int argc, char** argv,
         settings.external_message_pump = true;
         settings.windowless_rendering_enabled = enable_osr ? 1 : 0;
         if (subprocess_path && *subprocess_path) {
-            CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
+            CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
         }
         exclr8cef::ApplyHostInitSettings(settings);
 
@@ -161,7 +163,7 @@ extern "C" int excef_initialize_external_pump(int argc, char** argv,
         settings.no_sandbox = true;
         settings.external_message_pump = true;
         if (subprocess_path && *subprocess_path) {
-            CefString(&settings.browser_subprocess_path).FromASCII(subprocess_path);
+            CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
         }
         exclr8cef::ApplyHostInitSettings(settings);
 
@@ -181,6 +183,11 @@ extern "C" void excef_do_message_loop_work(void) {
 
 namespace {
 
+// Guards the three host-view maps below. Under the external pump the CEF
+// UI thread is the host's main thread, so these are single-threaded in
+// practice — but the win.cc twin locks its equivalents and keeping the
+// same discipline here costs nothing and survives pump-model changes.
+std::mutex g_host_map_mu;
 // Latest size requested for each host NSView. Avalonia may call
 // ArrangeOverride before the browser is fully created (OnAfterCreated
 // fires async on TID_UI); we record the desired size here so OnAfterCreated
@@ -188,6 +195,11 @@ namespace {
 std::map<void*, NSSize> g_pending_sizes;
 // Map host NSView pointer → browser id, for embedded-side resize lookup.
 std::map<void*, int> g_host_to_id;
+// Hosts whose excef_destroy_embedded_host arrived while their browser was
+// still closing. The CFBridgingRelease is deferred to OnBeforeClose — CEF's
+// child NSView is still parented inside the host until then, and releasing
+// the host out from under it crashes the next paint.
+std::set<void*> g_release_on_close;
 
 // Thin subclass of the OSR handler used for embedded (windowed) browsers.
 // Same handler surface (load / console / drag / permission / …) — only
@@ -205,8 +217,11 @@ public:
             @autoreleasepool {
                 NSView* host = (__bridge NSView*)host_view_;
                 NSSize size = [host frame].size;
-                auto it = g_pending_sizes.find(host_view_);
-                if (it != g_pending_sizes.end()) size = it->second;
+                {
+                    std::lock_guard<std::mutex> lock(g_host_map_mu);
+                    auto it = g_pending_sizes.find(host_view_);
+                    if (it != g_pending_sizes.end()) size = it->second;
+                }
                 for (NSView* sub in [host subviews]) {
                     [sub setFrame:NSMakeRect(0, 0, size.width, size.height)];
                 }
@@ -215,9 +230,18 @@ public:
         }
     }
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        bool release_host = false;
         if (host_view_) {
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
             g_host_to_id.erase(host_view_);
             g_pending_sizes.erase(host_view_);
+            release_host = g_release_on_close.erase(host_view_) > 0;
+        }
+        if (release_host) {
+            // The host's destroy call arrived while we were still closing;
+            // now that CEF's child NSView is gone, balance the
+            // CFBridgingRetain from excef_create_embedded_host.
+            CFBridgingRelease(host_view_);
         }
         Exclr8CefOsrHandler::OnBeforeClose(browser);
     }
@@ -228,16 +252,57 @@ private:
 
 }  // namespace
 
+// Flipped NSView subclass for the embedded host. macOS NSViews default
+// to bottom-left coordinate origin, while Avalonia (and every other
+// modern UI framework) uses top-left. When Avalonia's NativeControlHost
+// repositions this NSView during layout, it has to flip Y against the
+// parent's height — and any layout pass that repaints during a drag
+// (e.g. dragging a GridSplitter that recomputes column widths) can
+// accumulate a 1-pixel Y rounding error per pass, which manifests as
+// "the browser content slowly drifts upward as I resize the splitter."
+// Returning YES from -isFlipped makes the view's coordinate system
+// top-left, eliminating the flip math in the host entirely.
+@interface Exclr8FlippedHostView : NSView
+@end
+@implementation Exclr8FlippedHostView
+- (BOOL)isFlipped { return YES; }
+@end
+
 // Phase 1: create an empty host NSView that the UI framework will parent.
 // Do NOT set autoresizingMask — Avalonia's NativeControlHost manages the
 // NSView's frame explicitly via TryUpdateNativeControlPosition, and an
 // autoresizing mask makes the NSView stretch over the rest of the window.
 extern "C" void* excef_create_embedded_host(int width, int height) {
     @autoreleasepool {
-        NSView* host = [[NSView alloc]
+        NSView* host = [[Exclr8FlippedHostView alloc]
             initWithFrame:NSMakeRect(0, 0, width, height)];
         return (void*)CFBridgingRetain(host);
     }
+}
+
+// Parent-aware variant. On macOS the parent is unused — Avalonia's
+// NativeControlHost parents NSViews itself — but the export must exist on
+// every platform so the managed call site is uniform. On Windows the
+// parent HWND is REQUIRED (a WS_CHILD window cannot be created parentless).
+extern "C" void* excef_create_embedded_host_in_parent(void* /*parent*/,
+                                                      int width, int height) {
+    return excef_create_embedded_host(width, height);
+}
+
+// Balance the CFBridgingRetain from excef_create_embedded_host. If the
+// browser attached to this host is still closing (async), the release is
+// deferred to its OnBeforeClose; otherwise it happens immediately.
+extern "C" void excef_destroy_embedded_host(void* host_view_ptr) {
+    if (!host_view_ptr) return;
+    {
+        std::lock_guard<std::mutex> lock(g_host_map_mu);
+        if (g_host_to_id.count(host_view_ptr)) {
+            g_release_on_close.insert(host_view_ptr);
+            return;
+        }
+        g_pending_sizes.erase(host_view_ptr);
+    }
+    CFBridgingRelease(host_view_ptr);
 }
 
 // Phase 2: attach a CEF browser to a previously-created host NSView.
@@ -268,7 +333,10 @@ extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
         CefRefPtr<EmbeddedOsrHandler> handler(
             new EmbeddedOsrHandler(id, width, height, host_view_ptr));
         exclr8cef::RegisterOsrHandler(id, handler);
-        g_host_to_id[host_view_ptr] = id;
+        {
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
+            g_host_to_id[host_view_ptr] = id;
+        }
 
         CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
         // Treat handle=0 → global as "no explicit context" so CEF picks
@@ -285,7 +353,9 @@ extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
 
         if (!ok) {
             exclr8cef::UnregisterOsrHandler(id);
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
             g_host_to_id.erase(host_view_ptr);
+            g_pending_sizes.erase(host_view_ptr);
             return 0;
         }
         return id;
@@ -313,7 +383,9 @@ extern "C" void* excef_create_browser_view_in_context(int width, int height,
     if (!url) return nullptr;
 
     @autoreleasepool {
-        NSView* host = [[NSView alloc]
+        // Same flipped subclass as excef_create_embedded_host so both
+        // embedded paths behave identically during host-driven resizes.
+        NSView* host = [[Exclr8FlippedHostView alloc]
             initWithFrame:NSMakeRect(0, 0, width, height)];
         [host setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
@@ -332,7 +404,10 @@ extern "C" void* excef_create_browser_view_in_context(int width, int height,
         CefRefPtr<EmbeddedOsrHandler> handler(
             new EmbeddedOsrHandler(id, width, height, (__bridge void*)host));
         exclr8cef::RegisterOsrHandler(id, handler);
-        g_host_to_id[(__bridge void*)host] = id;
+        {
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
+            g_host_to_id[(__bridge void*)host] = id;
+        }
 
         CefRefPtr<CefRequestContext> ctx = exclr8cef::ResolveContext(context_handle);
         CefRefPtr<CefRequestContext> pass = context_handle == 0 ? nullptr : ctx;
@@ -344,6 +419,7 @@ extern "C" void* excef_create_browser_view_in_context(int width, int height,
 
         if (!ok) {
             exclr8cef::UnregisterOsrHandler(id);
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
             g_host_to_id.erase((__bridge void*)host);
             return nullptr;
         }
@@ -377,9 +453,14 @@ extern "C" void excef_set_embedded_host_hidden(void* host_view_ptr, int hidden) 
         NSView* host = (__bridge NSView*)host_view_ptr;
         BOOL hide = (hidden != 0);
         if ([host isHidden] != hide) [host setHidden:hide];
-        auto it = g_host_to_id.find(host_view_ptr);
-        if (it != g_host_to_id.end()) {
-            auto* handler = exclr8cef::LookupOsrHandler(it->second);
+        int browser_id = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
+            auto it = g_host_to_id.find(host_view_ptr);
+            if (it != g_host_to_id.end()) browser_id = it->second;
+        }
+        if (browser_id != 0) {
+            auto handler = exclr8cef::LookupOsrHandler(browser_id);
             if (handler && handler->browser()) {
                 handler->browser()->GetHost()->WasHidden(hide);
             }
@@ -394,7 +475,30 @@ extern "C" void excef_resize_browser_view(void* host_view_ptr,
         // Always record the latest desired size so OnAfterCreated can sync
         // to it if the browser isn't ready yet (Avalonia's ArrangeOverride
         // often fires before CEF finishes async browser creation).
-        g_pending_sizes[host_view_ptr] = NSMakeSize(width, height);
+        int browser_id = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_host_map_mu);
+            g_pending_sizes[host_view_ptr] = NSMakeSize(width, height);
+            auto it = g_host_to_id.find(host_view_ptr);
+            if (it != g_host_to_id.end()) browser_id = it->second;
+        }
+
+        // Look up the embedder's browser FIRST so we can flush CEF's
+        // origin cache BEFORE resizing the host. There's a documented
+        // CEF macOS bug — content drifts upward when the container
+        // NSView is resized directly (as opposed to via a window
+        // resize), because CEF's internal scroll-view origin tracking
+        // goes stale. NotifyMoveOrResizeStarted() clears that cache;
+        // calling it before setFrameSize and WasResized() afterwards
+        // gives CEF a clean origin to compose from.
+        //   ref: https://magpcss.org/ceforum/viewtopic.php?f=6&t=16341
+        CefRefPtr<exclr8cef::Exclr8CefOsrHandler> handler;
+        if (browser_id != 0) {
+            handler = exclr8cef::LookupOsrHandler(browser_id);
+        }
+        if (handler && handler->browser()) {
+            handler->browser()->GetHost()->NotifyMoveOrResizeStarted();
+        }
 
         NSView* host = (__bridge NSView*)host_view_ptr;
         NSRect hostFrame = [host frame];
@@ -404,14 +508,8 @@ extern "C" void excef_resize_browser_view(void* host_view_ptr,
         for (NSView* sub in [host subviews]) {
             [sub setFrame:NSMakeRect(0, 0, width, height)];
         }
-        // Look up the OSR handler by the id we stored at create time and
-        // tell its browser that the viewport changed.
-        auto it = g_host_to_id.find(host_view_ptr);
-        if (it != g_host_to_id.end()) {
-            auto* handler = exclr8cef::LookupOsrHandler(it->second);
-            if (handler && handler->browser()) {
-                handler->browser()->GetHost()->WasResized();
-            }
+        if (handler && handler->browser()) {
+            handler->browser()->GetHost()->WasResized();
         }
     }
 }

@@ -19,21 +19,38 @@ namespace Exclr8Cef;
 /// </summary>
 public sealed class CefRequestContext : IDisposable
 {
+    // Disposed sentinel. Handle 0 is the GLOBAL context — using 0 as the
+    // disposed marker would make every post-dispose call on an isolated
+    // profile silently read/write the global profile instead.
+    private const int Disposed = -1;
+
     private int _handle;
 
-    internal int Handle => _handle;
-    public bool IsClosed => _handle == 0;
+    internal int Handle
+    {
+        get
+        {
+            int h = _handle;
+            ObjectDisposedException.ThrowIf(h == Disposed, this);
+            return h;
+        }
+    }
+    public bool IsClosed => _handle == Disposed;
 
     internal CefRequestContext(int handle) { _handle = handle; }
 
     /// <summary>
     /// Drop the shim's reference to this context. Outstanding browsers
-    /// using it keep it alive until they close. Idempotent.
+    /// using it keep it alive until they close. Idempotent. Further calls
+    /// on this instance throw <see cref="ObjectDisposedException"/>.
     /// </summary>
     public void Dispose()
     {
-        // Don't release handle 0 — that's the global context, owned by CEF itself.
-        int h = System.Threading.Interlocked.Exchange(ref _handle, 0);
+        // Don't release handle 0 — that's the global context, owned by CEF
+        // itself (and Global stays usable; only explicit user contexts
+        // transition to the disposed state).
+        if (ReferenceEquals(this, Global)) return;
+        int h = System.Threading.Interlocked.Exchange(ref _handle, Disposed);
         if (h > 0) Excef.excef_release_request_context(h);
     }
 
@@ -50,7 +67,7 @@ public sealed class CefRequestContext : IDisposable
         {
             sbyte* n = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
             sbyte* v = valueJson is null ? null : (sbyte*)Marshal.StringToCoTaskMemUTF8(valueJson);
-            try { return Excef.excef_set_preference(_handle, n, v) != 0; }
+            try { return Excef.excef_set_preference(Handle, n, v) != 0; }
             finally
             {
                 Marshal.FreeCoTaskMem((IntPtr)n);
@@ -68,7 +85,7 @@ public sealed class CefRequestContext : IDisposable
             sbyte* n = (sbyte*)Marshal.StringToCoTaskMemUTF8(name);
             try
             {
-                sbyte* p = Excef.excef_get_preference(_handle, n);
+                sbyte* p = Excef.excef_get_preference(Handle, n);
                 if (p == null) return null;
                 string s = Marshal.PtrToStringUTF8((IntPtr)p) ?? "";
                 Excef.excef_free_string(p);
@@ -79,10 +96,10 @@ public sealed class CefRequestContext : IDisposable
     }
 
     /// <summary>Drop cached HTTP-Basic / NTLM / Digest credentials.</summary>
-    public void ClearHttpAuthCredentials() => Excef.excef_clear_http_auth_credentials(_handle);
+    public void ClearHttpAuthCredentials() => Excef.excef_clear_http_auth_credentials(Handle);
 
     /// <summary>Tear down all live TCP connections (useful on logout).</summary>
-    public void CloseAllConnections() => Excef.excef_close_all_connections(_handle);
+    public void CloseAllConnections() => Excef.excef_close_all_connections(Handle);
 
     // ---- Cookies (per-context) ----------------------------------------
 
@@ -96,20 +113,20 @@ public sealed class CefRequestContext : IDisposable
     /// <see cref="CefBrowser"/> call.
     /// </remarks>
     public Task<List<Cef.CookieInfo>> GetCookiesAsync(string? url = null)
-        => Cef.GetCookiesAsyncInContext(_handle, url);
+        => Cef.GetCookiesAsyncInContext(Handle, url);
 
     /// <summary>Set a cookie in this context's cookie jar.</summary>
     public bool SetCookie(string url, string name, string value,
                             string? domain = null, string? path = null,
                             bool secure = false, bool httpOnly = false)
-        => Cef.SetCookieInContext(_handle, url, name, value, domain, path, secure, httpOnly);
+        => Cef.SetCookieInContext(Handle, url, name, value, domain, path, secure, httpOnly);
 
     /// <summary>
     /// Delete cookies in this context's cookie jar matching url + name
     /// (either or both may be empty).
     /// </summary>
     public void DeleteCookies(string? url = null, string? name = null)
-        => Cef.DeleteCookiesInContext(_handle, url, name);
+        => Cef.DeleteCookiesInContext(Handle, url, name);
 
     /// <summary>
     /// Process-wide / global request context — used by browsers created

@@ -218,7 +218,9 @@ public class NativeWebView : NativeControlHost, IWebView
         var bounds = Bounds;
         int w = (int)bounds.Width  > 0 ? (int)bounds.Width  : 800;
         int h = (int)bounds.Height > 0 ? (int)bounds.Height : 600;
-        _hostView = Cef.CreateEmbeddedHost(w, h);
+        // Pass the parent handle through: on Windows the host HWND is a
+        // WS_CHILD window and cannot be created parentless.
+        _hostView = Cef.CreateEmbeddedHost(parent.Handle, w, h);
         return new PlatformHandle(_hostView, PlatformHandleKind);
     }
 
@@ -275,6 +277,10 @@ public class NativeWebView : NativeControlHost, IWebView
         // browser through the same private teardown path so the
         // unsubscribe / null-out sequence stays consistent.
         Teardown();
+        // Release the native widget (the create call retains it). If the
+        // browser is still closing, the native side defers destruction to
+        // the browser's OnBeforeClose — safe to request here either way.
+        Cef.DestroyEmbeddedHost(_hostView);
         _browserAttached = false;
         _hostView = IntPtr.Zero;
         base.DestroyNativeControlCore(control);

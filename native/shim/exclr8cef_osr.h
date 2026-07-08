@@ -4,6 +4,8 @@
 #ifndef EXCLR8CEF_OSR_H_
 #define EXCLR8CEF_OSR_H_
 
+#include <mutex>
+
 #include "include/cef_client.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_dialog_handler.h"
@@ -371,7 +373,15 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     float device_scale_factor() const { return device_scale_factor_; }
-    CefRefPtr<CefBrowser> browser() const { return browser_; }
+    // browser_ is written on the CEF UI thread (OnAfterCreated /
+    // OnBeforeClose) but read from the host's caller thread and the CEF IO
+    // thread (SchemeFactory reverse lookup), so the cross-thread accessor
+    // must copy the ref under a lock. UI-thread-only code inside the
+    // handler keeps using browser_ directly.
+    CefRefPtr<CefBrowser> browser() const {
+        std::lock_guard<std::mutex> lock(browser_mu_);
+        return browser_;
+    }
 
     void SetSize(int width, int height);
     void SetDeviceScaleFactor(float scale);
@@ -395,7 +405,12 @@ private:
     int height_;
     float device_scale_factor_;
     excef_paint_callback_t paint_cb_;
+    mutable std::mutex browser_mu_;
     CefRefPtr<CefBrowser> browser_;
+    // Channel count from OnAudioStreamStarted; OnAudioStreamPacket's data
+    // array is exactly this long (no null terminator). Both fire on the
+    // CEF audio thread, in order, so no synchronization is needed.
+    int audio_channels_ = 0;
 
     bool in_drag_ = false;
     CefRefPtr<CefDragData> drag_data_;
@@ -417,7 +432,9 @@ CefRefPtr<CefBrowser> GetOsrBrowser(int browser_id);
 int AllocateBrowserId();
 void RegisterOsrHandler(int browser_id, CefRefPtr<Exclr8CefOsrHandler> handler);
 void UnregisterOsrHandler(int browser_id);
-Exclr8CefOsrHandler* LookupOsrHandler(int browser_id);
+// Returns a ref-counted handle (not a raw pointer): the registry can be
+// erased on the CEF UI thread while the caller is still using the handler.
+CefRefPtr<Exclr8CefOsrHandler> LookupOsrHandler(int browser_id);
 
 // Forward decl so platform shims (mac.mm / win.cc) can resolve a request-
 // context handle from C# to the underlying CefRequestContext before

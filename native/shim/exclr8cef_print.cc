@@ -49,11 +49,20 @@ extern "C" int excef_print_to_pdf_with_settings(
         if (in->scale        > 0.0) settings.scale        = in->scale;
         if (in->paper_width  > 0.0) settings.paper_width  = in->paper_width;
         if (in->paper_height > 0.0) settings.paper_height = in->paper_height;
-        // Margin fields: 0.0 means "use Chromium default" (~0.4in).
-        settings.margin_top    = in->margin_top;
-        settings.margin_bottom = in->margin_bottom;
-        settings.margin_left   = in->margin_left;
-        settings.margin_right  = in->margin_right;
+        // CefPdfPrintSettings.margin_top/bottom/left/right are only honoured
+        // when margin_type == PDF_PRINT_MARGIN_CUSTOM. Without setting that,
+        // CEF silently uses Chromium's default ~0.4in margins regardless of
+        // the doubles we pass. Only switch to CUSTOM when the caller actually
+        // supplied a non-zero margin — all-zero means "use defaults".
+        bool any_margin = in->margin_top != 0.0 || in->margin_bottom != 0.0 ||
+                          in->margin_left != 0.0 || in->margin_right != 0.0;
+        if (any_margin) {
+            settings.margin_type   = PDF_PRINT_MARGIN_CUSTOM;
+            settings.margin_top    = in->margin_top;
+            settings.margin_bottom = in->margin_bottom;
+            settings.margin_left   = in->margin_left;
+            settings.margin_right  = in->margin_right;
+        }
         if (in->page_ranges && *in->page_ranges) {
             CefString(&settings.page_ranges).FromASCII(in->page_ranges);
         }

@@ -43,15 +43,32 @@ public static class CefPrint
         delegate* unmanaged[Cdecl]<int, int, void> callback);
 
     // The done-callback infrastructure is private to Cef in the core library
-    // (s_pdfCallbacks dictionary, PdfDoneTrampoline). Rather than duplicate
-    // that machinery here, we mirror the original pattern: store our own
-    // callbacks keyed by browser id and route through a local trampoline.
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, Action<int, int>> s_pdfCallbacks = new();
+    // (per-browser PdfQueue, PdfDoneTrampoline). Rather than duplicate that
+    // machinery here, we mirror the same pattern: a per-browser FIFO of
+    // completions. The native callback carries only the browser id, and
+    // Chromium completes a browser's print jobs in submission order — so a
+    // FIFO (NOT a single slot: a second concurrent print would overwrite
+    // the first's completion and cross-resolve the tasks) maps each done
+    // signal to the right caller.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, List<Action<int, int>>> s_pdfQueues = new();
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void PdfDoneTrampoline(int browserId, int success)
     {
-        if (s_pdfCallbacks.TryRemove(browserId, out var cb)) cb(browserId, success);
+        Action<int, int>? cb = null;
+        if (s_pdfQueues.TryGetValue(browserId, out var queue))
+        {
+            lock (queue)
+            {
+                if (queue.Count > 0)
+                {
+                    cb = queue[0];
+                    queue.RemoveAt(0);
+                }
+            }
+        }
+        try { cb?.Invoke(browserId, success); }
+        catch { }  // an escaping exception in [UnmanagedCallersOnly] fail-fasts the process
     }
 
     /// <summary>
@@ -67,7 +84,22 @@ public static class CefPrint
 
         int browserId = browser.Id;
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        s_pdfCallbacks[browserId] = (_, ok) => tcs.TrySetResult(ok != 0);
+        Action<int, int> completion = (_, ok) => tcs.TrySetResult(ok != 0);
+        var queue = s_pdfQueues.GetOrAdd(browserId, _ => new List<Action<int, int>>());
+        // If the browser closes mid-print the native done-callback never
+        // fires; remove our completion SYNCHRONOUSLY (a ContinueWith would
+        // run later — the TCS uses RunContinuationsAsynchronously, which
+        // overrides ExecuteSynchronously — leaving a dead head entry that a
+        // concurrent print's done signal would consume) and fail the task.
+        EventHandler closedHandler = (_, _) =>
+        {
+            lock (queue) { queue.Remove(completion); }
+            s_pdfQueues.TryRemove(browserId, out _);  // ids are never reused
+            tcs.TrySetResult(false);
+        };
+        browser.Closed += closedHandler;
+        tcs.Task.ContinueWith(t => browser.Closed -= closedHandler,
+            TaskContinuationOptions.ExecuteSynchronously);
 
         // Auto-enable header/footer rendering if either template is non-empty
         // unless the caller explicitly opted out.
@@ -104,10 +136,20 @@ public static class CefPrint
                 };
 
                 delegate* unmanaged[Cdecl]<int, int, void> trampoline = &PdfDoneTrampoline;
-                int scheduled = excef_print_to_pdf_with_settings(browserId, pathPtr, &s, trampoline);
+                // Enqueue and submit under one lock so two concurrent
+                // PrintToPdfAsync calls can't enqueue in the opposite order
+                // of their native submissions (the FIFO maps done signals
+                // to callers by position). The native call just posts the
+                // print job — cheap enough to hold the lock across.
+                int scheduled;
+                lock (queue)
+                {
+                    queue.Add(completion);
+                    scheduled = excef_print_to_pdf_with_settings(browserId, pathPtr, &s, trampoline);
+                    if (scheduled == 0) queue.Remove(completion);
+                }
                 if (scheduled == 0)
                 {
-                    s_pdfCallbacks.TryRemove(browserId, out _);
                     tcs.TrySetResult(false);
                 }
             }

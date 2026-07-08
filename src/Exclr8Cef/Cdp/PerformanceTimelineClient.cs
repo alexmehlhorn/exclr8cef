@@ -49,7 +49,7 @@ public sealed class PerformanceTimelineClient : CdpDomainClient
         for (int i = 0; i < eventTypes.Length; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append('"').Append(eventTypes[i]).Append('"');
+            sb.Append(JsonSerializer.Serialize(eventTypes[i]));
         }
         sb.Append("]}");
         return Browser.ExecuteDevToolsMethodAsync("PerformanceTimeline.enable", sb.ToString());

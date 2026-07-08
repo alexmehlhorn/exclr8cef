@@ -38,6 +38,12 @@ internal static unsafe partial class Excef
     public static extern void* excef_create_embedded_host(int width, int height);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void* excef_create_embedded_host_in_parent(void* parent, int width, int height);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_destroy_embedded_host(void* host_view);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_attach_embedded_browser(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -47,7 +53,7 @@ internal static unsafe partial class Excef
     public static extern int excef_attach_embedded_browser_in_context(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url, int context_handle);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_attach_embedded_browser_in_context_v2(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url, int context_handle, uint background_color);
+    public static extern int excef_attach_embedded_browser_in_context_v2(void* host_view, int width, int height, [NativeTypeName("const char *")] sbyte* url, int context_handle, [NativeTypeName("uint32_t")] uint background_color);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_resize_browser_view(void* host_view, int width, int height);
@@ -122,6 +128,12 @@ internal static unsafe partial class Excef
     public static extern void excef_set_response_filter_finalize_callback([NativeTypeName("excef_response_filter_finalize_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_should_handle_resource_callback([NativeTypeName("excef_should_handle_resource_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, int> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_resource_handler_request([NativeTypeName("uint64_t")] ulong token, int status_code, [NativeTypeName("const char *")] sbyte* status_text, [NativeTypeName("const char *")] sbyte* mime_type, [NativeTypeName("const char *")] sbyte* headers, [NativeTypeName("const unsigned char *")] byte* body, int body_len);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_chrome_command_callback([NativeTypeName("excef_chrome_command_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -135,18 +147,6 @@ internal static unsafe partial class Excef
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_toolbar_button_visible_callback([NativeTypeName("excef_toolbar_button_visibility_cb_t")] delegate* unmanaged[Cdecl]<int, int> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_should_handle_resource_callback([NativeTypeName("excef_should_handle_resource_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, int> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_resource_handler_request(
-        ulong token, int status_code,
-        [NativeTypeName("const char *")] sbyte* status_text,
-        [NativeTypeName("const char *")] sbyte* mime_type,
-        [NativeTypeName("const char *")] sbyte* headers,
-        [NativeTypeName("const unsigned char *")] byte* body,
-        int body_len);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_copy(int browser_id);
@@ -179,31 +179,10 @@ internal static unsafe partial class Excef
     public static extern void excef_drag_target_drag_leave(int browser_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_start_drag_callback([NativeTypeName("excef_start_drag_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, sbyte*, sbyte*, sbyte*, sbyte*, sbyte**, int, int> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_drag_image_callback([NativeTypeName("excef_drag_image_cb_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, int, int, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_permission_prompt_callback([NativeTypeName("excef_permission_prompt_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, ulong, sbyte*, int, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_permission_prompt(ulong token, int result);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_media_access_callback([NativeTypeName("excef_media_access_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, int, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_media_access(ulong token, int granted_permissions);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_before_popup_callback([NativeTypeName("excef_before_popup_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, int, int, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_cert_error_callback([NativeTypeName("excef_cert_error_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_cert_error(ulong token, int proceed);
+    public static extern void excef_set_start_drag_callback([NativeTypeName("excef_start_drag_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, sbyte*, sbyte*, sbyte*, sbyte*, sbyte**, int, int> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_drag_source_ended_at(int browser_id, int x, int y, int op);
@@ -249,9 +228,6 @@ internal static unsafe partial class Excef
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_send_external_begin_frame(int browser_id);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_create_offscreen_browser_ex(int width, int height, float device_scale_factor, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("excef_paint_callback_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> paint, int context_handle, int flags);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_touch_handle_size_callback([NativeTypeName("excef_touch_handle_size_cb_t")] delegate* unmanaged[Cdecl]<int, int, int*, int*, void> cb);
@@ -389,37 +365,37 @@ internal static unsafe partial class Excef
     public static extern void excef_set_js_dialog_callback([NativeTypeName("excef_js_dialog_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_js_dialog([NativeTypeName("unsigned long long")] ulong token, int success, [NativeTypeName("const char *")] sbyte* user_input);
+    public static extern void excef_resolve_js_dialog([NativeTypeName("uint64_t")] ulong token, int success, [NativeTypeName("const char *")] sbyte* user_input);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_file_dialog_callback([NativeTypeName("excef_file_dialog_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_file_dialog([NativeTypeName("unsigned long long")] ulong token, [NativeTypeName("const char *")] sbyte* paths);
+    public static extern void excef_resolve_file_dialog([NativeTypeName("uint64_t")] ulong token, [NativeTypeName("const char *")] sbyte* paths);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_context_menu_callback([NativeTypeName("excef_context_menu_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_context_menu([NativeTypeName("unsigned long long")] ulong token, int command_id);
+    public static extern void excef_resolve_context_menu([NativeTypeName("uint64_t")] ulong token, int command_id);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_download_starting_callback([NativeTypeName("excef_download_starting_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, long, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_download_starting([NativeTypeName("unsigned long long")] ulong token, [NativeTypeName("const char *")] sbyte* path, int show_dialog);
+    public static extern void excef_resolve_download_starting([NativeTypeName("uint64_t")] ulong token, [NativeTypeName("const char *")] sbyte* path, int show_dialog);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_download_progress_callback([NativeTypeName("excef_download_progress_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, int, long, long, long, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_download_action([NativeTypeName("unsigned long long")] ulong token, int action);
+    public static extern void excef_download_action([NativeTypeName("uint64_t")] ulong token, int action);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_auth_request_callback([NativeTypeName("excef_auth_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, int, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_auth([NativeTypeName("unsigned long long")] ulong token, [NativeTypeName("const char *")] sbyte* username, [NativeTypeName("const char *")] sbyte* password);
+    public static extern void excef_resolve_auth([NativeTypeName("uint64_t")] ulong token, [NativeTypeName("const char *")] sbyte* username, [NativeTypeName("const char *")] sbyte* password);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_find_result_callback([NativeTypeName("excef_find_result_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, void> cb);
@@ -434,6 +410,27 @@ internal static unsafe partial class Excef
     public static extern void excef_set_init_settings([NativeTypeName("const excef_init_settings *")] excef_init_settings* settings);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_cert_error_callback([NativeTypeName("excef_cert_error_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_cert_error([NativeTypeName("uint64_t")] ulong token, int proceed);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_before_popup_callback([NativeTypeName("excef_before_popup_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, sbyte*, int, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_permission_prompt_callback([NativeTypeName("excef_permission_prompt_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, ulong, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_permission_prompt([NativeTypeName("uint64_t")] ulong token, int result);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_media_access_callback([NativeTypeName("excef_media_access_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_resolve_media_access([NativeTypeName("uint64_t")] ulong token, int granted_permissions);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_render_process_gone_callback([NativeTypeName("excef_render_process_gone_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -443,13 +440,13 @@ internal static unsafe partial class Excef
     public static extern void excef_set_scheme_request_callback([NativeTypeName("excef_scheme_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_scheme_request([NativeTypeName("unsigned long long")] ulong token, int status_code, [NativeTypeName("const char *")] sbyte* status_text, [NativeTypeName("const char *")] sbyte* mime_type, [NativeTypeName("const unsigned char *")] byte* body, int body_length);
+    public static extern void excef_resolve_scheme_request([NativeTypeName("uint64_t")] ulong token, int status_code, [NativeTypeName("const char *")] sbyte* status_text, [NativeTypeName("const char *")] sbyte* mime_type, [NativeTypeName("const unsigned char *")] byte* body, int body_length);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_resource_request_callback([NativeTypeName("excef_resource_request_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_resource_request([NativeTypeName("unsigned long long")] ulong token, int action, [NativeTypeName("const char *")] sbyte* new_headers);
+    public static extern void excef_resolve_resource_request([NativeTypeName("uint64_t")] ulong token, int action, [NativeTypeName("const char *")] sbyte* new_headers);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_popup_show_callback([NativeTypeName("excef_popup_show_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
@@ -464,7 +461,40 @@ internal static unsafe partial class Excef
     public static extern void excef_set_js_invoke_callback([NativeTypeName("excef_js_invoke_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_resolve_js_invoke(ulong token, int success, [NativeTypeName("const char *")] sbyte* result_json);
+    public static extern void excef_resolve_js_invoke([NativeTypeName("uint64_t")] ulong token, int success, [NativeTypeName("const char *")] sbyte* result_json);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_load_request(int browser_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("const unsigned char *")] byte* post_body, int post_length, [NativeTypeName("const char *")] sbyte* headers_string);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_nav_entry_callback([NativeTypeName("excef_nav_entry_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, sbyte*, sbyte*, sbyte*, int, int, long, int, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_navigation_entries(int browser_id, int request_id, int current_only);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_string_visitor_callback([NativeTypeName("excef_string_visitor_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_frame_source(int browser_id, int request_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_get_frame_text(int browser_id, int request_id);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_load_string(int browser_id, [NativeTypeName("const char *")] sbyte* html);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_add_command_line_switch([NativeTypeName("const char *")] sbyte* name, [NativeTypeName("const char *")] sbyte* value);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_send_devtools_message(int browser_id, [NativeTypeName("const char *")] sbyte* message_json, int message_length);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_execute_devtools_method(int browser_id, int message_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* params_json);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_devtools_message_callback([NativeTypeName("excef_devtools_message_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_take_focus_callback([NativeTypeName("excef_take_focus_cb_t")] delegate* unmanaged[Cdecl]<int, int, void> cb);
@@ -482,54 +512,6 @@ internal static unsafe partial class Excef
     public static extern void excef_set_key_event_callback([NativeTypeName("excef_key_event_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, int, int, int, int> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_send_devtools_message(int browser_id, [NativeTypeName("const char *")] sbyte* message_json, int message_length);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_execute_devtools_method(int browser_id, int message_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* params_json);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_devtools_message_callback([NativeTypeName("excef_devtools_message_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_string_visitor_callback([NativeTypeName("excef_string_visitor_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_get_frame_source(int browser_id, int request_id);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_get_frame_text(int browser_id, int request_id);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_load_string(int browser_id, [NativeTypeName("const char *")] sbyte* html);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_load_request(int browser_id, [NativeTypeName("const char *")] sbyte* method, [NativeTypeName("const char *")] sbyte* url, byte* post_body, int post_length, [NativeTypeName("const char *")] sbyte* headers_string);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_set_nav_entry_callback([NativeTypeName("excef_nav_entry_cb_t")] delegate* unmanaged[Cdecl]<int, int, int, sbyte*, sbyte*, sbyte*, sbyte*, int, int, long, int, void> cb);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_get_navigation_entries(int browser_id, int request_id, int current_only);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_set_preference(int context_handle, [NativeTypeName("const char *")] sbyte* name, [NativeTypeName("const char *")] sbyte* value_json);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern sbyte* excef_get_preference(int context_handle, [NativeTypeName("const char *")] sbyte* name);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_free_string([NativeTypeName("const char *")] sbyte* s);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_clear_http_auth_credentials(int context_handle);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern int excef_close_all_connections(int context_handle);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-    public static extern void excef_add_command_line_switch([NativeTypeName("const char *")] sbyte* name, [NativeTypeName("const char *")] sbyte* value);
-
-    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_accessibility_tree_callback([NativeTypeName("excef_accessibility_tree_cb_t")] delegate* unmanaged[Cdecl]<int, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
@@ -545,7 +527,26 @@ internal static unsafe partial class Excef
     public static extern void excef_release_request_context(int context_handle);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_set_preference(int context_handle, [NativeTypeName("const char *")] sbyte* name, [NativeTypeName("const char *")] sbyte* value_json);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    [return: NativeTypeName("const char *")]
+    public static extern sbyte* excef_get_preference(int context_handle, [NativeTypeName("const char *")] sbyte* name);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_free_string([NativeTypeName("const char *")] sbyte* s);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_clear_http_auth_credentials(int context_handle);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_close_all_connections(int context_handle);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern int excef_create_offscreen_browser_in_context(int width, int height, float device_scale_factor, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("excef_paint_callback_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> paint, int context_handle);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern int excef_create_offscreen_browser_ex(int width, int height, float device_scale_factor, [NativeTypeName("const char *")] sbyte* url, [NativeTypeName("excef_paint_callback_t")] delegate* unmanaged[Cdecl]<int, void*, int, int, void> paint, int context_handle, int flags);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_ime_set_composition(int browser_id, [NativeTypeName("const char *")] sbyte* text, int replacement_range_from, int replacement_range_length, int selection_range_from, int selection_range_length);

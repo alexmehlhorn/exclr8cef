@@ -35,12 +35,21 @@ if [ -n "${RID}" ]; then
   fi
 fi
 
+# The NuGet-shipped libclang has no builtin-header path baked in, so
+# freestanding includes like <stdint.h> fail unless we point it at the
+# system clang's resource directory.
+CLANG_BUILTIN_INC=""
+if command -v clang >/dev/null 2>&1; then
+  CLANG_BUILTIN_INC="$(clang -print-resource-dir)/include"
+fi
+
 # ClangSharpPInvokeGenerator is installed as a local tool via .config/dotnet-tools.json.
 # Absolute paths are appended here so generate-bindings.rsp stays portable.
 cd "${REPO_ROOT}"
 dotnet ClangSharpPInvokeGenerator @"${PROJ_DIR}/generate-bindings.rsp" \
     --file "${REPO_ROOT}/native/shim/exclr8cef.h" \
     --include-directory "${REPO_ROOT}/native/shim" \
+    ${CLANG_BUILTIN_INC:+--include-directory "${CLANG_BUILTIN_INC}"} \
     --output "${PROJ_DIR}/Generated"
 
 echo

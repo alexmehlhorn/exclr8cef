@@ -46,7 +46,13 @@ public abstract class CdpDomainClient
         // this specific method. Subclasses pass a parser delegate that
         // returns the JsonElement to keep the cost out of the dispatch
         // path for unhandled methods.
-        DispatchEvent(method, e.Json);
+        //
+        // Guarded: this runs (via the DevTools trampoline) inside an
+        // [UnmanagedCallersOnly] frame, and the typed parsers throw on any
+        // CDP event missing an expected field. One malformed event must
+        // degrade to a dropped event, not take down the dispatch chain.
+        try { DispatchEvent(method, e.Json); }
+        catch { }
     }
 
     /// <summary>CDP domain prefix this client filters for (e.g. "Page", "Network").</summary>

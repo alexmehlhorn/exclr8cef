@@ -21,8 +21,10 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 
 #include "include/cef_app.h"
@@ -77,8 +79,24 @@ void EnsureHostClassRegistered() {
 // browser creation; OnAfterCreated picks up the latest pending size).
 std::mutex g_host_map_mu;
 std::map<HWND, int> g_host_to_id;
-struct PendingSize { int width; int height; };
+struct PendingSize { int width; int height; };  // DIPs, as sent by the host UI framework
 std::map<HWND, PendingSize> g_pending_sizes;
+// Hosts whose excef_destroy_embedded_host arrived while their browser was
+// still closing. DestroyWindow is deferred to OnBeforeClose — CEF's child
+// browser HWND is still parented inside the host until then, and
+// destroying the parent rips the child away mid-close.
+std::set<HWND> g_release_on_close;
+
+// DIP→physical-pixel scale for a window. The managed side hands us
+// Avalonia DIPs; SetWindowPos / CefRect operate in physical pixels, so
+// every size that crosses this boundary must be scaled.
+double DipScaleFor(HWND hwnd) {
+    UINT dpi = hwnd ? GetDpiForWindow(hwnd) : 0;
+    return dpi == 0 ? 1.0 : dpi / 96.0;
+}
+int DipToPx(int dip, double scale) {
+    return static_cast<int>(std::lround(dip * scale));
+}
 
 // Subclass of the OSR handler used for embedded (windowed) browsers.
 // Same handler surface (load / console / drag / permission / …) — only
@@ -95,20 +113,28 @@ public:
         Exclr8CefOsrHandler::OnAfterCreated(browser);
         if (!host_) return;
         // Pick the desired size — prefer a queued resize if Avalonia
-        // already pushed one before browser creation completed.
+        // already pushed one before browser creation completed. Pending
+        // sizes are DIPs; GetClientRect is already physical pixels.
         int w, h;
+        bool from_pending = false;
         {
             std::lock_guard<std::mutex> lock(g_host_map_mu);
             auto it = g_pending_sizes.find(host_);
             if (it != g_pending_sizes.end()) {
                 w = it->second.width;
                 h = it->second.height;
+                from_pending = true;
             } else {
                 RECT r;
                 GetClientRect(host_, &r);
                 w = r.right - r.left;
                 h = r.bottom - r.top;
             }
+        }
+        if (from_pending) {
+            double scale = DipScaleFor(host_);
+            w = DipToPx(w, scale);
+            h = DipToPx(h, scale);
         }
         // Resize the CEF child HWND (it's the only child of the host).
         if (HWND child = GetWindow(host_, GW_CHILD)) {
@@ -119,10 +145,25 @@ public:
     }
 
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        bool destroy_host = false;
         if (host_) {
             std::lock_guard<std::mutex> lock(g_host_map_mu);
             g_host_to_id.erase(host_);
             g_pending_sizes.erase(host_);
+            destroy_host = g_release_on_close.erase(host_) > 0;
+        }
+        if (destroy_host) {
+            // The host's destroy call arrived while we were still closing;
+            // now that CEF's child HWND is gone, tear down the host window.
+            // Guard against the HWND having been destroyed (and possibly
+            // recycled) out from under us by ancestor teardown — destroying
+            // a recycled handle would kill an unrelated window.
+            wchar_t cls[64] = {};
+            if (IsWindow(host_) &&
+                GetClassNameW(host_, cls, 64) > 0 &&
+                wcscmp(cls, kHostClassName) == 0) {
+                DestroyWindow(host_);
+            }
         }
         Exclr8CefOsrHandler::OnBeforeClose(browser);
     }
@@ -132,13 +173,18 @@ private:
     IMPLEMENT_REFCOUNTING(EmbeddedOsrHandler);
 };
 
-HWND CreateHostWindow(int width, int height) {
+HWND CreateHostWindow(HWND parent, int width, int height) {
     EnsureHostClassRegistered();
-    // WS_CHILD + WS_CLIPCHILDREN: this HWND is meant to live inside the
-    // host app's window. WS_CLIPCHILDREN prevents the host from painting
-    // over CEF's child HWND during its own paint cycle. No parent is set
-    // here — Avalonia's NativeControlHost re-parents the HWND once we
-    // return it. CEF's child browser HWND will be created underneath.
+    // WS_CHILD + WS_CLIPCHILDREN: this HWND lives inside the host app's
+    // window. WS_CLIPCHILDREN prevents the host from painting over CEF's
+    // child HWND during its own paint cycle.
+    //
+    // A WS_CHILD window CANNOT be created with a null parent —
+    // CreateWindowExW fails with ERROR_TLW_WITH_WSCHILD. Callers that have
+    // the real parent (Avalonia's CreateNativeControlCore receives it)
+    // should pass it; otherwise we fall back to HWND_MESSAGE, which
+    // satisfies the parent requirement and is replaced when the UI
+    // framework re-parents the returned HWND into the visual tree.
     return CreateWindowExW(
         /*dwExStyle=*/0,
         kHostClassName,
@@ -147,7 +193,7 @@ HWND CreateHostWindow(int width, int height) {
         /*x=*/0, /*y=*/0,
         width > 0 ? width : 1,
         height > 0 ? height : 1,
-        /*hWndParent=*/nullptr,   // re-parented by host UI framework
+        parent ? parent : HWND_MESSAGE,
         /*hMenu=*/nullptr,
         GetModuleHandleW(nullptr),
         /*lpParam=*/nullptr);
@@ -157,8 +203,34 @@ HWND CreateHostWindow(int width, int height) {
 
 // Phase 1: create an empty host HWND that the UI framework will parent.
 extern "C" void* excef_create_embedded_host(int width, int height) {
-    HWND h = CreateHostWindow(width, height);
+    HWND h = CreateHostWindow(nullptr, width, height);
     return reinterpret_cast<void*>(h);
+}
+
+// Parent-aware variant — the preferred entry point on Windows, where a
+// WS_CHILD host cannot exist without a parent. The managed side passes
+// the parent handle Avalonia provides in CreateNativeControlCore.
+extern "C" void* excef_create_embedded_host_in_parent(void* parent,
+                                                      int width, int height) {
+    HWND h = CreateHostWindow(reinterpret_cast<HWND>(parent), width, height);
+    return reinterpret_cast<void*>(h);
+}
+
+// Destroy a host HWND created by excef_create_embedded_host[_in_parent].
+// If the browser attached to it is still closing (async), destruction is
+// deferred to its OnBeforeClose; otherwise it happens immediately.
+extern "C" void excef_destroy_embedded_host(void* host_view_ptr) {
+    if (!host_view_ptr) return;
+    HWND host = reinterpret_cast<HWND>(host_view_ptr);
+    {
+        std::lock_guard<std::mutex> lock(g_host_map_mu);
+        if (g_host_to_id.count(host)) {
+            g_release_on_close.insert(host);
+            return;
+        }
+        g_pending_sizes.erase(host);
+    }
+    DestroyWindow(host);
 }
 
 // Phase 2: attach a CEF browser to a previously-created host HWND. Call
@@ -177,10 +249,13 @@ extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
     HWND host = reinterpret_cast<HWND>(host_view_ptr);
 
     CefWindowInfo window_info;
+    // width/height arrive as DIPs from the managed layer; CefRect wants
+    // physical pixels. The GetClientRect fallback is already physical.
     RECT host_rect;
     GetClientRect(host, &host_rect);
-    int effective_w = width  > 0 ? width  : host_rect.right  - host_rect.left;
-    int effective_h = height > 0 ? height : host_rect.bottom - host_rect.top;
+    double scale = DipScaleFor(host);
+    int effective_w = width  > 0 ? DipToPx(width, scale)  : host_rect.right  - host_rect.left;
+    int effective_h = height > 0 ? DipToPx(height, scale) : host_rect.bottom - host_rect.top;
     window_info.SetAsChild(host, CefRect(0, 0, effective_w, effective_h));
     window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
 
@@ -208,6 +283,7 @@ extern "C" int excef_attach_embedded_browser_in_context_v2(void* host_view_ptr,
         exclr8cef::UnregisterOsrHandler(id);
         std::lock_guard<std::mutex> lock(g_host_map_mu);
         g_host_to_id.erase(host);
+        g_pending_sizes.erase(host);
         return 0;
     }
     return id;
@@ -236,11 +312,13 @@ extern "C" void* excef_create_browser_view_in_context(int width, int height,
     if (out_browser_id) *out_browser_id = 0;
     if (!url) return nullptr;
 
-    HWND host = CreateHostWindow(width, height);
+    HWND host = CreateHostWindow(nullptr, width, height);
     if (!host) return nullptr;
 
     CefWindowInfo window_info;
-    window_info.SetAsChild(host, CefRect(0, 0, width, height));
+    double scale = DipScaleFor(host);
+    window_info.SetAsChild(host, CefRect(0, 0, DipToPx(width, scale),
+                                          DipToPx(height, scale)));
     window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
 
     int id = exclr8cef::AllocateBrowserId();
@@ -297,7 +375,7 @@ extern "C" void excef_set_embedded_host_hidden(void* host_view_ptr, int hidden) 
         if (it != g_host_to_id.end()) browser_id = it->second;
     }
     if (browser_id != 0) {
-        auto* handler = exclr8cef::LookupOsrHandler(browser_id);
+        auto handler = exclr8cef::LookupOsrHandler(browser_id);
         if (handler && handler->browser()) {
             handler->browser()->GetHost()->WasHidden(hidden != 0);
         }
@@ -320,20 +398,22 @@ extern "C" void excef_resize_browser_view(void* host_view_ptr,
         if (it != g_host_to_id.end()) browser_id = it->second;
     }
 
-    // Resize the host HWND itself only if needed (Avalonia usually sets
-    // this via TryUpdateNativeControlPosition; doing it here too is a
-    // no-op when sizes match and keeps the path correct when the host
-    // app drives the resize via a direct excef_resize_browser_view call).
-    SetWindowPos(host, nullptr, 0, 0, width, height,
-                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
+    // width/height are DIPs from the managed layer; SetWindowPos wants
+    // physical pixels.
+    double scale = DipScaleFor(host);
+    int px_w = DipToPx(width, scale);
+    int px_h = DipToPx(height, scale);
 
+    // The host HWND itself is positioned/sized by Avalonia's
+    // TryUpdateNativeControlPosition (in physical pixels) — resizing it
+    // here too would fight that. Only CEF's child HWND is ours to manage.
     if (HWND child = GetWindow(host, GW_CHILD)) {
-        SetWindowPos(child, nullptr, 0, 0, width, height,
+        SetWindowPos(child, nullptr, 0, 0, px_w, px_h,
                       SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
     if (browser_id != 0) {
-        auto* handler = exclr8cef::LookupOsrHandler(browser_id);
+        auto handler = exclr8cef::LookupOsrHandler(browser_id);
         if (handler && handler->browser()) {
             handler->browser()->GetHost()->WasResized();
         }

@@ -48,7 +48,13 @@ internal sealed class WebViewTextInputMethodClient : TextInputMethodClient
 
         if (string.IsNullOrEmpty(preeditText))
         {
-            browser.ImeFinishComposing();
+            // Preedit cleared. This happens when the IME commits: Avalonia
+            // clears the preedit AND delivers the final string through
+            // OnTextInput. CANCEL the composition (discard Chromium's
+            // marked text) rather than ImeFinishComposing() — finishing
+            // commits the marked text, and the OnTextInput path then
+            // inserts the same characters again: every CJK commit doubled.
+            browser.ImeCancel();
         }
         else
         {

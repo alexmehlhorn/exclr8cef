@@ -131,7 +131,7 @@ public sealed class PageClient : CdpDomainClient
         int? maxHeight = null,
         int everyNthFrame = 1)
     {
-        var sb = new StringBuilder("{\"format\":\"").Append(format).Append('"')
+        var sb = new StringBuilder("{\"format\":").Append(JsonSerializer.Serialize(format))
             .Append(",\"quality\":").Append(quality)
             .Append(",\"everyNthFrame\":").Append(everyNthFrame);
         if (maxWidth  is int w) sb.Append(",\"maxWidth\":").Append(w);
@@ -157,26 +157,42 @@ public sealed class PageClient : CdpDomainClient
 
     private void DispatchScreencastFrame(string json)
     {
-        if (_screencastFrame is null) return;
         var p = CdpJson.ParseEventParams(json);
         int sessionId = p.GetProperty("sessionId").GetInt32();
-        string data = p.GetProperty("data").GetString() ?? "";
-        var md = p.GetProperty("metadata");
-        var args = new ScreencastFrameEventArgs(
-            sessionId,
-            data,
-            md.TryGetProperty("offsetTop",       out var ot) ? ot.GetDouble() : 0,
-            md.TryGetProperty("pageScaleFactor", out var pf) ? pf.GetDouble() : 1,
-            md.TryGetProperty("deviceWidth",     out var dw) ? dw.GetDouble() : 0,
-            md.TryGetProperty("deviceHeight",    out var dh) ? dh.GetDouble() : 0,
-            md.TryGetProperty("scrollOffsetX",   out var sx) ? sx.GetDouble() : 0,
-            md.TryGetProperty("scrollOffsetY",   out var sy) ? sy.GetDouble() : 0,
-            md.TryGetProperty("timestamp",       out var ts) ? ts.GetDouble() : 0);
-        _screencastFrame.Invoke(this, args);
 
-        // Auto-ACK so the next frame can flow. Fire-and-forget — if
-        // the browser is going down the ACK will fail harmlessly.
-        if (!ManualAck) _ = AckScreencastFrameAsync(sessionId);
+        // Chromium won't send the next frame until this one is ACKed, so
+        // every code path below must end in an ACK (unless the host opted
+        // into ManualAck): no handler subscribed (the last handler may
+        // have been removed while the cast was running), or a handler
+        // that throws — either would otherwise wedge the stream forever.
+        var handler = _screencastFrame;
+        if (handler is null)
+        {
+            _ = AckScreencastFrameAsync(sessionId);
+            return;
+        }
+        try
+        {
+            string data = p.GetProperty("data").GetString() ?? "";
+            var md = p.GetProperty("metadata");
+            var args = new ScreencastFrameEventArgs(
+                sessionId,
+                data,
+                md.TryGetProperty("offsetTop",       out var ot) ? ot.GetDouble() : 0,
+                md.TryGetProperty("pageScaleFactor", out var pf) ? pf.GetDouble() : 1,
+                md.TryGetProperty("deviceWidth",     out var dw) ? dw.GetDouble() : 0,
+                md.TryGetProperty("deviceHeight",    out var dh) ? dh.GetDouble() : 0,
+                md.TryGetProperty("scrollOffsetX",   out var sx) ? sx.GetDouble() : 0,
+                md.TryGetProperty("scrollOffsetY",   out var sy) ? sy.GetDouble() : 0,
+                md.TryGetProperty("timestamp",       out var ts) ? ts.GetDouble() : 0);
+            handler.Invoke(this, args);
+        }
+        finally
+        {
+            // Auto-ACK so the next frame can flow. Fire-and-forget — if
+            // the browser is going down the ACK will fail harmlessly.
+            if (!ManualAck) _ = AckScreencastFrameAsync(sessionId);
+        }
     }
 
     // ---- Screenshot -------------------------------------------------
@@ -204,7 +220,7 @@ public sealed class PageClient : CdpDomainClient
         bool captureBeyondViewport = false,
         bool optimizeForSpeed = false)
     {
-        var sb = new StringBuilder("{\"format\":\"").Append(format).Append('"');
+        var sb = new StringBuilder("{\"format\":").Append(JsonSerializer.Serialize(format));
         if (quality is int q) sb.Append(",\"quality\":").Append(q);
         if (captureBeyondViewport) sb.Append(",\"captureBeyondViewport\":true");
         if (optimizeForSpeed) sb.Append(",\"optimizeForSpeed\":true");

@@ -26,8 +26,32 @@ namespace Exclr8Cef.WebView;
 /// from here for ergonomics, but the <see cref="CefBrowser"/> instance is
 /// itself tech-neutral.
 /// </summary>
-public class WebView : Control, IWebView
+public class WebView : Control, IWebView, IDisposable
 {
+    /// <summary>
+    /// Deterministically close the underlying browser. Teardown otherwise
+    /// only runs from the host window's <c>Closing</c> event — a WebView
+    /// removed from the visual tree and dropped (closed tab, dynamic
+    /// layout) would keep its CefBrowser alive in the native registry
+    /// forever, which leaks the renderer process and can hang
+    /// <c>Cef.Shutdown</c>. Detach itself intentionally does NOT close
+    /// (controls detach temporarily on tab switches); call Dispose when
+    /// the WebView is gone for good. Ignores <see cref="BrowserClosing"/>
+    /// vetoes. Idempotent.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_browser is not null)
+        {
+            UnsubscribeBrowserEvents(_browser);
+            _browser.Close(force: true);
+            _browser = null;
+            _bitmap?.Dispose();
+            _bitmap = null;
+        }
+        GC.SuppressFinalize(this);
+    }
+
     public static readonly StyledProperty<string?> UrlProperty =
         AvaloniaProperty.Register<WebView, string?>(nameof(Url), "about:blank");
 

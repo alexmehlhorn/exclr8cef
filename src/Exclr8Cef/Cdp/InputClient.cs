@@ -68,7 +68,7 @@ public sealed class InputClient : CdpDomainClient
             .Append(",\"xDistance\":").Append(F(xDistance))
             .Append(",\"yDistance\":").Append(F(yDistance))
             .Append(",\"speed\":").Append(speed)
-            .Append(",\"gestureSourceType\":\"").Append(gestureSource).Append("\"")
+            .Append(",\"gestureSourceType\":").Append(JsonSerializer.Serialize(gestureSource))
             .Append('}');
         return Browser.ExecuteDevToolsMethodAsync("Input.synthesizeScrollGesture", sb.ToString());
     }
