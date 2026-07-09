@@ -201,10 +201,15 @@ public sealed record PdfPrintOptions
     /// <summary>Paper height in inches. 0 = default (Letter, 11).</summary>
     public double PaperHeightIn { get; init; }
     /// <summary>Top margin in inches. 0 = Chromium default (~0.4).</summary>
-    public double MarginTopIn { get; init; }
-    public double MarginBottomIn { get; init; }
-    public double MarginLeftIn { get; init; }
-    public double MarginRightIn { get; init; }
+    /// <summary>
+    /// Margins in inches. Negative (the default) = keep Chromium's ~1cm
+    /// defaults; any value >= 0 — including 0 for full bleed — is passed
+    /// through as an explicit custom margin (all four must be set).
+    /// </summary>
+    public double MarginTopIn { get; init; } = -1.0;
+    public double MarginBottomIn { get; init; } = -1.0;
+    public double MarginLeftIn { get; init; } = -1.0;
+    public double MarginRightIn { get; init; } = -1.0;
     /// <summary>Page ranges, e.g. "1-5,8". Empty/null = all pages.</summary>
     public string? PageRanges { get; init; }
     /// <summary>HTML template rendered above each page. See class summary.</summary>

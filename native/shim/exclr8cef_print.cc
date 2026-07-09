@@ -50,13 +50,17 @@ extern "C" int excef_print_to_pdf_with_settings(
         if (in->paper_width  > 0.0) settings.paper_width  = in->paper_width;
         if (in->paper_height > 0.0) settings.paper_height = in->paper_height;
         // CefPdfPrintSettings.margin_top/bottom/left/right are only honoured
-        // when margin_type == PDF_PRINT_MARGIN_CUSTOM. Without setting that,
-        // CEF silently uses Chromium's default ~0.4in margins regardless of
-        // the doubles we pass. Only switch to CUSTOM when the caller actually
-        // supplied a non-zero margin — all-zero means "use defaults".
-        bool any_margin = in->margin_top != 0.0 || in->margin_bottom != 0.0 ||
-                          in->margin_left != 0.0 || in->margin_right != 0.0;
-        if (any_margin) {
+        // when margin_type == PDF_PRINT_MARGIN_CUSTOM. Sentinel: a NEGATIVE
+        // margin means "not set" (keep Chromium's ~1cm defaults). When all
+        // four are set (>= 0) we switch to CUSTOM with exactly those values —
+        // 0 is a real margin (full bleed), NOT "use defaults". The old
+        // treat-all-zero-as-default rule silently kept the 1cm defaults in
+        // the PAGINATION math for edge-to-edge callers: ~9% of every page's
+        // capacity vanished and bottom-anchored content spilled onto an
+        // extra page.
+        bool custom_margins = in->margin_top >= 0.0 && in->margin_bottom >= 0.0 &&
+                              in->margin_left >= 0.0 && in->margin_right >= 0.0;
+        if (custom_margins) {
             settings.margin_type   = PDF_PRINT_MARGIN_CUSTOM;
             settings.margin_top    = in->margin_top;
             settings.margin_bottom = in->margin_bottom;

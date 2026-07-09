@@ -23,7 +23,8 @@ extern "C" {
 // Mirrors CefPdfPrintSettings.
 //
 // Doubles default to 0.0 which CEF interprets as "use Chromium's defaults"
-// (Letter paper, ~0.4 inch margins, scale 1.0). Pointers may be NULL to
+// (Letter paper, scale 1.0) — EXCEPT the margins, which use a negative
+// sentinel for "not set" so that an explicit 0 can mean full bleed. Pointers may be NULL to
 // indicate "no template / not set". Booleans are 0/1.
 //
 // header_template / footer_template are HTML strings rendered in the page
@@ -45,8 +46,8 @@ typedef struct excef_pdf_settings {
     double scale;               // 0.0 = default (1.0)
     double paper_width;         // inches; 0.0 = default (Letter, 8.5)
     double paper_height;        // inches; 0.0 = default (Letter, 11)
-    double margin_top;          // inches; 0.0 = Chromium default (~0.4)
-    double margin_bottom;       // inches
+    double margin_top;          // inches; < 0 = Chromium default (~0.4); >= 0 = custom (0 = full bleed)
+    double margin_bottom;       // inches; same sentinel; all four must be >= 0 for custom margins to apply
     double margin_left;         // inches
     double margin_right;        // inches
     const char* page_ranges;    // e.g. "1-5,8" — NULL = all
