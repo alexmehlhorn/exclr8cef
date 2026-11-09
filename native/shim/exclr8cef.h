@@ -1063,6 +1063,30 @@ typedef struct excef_init_settings {
 // to defaults. The struct is copied; pointers don't need to outlive the call.
 EXCEF_API void excef_set_init_settings(const excef_init_settings* settings);
 
+// ---- Windows sandbox -----------------------------------------------------
+//
+// Enables CEF's Windows sandbox. Windows only; a no-op on other platforms
+// (Linux and macOS keep no_sandbox = true).
+//
+// `info` is the sandbox_info pointer that CEF's bootstrap executable
+// (bootstrap.exe / bootstrapc.exe in the CEF distribution) passes to the
+// client DLL's RunWinMain / RunConsoleMain. Call this BEFORE
+// excef_execute_process and excef_initialize*, in every process (browser and
+// subprocess), with the same value.
+//
+// When `info` is non-NULL:
+//   - excef_execute_process and excef_initialize* hand it to CEF,
+//   - CefSettings.no_sandbox is false,
+//   - the subprocess_path argument of excef_initialize* is ignored (CEF does
+//     not allow browser_subprocess_path together with the sandbox: the
+//     browser and all subprocesses must be the same executable).
+// When it is NULL, or was never set, behaviour is unchanged: the sandbox is
+// off and subprocess_path is honoured.
+//
+// The pointer is not copied. It must stay valid for the life of the process,
+// which holds for the bootstrap's value.
+EXCEF_API void excef_set_sandbox_info(void* info);
+
 // ---- Certificate error handler -----------------------------------------
 //
 // CefRequestHandler::OnCertificateError. Fires when a TLS connection
