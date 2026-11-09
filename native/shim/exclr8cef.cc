@@ -33,6 +33,23 @@ struct StashedInitSettings {
 };
 StashedInitSettings g_init_settings;
 
+#if defined(_WIN32)
+// Sandbox info handed over by the host (see excef_set_sandbox_info). It is
+// owned by the CEF bootstrap executable and valid for the life of the process.
+void* g_sandbox_info = nullptr;
+#endif
+
+// The sandbox info to give CEF, or nullptr when the host did not supply one
+// (always nullptr off Windows). nullptr keeps the historic behaviour: the
+// sandbox is off.
+void* SandboxInfo() {
+#if defined(_WIN32)
+    return g_sandbox_info;
+#else
+    return nullptr;
+#endif
+}
+
 // Apply host-provided settings to a CefSettings instance. Called from every
 // init path. Fields the shim controls itself (no_sandbox,
 // external_message_pump, windowless rendering, browser_subprocess_path) are
@@ -82,6 +99,15 @@ extern "C" void excef_set_init_settings(const excef_init_settings* in) {
     s.persist_session_cookies = in->persist_session_cookies != 0;
     s.remote_debugging_port = in->remote_debugging_port;
     exclr8cef::g_init_settings = std::move(s);
+}
+
+// Windows sandbox: see the contract in exclr8cef.h. No-op elsewhere.
+extern "C" void excef_set_sandbox_info(void* info) {
+#if defined(_WIN32)
+    exclr8cef::g_sandbox_info = info;
+#else
+    (void)info;
+#endif
 }
 
 namespace {
@@ -153,20 +179,23 @@ extern "C" void excef_add_command_line_switch(const char* name, const char* valu
 extern "C" int excef_execute_process(int argc, char** argv) {
     auto main_args = make_main_args(argc, argv);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
-    return CefExecuteProcess(main_args, app, nullptr);
+    return CefExecuteProcess(main_args, app, exclr8cef::SandboxInfo());
 }
 
 extern "C" int excef_initialize(int argc, char** argv,
                                 const char* subprocess_path) {
     auto main_args = make_main_args(argc, argv);
+    void* sandbox_info = exclr8cef::SandboxInfo();
     CefSettings settings;
-    settings.no_sandbox = true;
-    if (subprocess_path && *subprocess_path) {
+    settings.no_sandbox = (sandbox_info == nullptr);
+    if (!sandbox_info && subprocess_path && *subprocess_path) {
+        // Not allowed together with the sandbox: the browser and every
+        // subprocess must then be the same executable.
         CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
-    if (!CefInitialize(main_args, settings, app, nullptr)) return 1;
+    if (!CefInitialize(main_args, settings, app, sandbox_info)) return 1;
     return 0;
 }
 
@@ -177,15 +206,18 @@ extern "C" int excef_initialize_external_pump(int argc, char** argv,
         reinterpret_cast<exclr8cef::ScheduleMessagePumpWorkCallback>(cb));
 
     auto main_args = make_main_args(argc, argv);
+    void* sandbox_info = exclr8cef::SandboxInfo();
     CefSettings settings;
-    settings.no_sandbox = true;
+    settings.no_sandbox = (sandbox_info == nullptr);
     settings.external_message_pump = true;
-    if (subprocess_path && *subprocess_path) {
+    if (!sandbox_info && subprocess_path && *subprocess_path) {
+        // Not allowed together with the sandbox: the browser and every
+        // subprocess must then be the same executable.
         CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
-    if (!CefInitialize(main_args, settings, app, nullptr)) return 2;
+    if (!CefInitialize(main_args, settings, app, sandbox_info)) return 2;
     return 0;
 }
 
@@ -196,16 +228,19 @@ extern "C" int excef_initialize_offscreen(int argc, char** argv,
         reinterpret_cast<exclr8cef::ScheduleMessagePumpWorkCallback>(cb));
 
     auto main_args = make_main_args(argc, argv);
+    void* sandbox_info = exclr8cef::SandboxInfo();
     CefSettings settings;
-    settings.no_sandbox = true;
+    settings.no_sandbox = (sandbox_info == nullptr);
     settings.external_message_pump = true;
     settings.windowless_rendering_enabled = true;
-    if (subprocess_path && *subprocess_path) {
+    if (!sandbox_info && subprocess_path && *subprocess_path) {
+        // Not allowed together with the sandbox: the browser and every
+        // subprocess must then be the same executable.
         CefString(&settings.browser_subprocess_path).FromString(subprocess_path);  // UTF-8 — install dirs can be non-ASCII
     }
     exclr8cef::ApplyHostInitSettings(settings);
     CefRefPtr<exclr8cef::Exclr8CefApp> app = exclr8cef::EnsureApp();
-    if (!CefInitialize(main_args, settings, app, nullptr)) return 2;
+    if (!CefInitialize(main_args, settings, app, sandbox_info)) return 2;
     return 0;
 }
 

@@ -410,6 +410,9 @@ internal static unsafe partial class Excef
     public static extern void excef_set_init_settings([NativeTypeName("const excef_init_settings *")] excef_init_settings* settings);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    public static extern void excef_set_sandbox_info(void* info);
+
+    [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     public static extern void excef_set_cert_error_callback([NativeTypeName("excef_cert_error_cb_t")] delegate* unmanaged[Cdecl]<int, ulong, int, sbyte*, sbyte*, sbyte*, void> cb);
 
     [DllImport("exclr8cef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
